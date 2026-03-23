@@ -23,55 +23,9 @@
 #include "bitboard.h"
 #include "position.h"
 
-#if defined(USE_AVX512ICL)
-    #include <array>
-    #include <algorithm>
-    #include <immintrin.h>
-#endif
-
 namespace Stockfish {
 
 namespace {
-
-#if defined(USE_AVX512ICL)
-
-inline Move* write_moves(Move* moveList, uint32_t mask, __m512i vector) {
-    _mm512_storeu_si512(reinterpret_cast<__m512i*>(moveList),
-                        _mm512_maskz_compress_epi16(mask, vector));
-    return moveList + popcount(mask);
-}
-
-inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
-    alignas(64) static constexpr auto SPLAT_TABLE = [] {
-        std::array<Move, 90> table{};
-        for (int8_t i = 0; i < 90; i++)
-            table[i] = {Move(SQUARE_ZERO, Square{i})};
-        return table;
-    }();
-
-    __m512i fromVec = _mm512_set1_epi16(Move(from, SQUARE_ZERO).raw());
-
-    auto table = reinterpret_cast<const __m512i*>(SPLAT_TABLE.data());
-
-    moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 0),
-                           _mm512_or_si512(_mm512_load_si512(table + 0), fromVec));
-    moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 32),
-                           _mm512_or_si512(_mm512_load_si512(table + 1), fromVec));
-    moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 64),
-                           _mm512_or_si512(_mm512_load_si512(table + 2), fromVec));
-
-    return moveList;
-}
-
-#else
-
-inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
-    while (to_bb)
-        *moveList++ = Move(from, pop_lsb(to_bb));
-    return moveList;
-}
-
-#endif
 
 template<Color Us, PieceType Pt, GenType Type>
 Move* generate_moves(const Position& pos, Move* moveList, Bitboard target) {
@@ -102,7 +56,8 @@ Move* generate_moves(const Position& pos, Move* moveList, Bitboard target) {
                 b &= target;
         }
 
-        moveList = splat_moves(moveList, from, b);
+        while (b)
+            *moveList++ = Move(from, pop_lsb(b));
     }
 
     return moveList;
@@ -132,8 +87,8 @@ Move* generate_all(const Position& pos, Move* moveList) {
     if (Type != EVASIONS)
     {
         Bitboard b = attacks_bb<KING>(ksq) & target;
-
-        moveList = splat_moves(moveList, ksq, b);
+        while (b)
+            *moveList++ = Move(ksq, pop_lsb(b));
     }
 
     return moveList;
@@ -191,7 +146,8 @@ Move* generate<EVASIONS>(const Position& pos, Move* moveList) {
     // useless legality checks later on.
     if (pt == ROOK || pt == CANNON)
         b &= ~line_bb(checksq, ksq) | pos.pieces(~us);
-    moveList = splat_moves(moveList, ksq, b);
+    while (b)
+        *moveList++ = Move(ksq, pop_lsb(b));
 
     // Generate move away hurdle piece evasions for cannon
     if (pt == CANNON)
@@ -210,7 +166,8 @@ Move* generate<EVASIONS>(const Position& pos, Move* moveList) {
             else
                 b = attacks_bb(pt, hurdleSq, pos.pieces()) & ~line_bb(checksq, hurdleSq)
                   & ~pos.pieces(us);
-            moveList = splat_moves(moveList, hurdleSq, b);
+            while (b)
+                *moveList++ = Move(hurdleSq, pop_lsb(b));
         }
     }
 
