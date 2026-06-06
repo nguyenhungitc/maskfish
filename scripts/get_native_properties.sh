@@ -23,7 +23,8 @@ get_flags() {
 check_znver_1_2() {
   vendor_id=$(awk '/^vendor_id/{print $3; exit}' /proc/cpuinfo)
   cpu_family=$(awk '/^cpu family/{print $4; exit}' /proc/cpuinfo)
-  [ "$vendor_id" = "AuthenticAMD" ] && [ "$cpu_family" = "23" ] && znver_1_2=true
+  # Excavator (family 21) has the same slow, microcoded pext/pdep as Zen 1/2
+  [ "$vendor_id" = "AuthenticAMD" ] && { [ "$cpu_family" = "21" ] || [ "$cpu_family" = "23" ]; } && znver_1_2=true
 }
 
 # Set the file CPU loongarch64 architecture
