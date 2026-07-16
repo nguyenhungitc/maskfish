@@ -630,6 +630,8 @@ ifeq ($(COMP),gcc)
 	else
 		CXXFLAGS += -Wstack-usage=128000
 	endif
+else ifeq ($(COMP),mingw)
+	CXXFLAGS += -fno-ipa-cp-clone
 endif
 
 # On Android Bionic's C library comes with its own pthread implementation bundled in
