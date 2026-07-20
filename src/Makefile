@@ -630,28 +630,24 @@ ifeq ($(COMP),gcc)
 	endif
 endif
 
-### On mingw use Windows threads, otherwise POSIX
-ifneq ($(comp),mingw)
-	CXXFLAGS += -DUSE_PTHREADS
-	# On Android Bionic's C library comes with its own pthread implementation bundled in
-	ifneq ($(OS),Android)
-		# Haiku has pthreads in its libroot, so only link it in on other platforms
-		ifneq ($(KERNEL),Haiku)
-			ifneq ($(COMP),ndk)
-				LDFLAGS += -lpthread
+# On Android Bionic's C library comes with its own pthread implementation bundled in
+ifneq ($(OS),Android)
+	# Haiku has pthreads in its libroot, so only link it in on other platforms
+	ifneq ($(KERNEL),Haiku)
+		ifneq ($(COMP),ndk)
+			LDFLAGS += -lpthread
 
-				add_lrt = yes
-				ifeq ($(target_windows),yes)
-					add_lrt = no
-				endif
+			add_lrt = yes
+			ifeq ($(target_windows),yes)
+				add_lrt = no
+			endif
 
-				ifeq ($(KERNEL),Darwin)
-					add_lrt = no
-				endif
+			ifeq ($(KERNEL),Darwin)
+				add_lrt = no
+			endif
 
-				ifeq ($(add_lrt),yes)
-					LDFLAGS += -lrt
-				endif
+			ifeq ($(add_lrt),yes)
+				LDFLAGS += -lrt
 			endif
 		endif
 	endif
