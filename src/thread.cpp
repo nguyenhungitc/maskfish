@@ -20,7 +20,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <deque>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -44,7 +47,14 @@ Thread::Thread(Search::SharedState&                    sharedState,
                OptionalThreadToNumaNodeBinder          binder) :
     idx(n),
     nthreads(sharedState.options["Threads"]),
-    stdThread(&Thread::idle_loop, this) {
+    stdThread(
+      create_native_thread(NativeThreadOptions{}.setLargeStack(true), &Thread::idle_loop, this)) {
+
+    if (!stdThread.joinable())
+    {
+        std::cerr << "Failed to create search thread\n";
+        std::exit(EXIT_FAILURE);
+    }
 
     wait_for_search_finished();
 
