@@ -50,6 +50,20 @@ using namespace Search;
 
 namespace {
 
+// Conversion between scores and win rates, used to average the outcomes of
+// chance nodes (flip_search, hidden_capture_search).
+constexpr double FlipWinrateScaling = 360.83524;
+
+double flip_score_to_winrate(Value v) { return 1.0 / (1.0 + std::exp(-v / FlipWinrateScaling)); }
+
+Value flip_winrate_to_score(double winrate) {
+    constexpr double epsilon = 1e-9;
+    winrate                  = std::clamp(winrate, epsilon, 1.0 - epsilon);
+    double q                 = std::log(winrate / (1.0 - winrate));
+    return std::clamp(static_cast<Value>(q * FlipWinrateScaling), VALUE_MATED_IN_MAX_PLY + 1,
+                      VALUE_MATE_IN_MAX_PLY - 1);
+}
+
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
@@ -206,7 +220,7 @@ void Search::Worker::start_searching() {
     std::string ponder;
 
     if ((bestThread->rootMoves[0].pv.size() > 1
-        || bestThread->rootMoves[0].extract_ponder_from_tt(tt, rootPos))
+        || bestThread->rootMoves[0].extract_ponder_from_tt(tt, rootPos, rootObserver))
         && !rootPos.move_dark(bestThread->rootMoves[0].pv[0]))
         ponder = UCIEngine::move(bestThread->rootMoves[0].pv[1]);
 
@@ -231,6 +245,13 @@ void Search::Worker::iterative_deepening() {
     Value  bestValue     = -VALUE_INFINITE;
     Color  us            = rootPos.side_to_move();
     double timeReduction = 1, totBestMoveChanges = 0;
+
+    // Jieqi information model and reveal heuristics (see search.h)
+    rootObserver       = us;  // also when pondering: the root is then after the expected reply
+    hiddenCaptureModel = bool(options["HiddenCaptureModel"]);
+    revealQuiet        = {int(options["RevealQuietBase"]), int(options["RevealQuietPhase"]),
+                          int(options["RevealQuietSafety"]), int(options["RevealQuietHighValue"]),
+                          int(options["RevealQuietDiversity"])};
     int    delta, iterIdx                        = 0;
 
     // Allocate stack with extra size to allow access from (ss - 7) to (ss + 2):
@@ -536,6 +557,14 @@ Value Search::Worker::search(
         return qsearch<nt>(pos, ss, alpha, beta);
     }
 
+    // Dive into the hidden capture chance node when the root side has just
+    // captured a dark piece whose identity it will learn
+    if (hiddenCaptureModel && (ss - 1)->capturedDark && ~pos.side_to_move() == rootObserver)
+    {
+        constexpr auto nt = PvNode ? PV : NonPV;
+        return hidden_capture_search<nt>(pos, ss, alpha, beta, false, depth, cutNode);
+    }
+
     // Dive into flip search when the last move is moving a dark pieces
     if ((ss - 1)->currentMove.is_ok() && pos.is_dark((ss - 1)->currentMove.to_sq()))
     {
@@ -631,7 +660,7 @@ Value Search::Worker::search(
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
-    posKey                         = pos.key();
+    posKey                         = observer_tt_key(pos.key(), rootObserver);
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -672,7 +701,7 @@ Value Search::Worker::search(
                 && !is_decisive(ttData.value) && !pos.move_dark(ttData.move))
             {
                 do_move(pos, ttData.move, st);
-                Key nextPosKey                             = pos.key();
+                Key nextPosKey = observer_tt_key(pos.key(), rootObserver);
                 auto [ttHitNext, ttDataNext, ttWriterNext] = tt.probe(nextPosKey);
                 undo_move(pos, ttData.move);
 
@@ -784,6 +813,7 @@ Value Search::Worker::search(
         ss->continuationHistory           = &thisThread->continuationHistory[0][0][NO_PIECE][0];
         ss->continuationCorrectionHistory = &thisThread->continuationCorrectionHistory[NO_PIECE][0];
 
+        ss->capturedDark = false;
         do_null_move(pos, st);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
@@ -845,6 +875,7 @@ Value Search::Worker::search(
 
             movedPiece = pos.moved_piece(move);
 
+            ss->capturedDark = pos.is_dark(move.to_sq());
             do_move(pos, move, st);
 
             ss->currentMove = move;
@@ -1078,7 +1109,12 @@ moves_loop:  // When in check, search starts here
                 extension = -2;
         }
 
+        // Bonus for a safe reveal (a quiet move of a dark piece), computed on
+        // the position before the move
+        const int revealBonus = Reveal::move_bonus(pos, move, revealQuiet);
+
         // Step 15. Make the move
+        ss->capturedDark = pos.is_dark(move.to_sq());
         do_move(pos, move, st, givesCheck);
 
         // Add extension to new depth
@@ -1147,7 +1183,7 @@ moves_loop:  // When in check, search starts here
                     + (ss - 1)->isPvNode;
 
             ss->reduction = newDepth - d;
-            value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
+            value         = search_child<NonPV>(pos, ss + 1, alpha, alpha + 1, d, true, revealBonus);
             ss->reduction = 0;
 
             // Do a full-depth search when reduced LMR search fails high
@@ -1163,7 +1199,8 @@ moves_loop:  // When in check, search starts here
                 newDepth += doDeeperSearch - doShallowerSearch;
 
                 if (newDepth > d)
-                    value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+                    value = search_child<NonPV>(pos, ss + 1, alpha, alpha + 1, newDepth, !cutNode,
+                                                revealBonus);
 
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1533);
@@ -1182,8 +1219,9 @@ moves_loop:  // When in check, search starts here
             r -= ttMoveHistory / 8;
 
             // Note that if expected reduction is high, we reduce search depth here
-            value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha,
-                                   newDepth - (r > 4170) - (r > 5563 && newDepth > 2), !cutNode);
+            value = search_child<NonPV>(pos, ss + 1, alpha, alpha + 1,
+                                        newDepth - (r > 4170) - (r > 5563 && newDepth > 2),
+                                        !cutNode, revealBonus);
         }
 
         // For PV nodes only, do a full PV search on the first move or after a fail high,
@@ -1197,7 +1235,7 @@ moves_loop:  // When in check, search starts here
             if (move == ttData.move && thisThread->rootDepth > 8)
                 newDepth = std::max(newDepth, 1);
 
-            value = -search<PV>(pos, ss + 1, -beta, -alpha, newDepth, false);
+            value = search_child<PV>(pos, ss + 1, alpha, beta, newDepth, false, revealBonus);
         }
 
         // Step 18. Undo move
@@ -1411,6 +1449,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     static_assert(nodeType != Root);
     constexpr bool PvNode = nodeType == PV;
 
+    // Dive into the hidden capture chance node (see search())
+    if (hiddenCaptureModel && (ss - 1)->capturedDark && ~pos.side_to_move() == rootObserver)
+    {
+        constexpr auto nt = PvNode ? PV : NonPV;
+        return hidden_capture_search<nt>(pos, ss, alpha, beta, true, 0, false);
+    }
+
     // Dive into flip search when the last move is moving a dark pieces
     if ((ss - 1)->currentMove.is_ok() && pos.is_dark((ss - 1)->currentMove.to_sq()))
     {
@@ -1473,7 +1518,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
     // Step 3. Transposition table lookup
-    posKey                         = pos.key();
+    posKey                         = observer_tt_key(pos.key(), rootObserver);
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -1604,6 +1649,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // Step 7. Make and search the move
         Piece movedPiece = pos.moved_piece(move);
 
+        ss->capturedDark = pos.is_dark(move.to_sq());
         do_move(pos, move, st, givesCheck);
 
         // Update the current move
@@ -1668,17 +1714,130 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
 
 template<NodeType nodeType>
+Value Search::Worker::search_child(
+  Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode, int revealBonus) {
+
+    // Keep the usual negamax call when there is no bonus
+    if (revealBonus == 0)
+        return -search<nodeType>(pos, ss, -beta, -alpha, depth, cutNode);
+
+    return Reveal::search_with_bonus(alpha, beta, revealBonus, [&](Value a, Value b) {
+        return search<nodeType>(pos, ss, a, b, depth, cutNode);
+    });
+}
+
+
+// Chance node over the identity of a dark piece that the root side (the
+// observer) has just captured. In Jieqi the capturer is shown the captured
+// piece, so the observer will know which piece left the pool, while its own
+// dark pieces captured by the opponent stay unknown (they remain in the pool,
+// which is already the correct probability model). Each possible identity is
+// searched with that piece removed from its owner's pool, and the results are
+// averaged like in flip_search(). (Idea from AB-JChess.)
+template<NodeType nodeType>
+Value Search::Worker::hidden_capture_search(
+  Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
+
+    // The captured piece belongs to the side to move
+    Position::RestPieceList restPieces;
+    const int               restCount = pos.rest_pieces(pos.side_to_move(), restPieces);
+
+    // Do not enumerate again when the children are searched
+    (ss - 1)->capturedDark = false;
+
+    auto search_one = [&]() {
+        return isQsearch ? qsearch<nodeType>(pos, ss, alpha, beta)
+                         : search<nodeType>(pos, ss, alpha, beta, depth, cutNode);
+    };
+
+    int total = 0;
+    for (int i = 0; i < restCount; ++i)
+        total += restPieces[i].second;
+
+    // Pool empty (can only come from an inconsistent input): plain search
+    if (total == 0)
+    {
+        Value v                = search_one();
+        (ss - 1)->capturedDark = true;
+        return v;
+    }
+
+    // The pool features of the NNUE are only rebuilt on a full refresh, so
+    // mark the capture as requiring one for both perspectives.
+    DirtyPiece dp = accumulatorStack.latest().dirtyPiece;
+    dp.requires_refresh[WHITE] = dp.requires_refresh[BLACK] = true;
+
+    ChanceBranchReduction branchReduction((ss - 1)->reduction);
+
+    struct Entry {
+        Value value;
+        int   count;
+    };
+    std::array<Entry, Position::MaxRestPieceTypes> results;
+    int                                            resultCount = 0;
+    bool                                           stopped     = false;
+
+    for (int i = 0; i < restCount; ++i)
+    {
+        const auto [piece, num] = restPieces[i];
+
+        branchReduction.restore();
+        accumulatorStack.pop();
+        pos.remove_rest_piece(piece);
+        accumulatorStack.push(dp);
+
+        const Value value = search_one();
+
+        pos.restore_rest_piece(piece);
+
+        if (restCount == 1)
+        {
+            (ss - 1)->capturedDark = true;
+            return value;
+        }
+
+        if (threads.stop.load(std::memory_order_relaxed))
+        {
+            stopped = true;
+            break;
+        }
+
+        results[resultCount++] = {value, num};
+    }
+
+    (ss - 1)->capturedDark = true;
+
+    if (stopped)
+        return VALUE_ZERO;
+
+    // Same aggregation as flip_search(): decisive only if every outcome is
+    // decisive for the same side, otherwise average the win rates.
+    bool allWin = true, allLoss = true;
+    for (int i = 0; i < resultCount; ++i)
+    {
+        allWin &= is_win(results[i].value);
+        allLoss &= is_loss(results[i].value);
+    }
+
+    if (allWin || allLoss)
+    {
+        Value v = results[0].value;
+        for (int i = 1; i < resultCount; ++i)
+            v = allWin ? std::min(v, results[i].value) : std::max(v, results[i].value);
+        return v;
+    }
+
+    double winrateSum = 0.0;
+    for (int i = 0; i < resultCount; ++i)
+        winrateSum += flip_score_to_winrate(results[i].value) * results[i].count;
+
+    return flip_winrate_to_score(winrateSum / total);
+}
+
+
+template<NodeType nodeType>
 Value Search::Worker::flip_search(
     Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
-    constexpr double scaling          = 360.83524;
-    constexpr auto   score_to_winrate = [&](Value v) { return 1.0 / (1.0 + exp(-v / scaling)); };
-    constexpr auto   winrate_to_score = [&](double winrate) {
-        constexpr double epsilon = 1e-9;
-        winrate                  = std::clamp(winrate, epsilon, 1.0 - epsilon);
-        double q                 = log(winrate / (1.0 - winrate));
-        return std::clamp(static_cast<Value>(q * scaling), VALUE_MATED_IN_MAX_PLY + 1,
-                            VALUE_MATE_IN_MAX_PLY - 1);
-    };
 
     Position::RestPieceList restPieces;
     const int               restCount = pos.rest_pieces(~pos.side_to_move(), restPieces);
@@ -1770,10 +1929,10 @@ Value Search::Worker::flip_search(
 
     double winrate_sum = 0.0;
     for (int i = 0; i < resultCount; ++i)
-        winrate_sum += score_to_winrate(results[i].value) * results[i].count;
+        winrate_sum += flip_score_to_winrate(results[i].value) * results[i].count;
 
     double expectedWinrate = winrate_sum / total;
-    return winrate_to_score(expectedWinrate);
+    return flip_winrate_to_score(expectedWinrate);
 }
 
 
@@ -2043,7 +2202,7 @@ void SearchManager::pv(const Search::Worker&     worker,
 // for instance, in case we stop the search during a fail high at root.
 // We try hard to have a ponder move to return to the GUI,
 // otherwise in case of 'ponder on' we have nothing to think about.
-bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& pos) {
+bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& pos, Color observer) {
 
     StateInfo st;
 
@@ -2053,7 +2212,7 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
 
     pos.do_move(pv[0], st, &tt);
 
-    auto [ttHit, ttData, ttWriter] = tt.probe(pos.key());
+    auto [ttHit, ttData, ttWriter] = tt.probe(observer_tt_key(pos.key(), observer));
     if (ttHit)
     {
         if (MoveList<LEGAL>(pos).contains(ttData.move))

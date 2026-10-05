@@ -140,6 +140,12 @@ class Position {
     void undo_flip(Square s, Piece fromPc);
     void reveal_captured(Piece pc);
 
+    // Used by the search to try each possible identity of a captured dark
+    // piece: take one piece out of / put it back into the pool. The caller
+    // must also refresh the NNUE accumulator (pool features).
+    void remove_rest_piece(Piece pc);
+    void restore_rest_piece(Piece pc);
+
     // Static Exchange Evaluation
     bool see_ge(Move m, int threshold = 0) const;
 

@@ -616,6 +616,24 @@ void Position::reveal_captured(Piece pc) {
 }
 
 
+void Position::remove_rest_piece(Piece pc) {
+
+    assert(pc != NO_PIECE && type_of(pc) != KING && restPieces[pc] > 0);
+
+    restPieces[pc]--;
+    st->key ^= Zobrist::rest[pc][restPieces[pc]];
+}
+
+void Position::restore_rest_piece(Piece pc) {
+
+    assert(pc != NO_PIECE && type_of(pc) != KING);
+
+    // Mirror of remove_rest_piece(): toggle the same pool slot, then increment.
+    st->key ^= Zobrist::rest[pc][restPieces[pc]];
+    restPieces[pc]++;
+}
+
+
 // Makes a move, and saves all information necessary
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.

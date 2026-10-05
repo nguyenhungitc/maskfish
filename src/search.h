@@ -36,6 +36,7 @@
 #include "nnue/nnue_accumulator.h"
 #include "numa.h"
 #include "position.h"
+#include "reveal.h"
 #include "score.h"
 #include "timeman.h"
 #include "types.h"
@@ -75,6 +76,7 @@ struct Stack {
     int                         reduction;
     bool                        isPvNode;
     int                         quietMoveStreak;
+    bool                        capturedDark;  // currentMove captured a dark piece
 };
 
 
@@ -111,7 +113,7 @@ struct RootMove {
 
     explicit RootMove(Move m) :
         pv(1, m) {}
-    bool extract_ponder_from_tt(const TranspositionTable& tt, Position& pos);
+    bool extract_ponder_from_tt(const TranspositionTable& tt, Position& pos, Color observer);
     bool operator==(const Move& m) const { return pv[0] == m; }
     // Sort in descending order
     bool operator<(const RootMove& m) const {
@@ -173,6 +175,13 @@ struct SharedState {
 };
 
 class Worker;
+
+// TT key for a position searched for the given observer. Only the low 16 bits
+// (stored in the TT entry) change, so the cluster, and the prefetch done by
+// Position::do_move(), stay (almost always) the same.
+inline Key observer_tt_key(Key positionKey, Color observer) {
+    return observer == WHITE ? positionKey : positionKey ^ Key(0x9E37);
+}
 
 // Null Object Pattern, implement a common interface for the SearchManagers.
 // A Null Object will be given to non-mainthread workers.
@@ -306,6 +315,23 @@ class Worker {
     template<NodeType nodeType>
     Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);
 
+    // Searches a child and returns its value from the parent's point of view,
+    // adding the safe reveal bonus of the move that led to it
+    template<NodeType nodeType>
+    Value search_child(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth,
+                       bool cutNode, int revealBonus);
+
+    // Chance node over the identity of a dark piece just captured by the root
+    // side (see Worker::hiddenCaptureModel)
+    template<NodeType nodeType>
+    Value hidden_capture_search(Position& pos,
+                                Stack*    ss,
+                                Value     alpha,
+                                Value     beta,
+                                bool      isQsearch,
+                                Depth     depth,
+                                bool      cutNode);
+
     // This is the flip search function for any nodes
     template<NodeType nodeType>
     Value flip_search(Position&              pos,
@@ -339,6 +365,17 @@ class Worker {
 
     Position  rootPos;
     StateInfo rootState;
+
+    // Jieqi information model. The side the engine is searching for (the
+    // side to move at the root, or its opponent while pondering) learns the
+    // identity of the dark pieces it captures, but not of its own dark pieces
+    // captured by the opponent. With hiddenCaptureModel, a capture of a dark
+    // piece by the observer is a chance node over the captured identity.
+    // TT keys are salted with the observer because the same position is then
+    // searched differently depending on who is observing. (From AB-JChess.)
+    Color                   rootObserver = WHITE;
+    bool                    hiddenCaptureModel = false;
+    Reveal::QuietParameters revealQuiet;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
     Value     rootDelta;

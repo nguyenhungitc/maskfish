@@ -112,6 +112,22 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 * Scores of moves that reveal pieces are expected values over the possible
   outcomes. A mate score is only reported when every outcome leads to mate.
 
+### Jieqi search options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `HiddenCaptureModel` | `true` | When the side the engine searches for captures a dark piece, the search branches over every identity that piece can have (it will be shown to the capturer), removing it from the pool in each branch. Dark pieces of that side captured by the opponent stay in the pool, since their identity is never learned. TT entries are kept separate per observing side. |
+| `RevealQuietBase` | `-12` | Safe reveal bonus: constant part, added to the value of every quiet move of a dark piece. |
+| `RevealQuietSafety` | `24` | Weight of the safety of the destination square (safe = +1, defended = 0, loose = -1, using visible pieces only). |
+| `RevealQuietHighValue` | `-12` | Weight of the share of rooks, cannons and knights in the mover's pool. |
+| `RevealQuietPhase` | `0` | Weight of the number of dark pieces still on the board. |
+| `RevealQuietDiversity` | `0` | Weight of how mixed the mover's pool is. |
+
+The bonus is in internal score units and clamped to -192..192. Setting all
+`RevealQuiet*` options to 0 disables it. The defaults are those of AB-JChess
+and have not been re-tuned for this engine's networks; both features should be
+validated with SPRT tests against a version where they are disabled.
+
 ### Debugging commands
 
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.
@@ -183,6 +199,11 @@ distributing. If you make any changes to the source code, these changes must
 also be made available under GPL v3.
 
 ## Acknowledgements
+
+The hidden capture model, the safe reveal bonus (`src/reveal.cpp`) and several
+chance-node improvements are ported from [AB-JChess](https://github.com/lxsgx23/AB-JChess)
+(GPL-3.0).
+
 
 This project is based on the `jieqi` branch of
 [Pikafish](https://github.com/official-pikafish/Pikafish), which is derived from

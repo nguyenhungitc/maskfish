@@ -102,6 +102,18 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("UCI_ShowWDL", Option(false));
 
+    // Jieqi: chance node over the identity of a dark piece captured by the
+    // side the engine searches for (see Search::Worker::hiddenCaptureModel).
+    options.add("HiddenCaptureModel", Option(true));
+
+    // Jieqi: bonus for safe reveals (quiet moves of dark pieces). The defaults
+    // are the values used by AB-JChess; set them all to 0 to disable.
+    options.add("RevealQuietBase", Option(-12, -96, 96));
+    options.add("RevealQuietPhase", Option(0, -96, 96));
+    options.add("RevealQuietSafety", Option(24, -192, 192));
+    options.add("RevealQuietHighValue", Option(-12, -96, 96));
+    options.add("RevealQuietDiversity", Option(0, -96, 96));
+
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
           load_big_network(o);
