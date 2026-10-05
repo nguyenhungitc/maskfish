@@ -30,7 +30,7 @@ namespace {
 const std::vector<std::string> Defaults = {
     // Middle game
     "x1xxkxxxx/9/c6x1/2x6/a3r1n1p/R1P3A2/4X3X/1X2B1AX1/4P4/1C2KXX1X w R1N1n1B1b2a1C1c1P3p4 1 8",
-    "xx2kx1Bx/4p4/1x2r2xc/2x6/p5a2/2P1p1A1c/X1B1X4/1X2A1N1P/9/XX2KXP2 w R2r1N1n1b2a1C2P1p2 1 11"
+    "xx2kx1Bx/4p4/1x2r2xc/2x6/p5a2/2P1p1A1c/X1B1X4/1X2A1N1P/9/XX2KXP2 w R2r1N1n1b2a1C2P1p2 1 11",
     "3xkx1xx/9/2a1p2ap/9/9/2r1P4/1R4p2/1CP1n3r/4N4/4K1CB1 w b2p2 0 25",
     "P3kxx1x/4a4/4p1a2/9/4b1p1p/CR2B4/8X/B1r1r4/9/X2XK2XX w R1N1n1A1P2p2 0 18",
     "C1xx1x1xx/4k4/2a5c/1r2C4/2pA2p1b/p6p1/2X3X1X/2B3P1B/3N5/X2XKX2X b R1r1N1n1b1A1a1c1P4 0 12",
@@ -43,7 +43,7 @@ const std::vector<std::string> Defaults = {
     "3P5/4kb1P1/9/3a5/1Np1p4/2p6/4X1a1p/2N3b2/4CK3/c8 w r1n1B1c1P1 1 33",
     "x2k5/9/2n3p2/6x2/9/6P2/9/4B2n1/9/4KC3 b p2 0 50",
     "9/5k1c1/2R1p4/7C1/p7p/4P4/X8/5r3/P3K4/2X4c1 w B1P1 3 51",
-    "x1x1k3x/4p4/b1p4x1/2n4a1/1B7/5a3/2PAP1b2/4N3P/3K5/8r w n1c1p2 0 34"
+    "x1x1k3x/4p4/b1p4x1/2n4a1/1B7/5a3/2PAP1b2/4N3P/3K5/8r w n1c1p2 0 34",
 
     // Bright Jieqi
     "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - 0 1",
