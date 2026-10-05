@@ -12,7 +12,8 @@ Positions in check and positions whose best move is a capture are skipped
 (their static evaluation is not meaningful), like in other NNUE trainers.
 
     python gen_data.py --engine ../src/pikafish --net current.nnue \
-        --games 1000 --nodes 5000 --workers 8 --out data/gen1.txt
+        --games 1000 --nodes 5000 --workers 8 --out data/gen1.txt \
+        [--opt ChanceScaling=400 ...] [--seed 1]
 
 Notes
 * The engine searches every position with the same instance, so both sides
@@ -85,6 +86,7 @@ def worker(idx: int, args, games: int, out_path: str):
     opts = {"Threads": 1, "Hash": args.hash, "RawScore": "true"}
     if args.net:
         opts["EvalFile"] = os.path.abspath(args.net)
+    opts.update(args.opt)
     engine = U.Engine(args.engine, opts)
     n = 0
     with open(out_path, "w") as f:
@@ -115,8 +117,11 @@ def main():
     ap.add_argument("--random-plies-min", type=int, default=2)
     ap.add_argument("--max-plies", type=int, default=400)
     ap.add_argument("--adjudicate", type=int, default=3000)
+    ap.add_argument("--opt", nargs="*", default=[],
+                    help="extra UCI options, Name=Value (e.g. ChanceScaling=400)")
     ap.add_argument("--seed", type=int, default=int(time.time()))
     args = ap.parse_args()
+    args.opt = dict(o.split("=", 1) for o in args.opt)
     args.go = f"depth {args.depth}" if args.depth else f"nodes {args.nodes}"
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
