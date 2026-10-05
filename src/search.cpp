@@ -1680,10 +1680,12 @@ Value Search::Worker::flip_search(
                             VALUE_MATE_IN_MAX_PLY - 1);
     };
 
-    auto restPieces = pos.rest_pieces(~pos.side_to_move());
-    int  total = 0;
-    for (const auto& [piece, num] : restPieces)
-        total += num;
+    Position::RestPieceList restPieces;
+    const int               restCount = pos.rest_pieces(~pos.side_to_move(), restPieces);
+
+    int total = 0;
+    for (int i = 0; i < restCount; ++i)
+        total += restPieces[i].second;
 
     // In a consistent position a dark piece always has a candidate in its
     // owner's pool. An inconsistent position can only come from the input (it
@@ -1692,16 +1694,23 @@ Value Search::Worker::flip_search(
     if (total == 0)
         return VALUE_DRAW;
 
-    DirtyPiece dp = accumulatorStack.latest().dirtyPiece;
+    const Square flipSq = (ss - 1)->currentMove.to_sq();
+    DirtyPiece   dp     = accumulatorStack.latest().dirtyPiece;
 
-    // Collect per-flip results
-    struct Entry { Value value; int count; };
-    std::vector<Entry> results;
-    results.reserve(restPieces.size());
+    // Collect per-flip results (no heap allocation in this hot path)
+    struct Entry {
+        Value value;
+        int   count;
+    };
+    std::array<Entry, Position::MaxRestPieceTypes> results;
+    int                                            resultCount = 0;
 
-    for (auto& [piece, num] : restPieces) {
+    for (int i = 0; i < restCount; ++i)
+    {
+        const auto [piece, num] = restPieces[i];
+
         accumulatorStack.pop();
-        Piece flipped_piece = pos.do_flip((ss - 1)->currentMove.to_sq(), piece, &dp, &tt);
+        Piece flipped_piece = pos.do_flip(flipSq, piece, &dp, &tt);
         accumulatorStack.push(dp);
 
         Value value;
@@ -1711,37 +1720,43 @@ Value Search::Worker::flip_search(
         else
             value = search<nodeType>(pos, ss, alpha, beta, depth, cutNode);
 
-        pos.undo_flip((ss - 1)->currentMove.to_sq(), flipped_piece);
+        pos.undo_flip(flipSq, flipped_piece);
 
-        if (std::size(restPieces) == 1)
+        if (restCount == 1)
             return value;
 
-        results.push_back({value, num});
+        // The search was stopped: the remaining outcomes would only return
+        // meaningless values, and the caller discards this result anyway.
+        if (threads.stop.load(std::memory_order_relaxed))
+            return VALUE_ZERO;
+
+        results[resultCount++] = {value, num};
     }
 
     // A chance node is only decisive when *every* outcome is decisive for the
     // same side. If some outcomes win and others lose, the result depends on
     // the hidden piece and must be averaged like any other mix of outcomes.
     bool allWin = true, allLoss = true;
-    for (const auto& e : results)
+    for (int i = 0; i < resultCount; ++i)
     {
+        const Entry& e = results[i];
         allWin &= is_win(e.value);
         allLoss &= is_loss(e.value);
     }
 
-    if (!results.empty() && (allWin || allLoss))
+    if (resultCount > 0 && (allWin || allLoss))
     {
         // All wins: the guaranteed mate is the slowest one (minimum value).
         // All losses: we are mated at the latest by the slowest one (maximum value).
         Value v = results[0].value;
-        for (const auto& e : results)
-            v = allWin ? std::min(v, e.value) : std::max(v, e.value);
+        for (int i = 1; i < resultCount; ++i)
+            v = allWin ? std::min(v, results[i].value) : std::max(v, results[i].value);
         return v;
     }
 
     double winrate_sum = 0.0;
-    for (const auto& e : results)
-        winrate_sum += score_to_winrate(e.value) * e.count;
+    for (int i = 0; i < resultCount; ++i)
+        winrate_sum += score_to_winrate(results[i].value) * results[i].count;
 
     double expectedWinrate = winrate_sum / total;
     return winrate_to_score(expectedWinrate);

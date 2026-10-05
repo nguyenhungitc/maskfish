@@ -19,6 +19,7 @@
 #ifndef POSITION_H_INCLUDED
 #define POSITION_H_INCLUDED
 
+#include <array>
 #include <stdint.h>
 #include <cassert>
 #include <cstring>
@@ -159,6 +160,10 @@ class Position {
     Value    major_material() const;
 
     const int&                         rest_piece(Piece pc) const;
+    // Allocation-free variant used in the search hot path (chance nodes).
+    static constexpr int MaxRestPieceTypes = 6;
+    using RestPieceList                    = std::array<std::pair<Piece, int>, MaxRestPieceTypes>;
+    int                                rest_pieces(Color c, RestPieceList& pieces) const;
     std::vector<std::pair<Piece, int>> rest_pieces(Color c) const;
 
     // Position consistency check, for debugging
@@ -294,16 +299,22 @@ inline Value Position::major_material() const {
 
 inline const int& Position::rest_piece(Piece pc) const { return restPieces[pc]; }
 
-inline std::vector<std::pair<Piece, int>> Position::rest_pieces(Color c) const {
-    std::vector<std::pair<Piece, int>> pieces;
+inline int Position::rest_pieces(Color c, RestPieceList& pieces) const {
+    int             count        = 0;
     const PieceType pieceOrder[] = {ROOK, CANNON, KNIGHT, ADVISOR, BISHOP, PAWN};
     for (PieceType pt : pieceOrder)
     {
         Piece pc = make_piece(c, pt);
         if (restPieces[pc])
-            pieces.emplace_back(pc, restPieces[pc]);
+            pieces[count++] = {pc, restPieces[pc]};
     }
-    return pieces;
+    return count;
+}
+
+inline std::vector<std::pair<Piece, int>> Position::rest_pieces(Color c) const {
+    RestPieceList list;
+    const int     count = rest_pieces(c, list);
+    return {list.begin(), list.begin() + count};
 }
 
 inline int Position::game_ply() const { return gamePly; }
