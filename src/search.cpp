@@ -1694,8 +1694,21 @@ Value Search::Worker::flip_search(
     if (total == 0)
         return VALUE_DRAW;
 
+    // Search the most likely outcomes first (ties: more valuable piece first).
+    // The averaged result does not depend on the order, but the TT and the
+    // histories filled by the first, most representative outcome help the
+    // following ones. (Idea from AB-JChess.)
+    std::stable_sort(restPieces.begin(), restPieces.begin() + restCount,
+                     [](const auto& a, const auto& b) {
+                         return a.second != b.second ? a.second > b.second
+                                                     : PieceValue[a.first] > PieceValue[b.first];
+                     });
+
     const Square flipSq = (ss - 1)->currentMove.to_sq();
     DirtyPiece   dp     = accumulatorStack.latest().dirtyPiece;
+
+    // Give every outcome the same view of the parent's LMR reduction.
+    ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
     // Collect per-flip results (no heap allocation in this hot path)
     struct Entry {
@@ -1709,6 +1722,7 @@ Value Search::Worker::flip_search(
     {
         const auto [piece, num] = restPieces[i];
 
+        branchReduction.restore();
         accumulatorStack.pop();
         Piece flipped_piece = pos.do_flip(flipSq, piece, &dp, &tt);
         accumulatorStack.push(dp);

@@ -78,6 +78,32 @@ struct Stack {
 };
 
 
+// A chance node (flip_search) searches the same child ply once per possible
+// identity of the revealed piece. search() reads (ss - 1)->reduction as its
+// "prior reduction" and then clears it, so without this guard only the first
+// outcome would see the parent's LMR reduction and the others would see 0.
+// restore() puts the parent's value back before every outcome; the destructor
+// leaves the field cleared, as a single call to search() would.
+// (Idea from AB-JChess.)
+class ChanceBranchReduction {
+   public:
+    explicit ChanceBranchReduction(int& r) :
+        reduction(r),
+        parentReduction(r) {}
+
+    ~ChanceBranchReduction() { reduction = 0; }
+
+    void restore() const { reduction = parentReduction; }
+
+    ChanceBranchReduction(const ChanceBranchReduction&)            = delete;
+    ChanceBranchReduction& operator=(const ChanceBranchReduction&) = delete;
+
+   private:
+    int&      reduction;
+    const int parentReduction;
+};
+
+
 // RootMove struct is used for moves at the root of the tree. For each root move
 // we store a score and a PV (really a refutation in the case of moves which
 // fail low). Score is normally set at -VALUE_INFINITE for all non-pv moves.
