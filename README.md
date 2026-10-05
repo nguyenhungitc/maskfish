@@ -133,6 +133,10 @@ validated with SPRT tests against a version where they are disabled.
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.
 `go perft <depth>` counts leaf nodes; a move of a dark piece is expanded into
 one child per kind of piece left in the mover's pool (each kind counted once).
+`evalraw` prints the raw network output (PSQT and layer parts, in internal
+units) and the layer stack used. The option `RawScore` makes `info ... score cp`
+report internal units instead of normalized centipawns. Both are used by the
+trainer.
 
 ## Network
 
@@ -145,6 +149,12 @@ features, feature hash `0x0d17b100`). Networks trained for Pikafish master
 set and are rejected when loaded; the engine then prints an error and exits at
 the first `go`. The error message still points to the `master-net` download;
 it does not mean that this network would work.
+
+### Training a network
+
+The `trainer/` directory contains a PyTorch trainer for this engine's network
+(self-play data generation, training, export, and a bit-exact check against
+the engine). See [trainer/README.md](trainer/README.md).
 
 ## Compiling
 

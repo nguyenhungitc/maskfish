@@ -90,6 +90,7 @@ class Engine {
     // utility functions
 
     void trace_eval() const;
+    void eval_raw() const;
 
     const OptionsMap& get_options() const;
     OptionsMap&       get_options();

@@ -41,6 +41,11 @@ class Score {
     Score() = default;
     Score(Value v, const Position& pos);
 
+    // When set (UCI option RawScore), non-mate scores are reported in the
+    // engine's internal units instead of normalized centipawns. Used by the
+    // training data generator.
+    static inline bool rawInternal = false;
+
     template<typename T>
     bool is() const {
         return std::holds_alternative<T>(score);

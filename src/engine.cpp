@@ -32,6 +32,9 @@
 #include "evaluate.h"
 #include "misc.h"
 #include "nnue/network.h"
+#include "nnue/nnue_accumulator.h"
+#include "nnue/features/half_ka_v2_hm.h"
+#include "score.h"
 #include "nnue/nnue_common.h"
 #include "numa.h"
 #include "perft.h"
@@ -101,6 +104,12 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("nodestime", Option(0, 0, 10000));
 
     options.add("UCI_ShowWDL", Option(false));
+
+    // Report scores in internal units (for training data generation)
+    options.add("RawScore", Option(false, [](const Option& o) {
+                    Score::rawInternal = bool(o);
+                    return std::nullopt;
+                }));
 
     // Jieqi: chance node over the identity of a dark piece captured by the
     // side the engine searches for (see Search::Worker::hiddenCaptureModel).
@@ -321,6 +330,25 @@ void Engine::trace_eval() const {
     verify_networks();
 
     sync_cout << "\n" << Eval::trace(p, *networks) << sync_endl;
+}
+
+// Prints the raw network output for the current position, in the units of
+// the network (before evaluate() scaling): used to check that a network
+// exported by the trainer is read exactly like the trainer computes it.
+void Engine::eval_raw() const {
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position     p;
+    p.set(pos.fen(), &states->back());
+
+    verify_networks();
+
+    Eval::NNUE::AccumulatorStack accumulators;
+    auto caches = std::make_unique<Eval::NNUE::AccumulatorCaches>(*networks);
+    auto [psqt, positional] = networks->big.evaluate(p, accumulators, &caches->big);
+
+    sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
+              << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " fen " << p.fen()
+              << sync_endl;
 }
 
 const OptionsMap& Engine::get_options() const { return options; }

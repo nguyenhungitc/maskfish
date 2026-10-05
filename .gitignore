@@ -17,3 +17,9 @@ src/-lstdc++.res
 # Neural network for the NNUE evaluation
 **/*.nnue
 
+
+# trainer outputs
+trainer/__pycache__/
+trainer/data/
+trainer/runs/
+trainer/nets/
