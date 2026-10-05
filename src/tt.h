@@ -67,6 +67,8 @@ struct TTData {
 struct TTWriter {
    public:
     void write(Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8);
+    // Lowers the depth of the entry, so that it is replaced sooner
+    void penalize(int penalty);
 
    private:
     friend class TranspositionTable;

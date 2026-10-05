@@ -43,7 +43,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+                     int                            optimism,
+                     bool                           jieqiMaterial) {
 
     assert(!pos.checkers());
 
@@ -56,7 +57,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     optimism += optimism * nnueComplexity / 488;
     nnue -= nnue * nnueComplexity / 11418;
 
-    int material = pos.major_material();
+    int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
     int v        = (nnue * (18560 + material) + optimism * (2727 + material)) / 33331;
 
     // Damp down the evaluation linearly when shuffling

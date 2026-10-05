@@ -123,6 +123,13 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 | `RevealQuietPhase` | `0` | Weight of the number of dark pieces still on the board. |
 | `RevealQuietDiversity` | `0` | Weight of how mixed the mover's pool is. |
 
+| `ProbCutDarkCapture` | `false` | ProbCut asks a larger margin (+64) and searches one ply less for captures of dark pieces. |
+| `TTPenalize` | `false` | Lowers by one the depth of a TT entry that is deep enough but whose bound cannot produce a cutoff, so it is replaced sooner. |
+| `ChanceBranchDepth` | `false` | In a reveal, the outcomes after the most likely one are searched one ply shallower. |
+| `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of revealed pieces only). |
+| `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with `trainer/fit_scaling.py`. |
+| `ChanceRiskAversion` | `0` | Risk preference, in percent of the standard deviation of the outcomes, of the side whose move causes a chance event: positive avoids uncertain reveals/captures, negative seeks them. |
+
 The bonus is in internal score units and clamped to -192..192. Setting all
 `RevealQuiet*` options to 0 disables it. The defaults are those of AB-JChess
 and have not been re-tuned for this engine's networks; both features should be

@@ -52,15 +52,14 @@ namespace {
 
 // Conversion between scores and win rates, used to average the outcomes of
 // chance nodes (flip_search, hidden_capture_search).
-constexpr double FlipWinrateScaling = 360.83524;
+// The scaling is 360.83524 unless the UCI option ChanceScaling is set.
+double flip_score_to_winrate(Value v, double scaling) { return 1.0 / (1.0 + std::exp(-v / scaling)); }
 
-double flip_score_to_winrate(Value v) { return 1.0 / (1.0 + std::exp(-v / FlipWinrateScaling)); }
-
-Value flip_winrate_to_score(double winrate) {
+Value flip_winrate_to_score(double winrate, double scaling) {
     constexpr double epsilon = 1e-9;
     winrate                  = std::clamp(winrate, epsilon, 1.0 - epsilon);
     double q                 = std::log(winrate / (1.0 - winrate));
-    return std::clamp(static_cast<Value>(q * FlipWinrateScaling), VALUE_MATED_IN_MAX_PLY + 1,
+    return std::clamp(static_cast<Value>(q * scaling), VALUE_MATED_IN_MAX_PLY + 1,
                       VALUE_MATE_IN_MAX_PLY - 1);
 }
 
@@ -249,6 +248,12 @@ void Search::Worker::iterative_deepening() {
     // Jieqi information model and reveal heuristics (see search.h)
     rootObserver       = us;  // also when pondering: the root is then after the expected reply
     hiddenCaptureModel = bool(options["HiddenCaptureModel"]);
+    probCutDarkCapture = bool(options["ProbCutDarkCapture"]);
+    ttPenalize         = bool(options["TTPenalize"]);
+    chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
+    jieqiMaterial      = bool(options["JieqiMaterial"]);
+    chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
+    chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
     revealQuiet        = {int(options["RevealQuietBase"]), int(options["RevealQuietPhase"]),
                           int(options["RevealQuietSafety"]), int(options["RevealQuietHighValue"]),
                           int(options["RevealQuietDiversity"])};
@@ -715,6 +720,12 @@ Value Search::Worker::search(
                 return ttData.value;
         }
     }
+    // The entry is deep enough but its bound does not allow a cutoff: make it
+    // easier to replace. (Idea from AB-JChess, UCI option TTPenalize.)
+    else if (ttPenalize && !PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)
+             && is_valid(ttData.value) && ttData.bound != BOUND_EXACT
+             && (ttData.bound & (ttData.value >= beta ? BOUND_UPPER : BOUND_LOWER)) && depth > 5)
+        ttWriter.penalize(1);
 
     // Step 5. Static evaluation of the position
     Value      unadjustedStaticEval = VALUE_NONE;
@@ -876,6 +887,14 @@ Value Search::Worker::search(
             movedPiece = pos.moved_piece(move);
 
             ss->capturedDark = pos.is_dark(move.to_sq());
+
+            // Captures of dark pieces are less predictable: optionally ask for a
+            // larger margin and search them shallower. (Idea from AB-JChess,
+            // UCI option ProbCutDarkCapture.)
+            const bool  darkCut  = probCutDarkCapture && ss->capturedDark;
+            const Value moveBeta = darkCut ? std::min(probCutBeta + 64, VALUE_INFINITE - 1) : probCutBeta;
+            const Depth moveDepth = darkCut ? std::max(depth - 6, 0) : probCutDepth;
+
             do_move(pos, move, st);
 
             ss->currentMove = move;
@@ -885,23 +904,22 @@ Value Search::Worker::search(
               &this->continuationCorrectionHistory[movedPiece][move.to_sq()];
 
             // Perform a preliminary qsearch to verify that the move holds
-            value = -qsearch<NonPV>(pos, ss + 1, -probCutBeta, -probCutBeta + 1);
+            value = -qsearch<NonPV>(pos, ss + 1, -moveBeta, -moveBeta + 1);
 
             // If the qsearch held, perform the regular search
-            if (value >= probCutBeta && probCutDepth > 0)
-                value = -search<NonPV>(pos, ss + 1, -probCutBeta, -probCutBeta + 1, probCutDepth,
-                                       !cutNode);
+            if (value >= moveBeta && moveDepth > 0)
+                value = -search<NonPV>(pos, ss + 1, -moveBeta, -moveBeta + 1, moveDepth, !cutNode);
 
             undo_move(pos, move);
 
-            if (value >= probCutBeta)
+            if (value >= moveBeta)
             {
                 // Save ProbCut data into transposition table
                 ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,
-                               probCutDepth + 1, move, unadjustedStaticEval, tt.generation());
+                               moveDepth + 1, move, unadjustedStaticEval, tt.generation());
 
                 if (!is_decisive(value))
-                    return value - (probCutBeta - beta);
+                    return value - (moveBeta - beta);
             }
         }
     }
@@ -1713,6 +1731,50 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 }
 
 
+// Averages the outcomes of a chance node. A chance node is only decisive when
+// *every* outcome is decisive for the same side; otherwise the outcomes are
+// averaged in win-rate space. With ChanceRiskAversion, the standard deviation
+// of the win rates is added (from the point of view of the side to move here,
+// i.e. subtracted for the side whose move caused the chance event): positive
+// values make that side avoid uncertain reveals/captures, negative values
+// make it seek them. (Risk-sensitive aggregation idea from AB-JChess.)
+Value Search::Worker::aggregate_chance(const ChanceOutcome* outcomes, int n, int total) const {
+
+    bool allWin = true, allLoss = true;
+    for (int i = 0; i < n; ++i)
+    {
+        allWin &= is_win(outcomes[i].value);
+        allLoss &= is_loss(outcomes[i].value);
+    }
+
+    if (n > 0 && (allWin || allLoss))
+    {
+        // All wins: the guaranteed mate is the slowest one (minimum value).
+        // All losses: we are mated at the latest by the slowest one (maximum value).
+        Value v = outcomes[0].value;
+        for (int i = 1; i < n; ++i)
+            v = allWin ? std::min(v, outcomes[i].value) : std::max(v, outcomes[i].value);
+        return v;
+    }
+
+    double winrateSum = 0.0, winrateSqSum = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double w = flip_score_to_winrate(outcomes[i].value, chanceScaling);
+        winrateSum += w * outcomes[i].count;
+        winrateSqSum += w * w * outcomes[i].count;
+    }
+
+    double expected = winrateSum / total;
+    if (chanceRisk != 0.0)
+    {
+        const double variance = std::max(0.0, winrateSqSum / total - expected * expected);
+        expected += chanceRisk * std::sqrt(variance);
+    }
+    return flip_winrate_to_score(expected, chanceScaling);
+}
+
+
 template<NodeType nodeType>
 Value Search::Worker::search_child(
   Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode, int revealBonus) {
@@ -1769,11 +1831,7 @@ Value Search::Worker::hidden_capture_search(
 
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
-    struct Entry {
-        Value value;
-        int   count;
-    };
-    std::array<Entry, Position::MaxRestPieceTypes> results;
+    std::array<ChanceOutcome, Position::MaxRestPieceTypes> results;
     int                                            resultCount = 0;
     bool                                           stopped     = false;
 
@@ -1810,28 +1868,7 @@ Value Search::Worker::hidden_capture_search(
     if (stopped)
         return VALUE_ZERO;
 
-    // Same aggregation as flip_search(): decisive only if every outcome is
-    // decisive for the same side, otherwise average the win rates.
-    bool allWin = true, allLoss = true;
-    for (int i = 0; i < resultCount; ++i)
-    {
-        allWin &= is_win(results[i].value);
-        allLoss &= is_loss(results[i].value);
-    }
-
-    if (allWin || allLoss)
-    {
-        Value v = results[0].value;
-        for (int i = 1; i < resultCount; ++i)
-            v = allWin ? std::min(v, results[i].value) : std::max(v, results[i].value);
-        return v;
-    }
-
-    double winrateSum = 0.0;
-    for (int i = 0; i < resultCount; ++i)
-        winrateSum += flip_score_to_winrate(results[i].value) * results[i].count;
-
-    return flip_winrate_to_score(winrateSum / total);
+    return aggregate_chance(results.data(), resultCount, total);
 }
 
 
@@ -1864,17 +1901,13 @@ Value Search::Worker::flip_search(
                      });
 
     const Square flipSq = (ss - 1)->currentMove.to_sq();
-    DirtyPiece   dp     = accumulatorStack.latest().dirtyPiece;
+    const DirtyPiece baseDp = accumulatorStack.latest().dirtyPiece;
 
     // Give every outcome the same view of the parent's LMR reduction.
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
     // Collect per-flip results (no heap allocation in this hot path)
-    struct Entry {
-        Value value;
-        int   count;
-    };
-    std::array<Entry, Position::MaxRestPieceTypes> results;
+    std::array<ChanceOutcome, Position::MaxRestPieceTypes> results;
     int                                            resultCount = 0;
 
     for (int i = 0; i < restCount; ++i)
@@ -1882,6 +1915,7 @@ Value Search::Worker::flip_search(
         const auto [piece, num] = restPieces[i];
 
         branchReduction.restore();
+        DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();
         Piece flipped_piece = pos.do_flip(flipSq, piece, &dp, &tt);
         accumulatorStack.push(dp);
@@ -1891,7 +1925,10 @@ Value Search::Worker::flip_search(
         if (isQsearch)
             value = qsearch<nodeType>(pos, ss, alpha, beta);
         else
-            value = search<nodeType>(pos, ss, alpha, beta, depth, cutNode);
+            // Optionally search the less likely outcomes one ply shallower
+            value = search<nodeType>(pos, ss, alpha, beta,
+                                     chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth,
+                                     cutNode);
 
         pos.undo_flip(flipSq, flipped_piece);
 
@@ -1906,33 +1943,7 @@ Value Search::Worker::flip_search(
         results[resultCount++] = {value, num};
     }
 
-    // A chance node is only decisive when *every* outcome is decisive for the
-    // same side. If some outcomes win and others lose, the result depends on
-    // the hidden piece and must be averaged like any other mix of outcomes.
-    bool allWin = true, allLoss = true;
-    for (int i = 0; i < resultCount; ++i)
-    {
-        const Entry& e = results[i];
-        allWin &= is_win(e.value);
-        allLoss &= is_loss(e.value);
-    }
-
-    if (resultCount > 0 && (allWin || allLoss))
-    {
-        // All wins: the guaranteed mate is the slowest one (minimum value).
-        // All losses: we are mated at the latest by the slowest one (maximum value).
-        Value v = results[0].value;
-        for (int i = 1; i < resultCount; ++i)
-            v = allWin ? std::min(v, results[i].value) : std::max(v, results[i].value);
-        return v;
-    }
-
-    double winrate_sum = 0.0;
-    for (int i = 0; i < resultCount; ++i)
-        winrate_sum += flip_score_to_winrate(results[i].value) * results[i].count;
-
-    double expectedWinrate = winrate_sum / total;
-    return flip_winrate_to_score(expectedWinrate);
+    return aggregate_chance(results.data(), resultCount, total);
 }
 
 
@@ -1957,7 +1968,7 @@ TimePoint Search::Worker::elapsed_time() const { return main_manager()->tm.elaps
 
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()], jieqiMaterial);
 }
 
 namespace {

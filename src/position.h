@@ -164,6 +164,9 @@ class Position {
     uint16_t chased(Color c);
     Value    major_material(Color c) const;
     Value    major_material() const;
+    // Major material (rooks, cannons, knights) counting each dark piece at the
+    // expected major value of a piece drawn from its owner's pool
+    Value    jieqi_major_material() const;
 
     const int&                         rest_piece(Piece pc) const;
     // Allocation-free variant used in the search hot path (chance nodes).
@@ -301,6 +304,27 @@ inline Value Position::major_material(Color c) const { return st->majorMaterial[
 
 inline Value Position::major_material() const {
     return major_material(WHITE) + major_material(BLACK);
+}
+
+inline Value Position::jieqi_major_material() const {
+    Value total = major_material();
+    for (Color c : {WHITE, BLACK})
+    {
+        const int dark = popcount(pieces(c, DARK));
+        if (!dark)
+            continue;
+        int poolCount = 0, poolMajor = 0;
+        for (PieceType pt = ROOK; pt < KING; ++pt)
+        {
+            const Piece pc = make_piece(c, pt);
+            poolCount += restPieces[pc];
+            if (pt & 1)  // rook, cannon, knight
+                poolMajor += restPieces[pc] * PieceValue[pc];
+        }
+        if (poolCount)
+            total += dark * poolMajor / poolCount;
+    }
+    return total;
 }
 
 inline const int& Position::rest_piece(Piece pc) const { return restPieces[pc]; }

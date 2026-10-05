@@ -123,6 +123,24 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("RevealQuietHighValue", Option(-12, -96, 96));
     options.add("RevealQuietDiversity", Option(0, -96, 96));
 
+    // Experimental (ideas from AB-JChess), off by default: test with SPRT.
+    // ProbCut asks a larger margin (+64) and one ply less for dark captures.
+    options.add("ProbCutDarkCapture", Option(false));
+    // Lower the depth of TT entries that are deep enough but cannot cut.
+    options.add("TTPenalize", Option(false));
+    // Search the less likely outcomes of a reveal one ply shallower.
+    options.add("ChanceBranchDepth", Option(false));
+    // Count dark pieces at their expected value in the material scaling of
+    // the evaluation.
+    options.add("JieqiMaterial", Option(false));
+    // Score -> win rate scale used to average chance nodes (0 = built-in
+    // 360.83524). trainer/fit_scaling.py fits it from self-play data.
+    options.add("ChanceScaling", Option(0, 0, 3000));
+    // Risk preference of the side causing a chance event, in percent of the
+    // standard deviation of the outcomes' win rates: > 0 avoids uncertain
+    // reveals and captures, < 0 seeks them.
+    options.add("ChanceRiskAversion", Option(0, -100, 100));
+
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
           load_big_network(o);

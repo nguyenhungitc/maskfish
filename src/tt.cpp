@@ -62,6 +62,7 @@ struct TTEntry {
 
    private:
     friend class TranspositionTable;
+    friend struct TTWriter;
 
     uint16_t key16;
     uint8_t  depth8;
@@ -132,6 +133,12 @@ TTWriter::TTWriter(TTEntry* tte) :
 void TTWriter::write(
   Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8) {
     entry->save(k, v, pv, b, d, m, ev, generation8);
+}
+
+void TTWriter::penalize(int penalty) {
+    const int d = int(entry->depth8) - penalty;
+    // depth8 == 0 marks an empty slot: keep the entry occupied
+    entry->depth8 = uint8_t(d > 1 ? d : 1);
 }
 
 

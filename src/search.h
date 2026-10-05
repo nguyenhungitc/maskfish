@@ -375,6 +375,21 @@ class Worker {
     // searched differently depending on who is observing. (From AB-JChess.)
     Color                   rootObserver = WHITE;
     bool                    hiddenCaptureModel = false;
+
+    // Experimental search options (see engine.cpp), all off by default
+    bool   probCutDarkCapture = false;
+    bool   ttPenalize         = false;
+    bool   chanceBranchDepth  = false;
+    bool   jieqiMaterial      = false;
+    double chanceScaling      = 360.83524;
+    double chanceRisk         = 0.0;
+
+    // Averages the outcomes of a chance node (flip_search, hidden_capture_search)
+    struct ChanceOutcome {
+        Value value;
+        int   count;
+    };
+    Value aggregate_chance(const ChanceOutcome* outcomes, int n, int total) const;
     Reveal::QuietParameters revealQuiet;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
