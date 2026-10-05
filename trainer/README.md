@@ -21,6 +21,7 @@ written for this engine's feature set and file format.
 | `prepare_data.py` | text data → shuffled binary arrays |
 | `train.py` | training loop, writes a checkpoint and a `.nnue` per epoch |
 | `verify.py` | checks engine vs. trainer evaluations |
+| `fit_scaling.py` | fits the score → win probability scale from self-play data |
 | `jieqi_uci.py` | UCI helpers |
 
 ## Setup
@@ -70,6 +71,34 @@ hundreds of millions or more. `prepare_data.py` stores about 260 bytes per
 position. `gen_data.py` drives the engine over UCI from Python: it is simple
 and correct but not fast; run many workers, on many machines if possible.
 
+### Calibrating the score scale
+
+```
+python fit_scaling.py data/gen1.txt
+```
+
+prints the scale that best predicts the game results from the scores, with a
+calibration table. Use it for the engine (`setoption name ChanceScaling value
+<s>`, averaging of chance nodes) and for training (`train.py --scaling <s>`).
+Re-fit it for each new network.
+
+### The "att" architecture
+
+Build the engine with `make nnue=att` (attack buckets + mid mirror, see the
+main README) and pass `--arch att` to `init_net.py` and `prepare_data.py`.
+`train.py` takes the architecture from the prepared data, `serialize.py` and
+`verify.py` detect it from the network file. Data must be prepared again for
+each architecture (the text files from `gen_data.py` are shared). The model
+has about 4 times more feature transformer weights: count about 1 GB of
+memory for parameters and optimizer state.
+
+```
+python init_net.py nets/att0.nnue --arch att
+python prepare_data.py data/gen0.txt --out data/train0_att --arch att
+python train.py data/train0_att --out runs/att1 ...
+python verify.py --engine ../src/pikafish --net runs/att1/epoch_100.nnue
+```
+
 ### Main options
 
 * `--lambda`: 1.0 trains on search scores only, lower values mix in game
@@ -80,6 +109,7 @@ and correct but not fast; run many workers, on many machines if possible.
 
 ## If the engine's network changes
 
-`jieqi_features.py`, `model.py` and the constants at the top of
-`serialize.py` (hashes, sizes, scales) describe the current engine. After any
-change to `src/nnue`, update them and run `verify.py` until it is bit-exact.
+`jieqi_features.py` (feature sets, `ARCHS`), `model.py` and the constants at
+the top of `serialize.py` (hashes, sizes, scales) describe the engine. After
+any change to `src/nnue`, update them and run `verify.py`, for every
+architecture, until it is bit-exact.

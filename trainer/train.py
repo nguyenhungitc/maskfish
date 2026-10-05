@@ -28,8 +28,17 @@ import serialize as S
 from model import NNUE, NNUE2SCORE
 
 
+def data_arch(prefix: str) -> str:
+    try:
+        with open(prefix + ".arch") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "default"
+
+
 class Data:
     def __init__(self, prefix: str):
+        self.arch = data_arch(prefix)
         self.features = np.load(prefix + ".features.npy", mmap_mode="r")
         self.meta = np.load(prefix + ".meta.npy", mmap_mode="r")
         self.n = len(self.meta)
@@ -87,7 +96,13 @@ def main():
 
     train = Data(args.train)
     val = Data(args.val) if args.val else None
-    print(f"train: {train.n} positions" + (f", val: {val.n}" if val else ""), flush=True)
+    if val and val.arch != train.arch:
+        raise SystemExit(f"train data is arch '{train.arch}' but validation data is '{val.arch}'")
+    F.set_arch(train.arch)
+    if args.init_net and S.detect_arch(args.init_net) != F.ARCH:
+        raise SystemExit(f"--init-net is arch '{S.detect_arch(args.init_net)}', data is '{F.ARCH}'")
+    print(f"arch {F.ARCH}, train: {train.n} positions" + (f", val: {val.n}" if val else ""),
+          flush=True)
 
     model = NNUE()
     if args.init_net:
@@ -98,6 +113,8 @@ def main():
     first_epoch = 1
     if args.resume:
         ck = torch.load(args.resume, map_location=device)
+        if ck.get("arch", "default") != F.ARCH:
+            raise SystemExit(f"checkpoint is arch '{ck.get('arch', 'default')}', data is '{F.ARCH}'")
         model.load_state_dict(ck["model"])
         if "optimizer" in ck:
             opt.load_state_dict(ck["optimizer"])
@@ -133,13 +150,12 @@ def main():
         print(msg, flush=True)
 
         ck = {"model": model.state_dict(), "optimizer": opt.state_dict(),
-              "scheduler": sched.state_dict(), "epoch": epoch, "args": vars(args)}
+              "scheduler": sched.state_dict(), "epoch": epoch, "args": vars(args),
+              "arch": F.ARCH}
         torch.save(ck, os.path.join(args.out, f"epoch_{epoch}.pt"))
         torch.save(ck, os.path.join(args.out, "last.pt"))
-        model_cpu = NNUE(init_psqt=False)
-        model_cpu.load_state_dict({k: v.cpu() for k, v in model.state_dict().items()})
-        S.write_nnue(S.quantize(model_cpu), os.path.join(args.out, f"epoch_{epoch}.nnue"),
-                     f"Jieqi NNUE epoch {epoch}")
+        S.write_nnue(S.quantize(model), os.path.join(args.out, f"epoch_{epoch}.nnue"),
+                     f"Jieqi NNUE ({F.ARCH}) epoch {epoch}")
 
 
 if __name__ == "__main__":

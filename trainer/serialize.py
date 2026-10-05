@@ -31,10 +31,17 @@ import numpy as np
 import jieqi_features as F
 
 VERSION = 0x7AF32F20
-FT_HASH = 0x0D17A100        # FEATURE_HASH ^ (2048 * 2)
-ARCH_HASH = 0x63336B4A
-NETWORK_HASH = FT_HASH ^ ARCH_HASH
+ARCH_HASH = 0x63336B4A      # layer stacks (same for every feature set)
 LEB128_MAGIC = b"COMPRESSED_LEB128"
+
+
+def ft_hash() -> int:
+    """Feature transformer hash: feature set hash ^ (2048 * 2)."""
+    return F.FEATURE_HASH ^ (2048 * 2)
+
+
+def network_hash() -> int:
+    return ft_hash() ^ ARCH_HASH
 
 L1, L2, L3 = 2048, 15, 32
 PSQT = F.NUM_PSQT_BUCKETS
@@ -44,9 +51,11 @@ FC1_PADDED_IN = 32
 
 # ---------------------------------------------------------------- LEB128
 
-def leb128_encode(values: np.ndarray) -> bytes:
-    """Signed LEB128, like write_leb_128() in src/nnue/nnue_common.h (vectorized)."""
-    v = values.astype(np.int64).ravel()
+LEB128_CHUNK = 1 << 22
+
+
+def _leb128_encode_chunk(v: np.ndarray) -> bytes:
+    v = v.astype(np.int64)
     n = np.ones(v.shape, dtype=np.int64)
     for k in range(1, 10):                       # bytes needed: v fits in 7k signed bits
         lim = 1 << (7 * k - 1)
@@ -55,27 +64,42 @@ def leb128_encode(values: np.ndarray) -> bytes:
     out = np.zeros(int(n.sum()), dtype=np.uint8)
     for j in range(int(n.max())):
         mask = j < n
-        byte = (v >> (7 * j)) & 0x7F
-        byte = byte | np.where(j < n - 1, 0x80, 0)
+        byte = ((v >> (7 * j)) & 0x7F) | np.where(j < n - 1, 0x80, 0)
         out[offsets[mask] + j] = byte[mask].astype(np.uint8)
     return out.tobytes()
 
 
-def leb128_decode(data: bytes, count: int) -> np.ndarray:
-    b = np.frombuffer(data, dtype=np.uint8).astype(np.int64)
-    ends = np.flatnonzero((b & 0x80) == 0)
-    if len(ends) < count:
-        raise ValueError("truncated LEB128 block")
-    ends = ends[:count]
-    starts = np.concatenate([[0], ends[:-1] + 1])
-    lengths = ends - starts + 1
-    result = np.zeros(count, dtype=np.int64)
-    for j in range(int(lengths.max())):
-        mask = j < lengths
-        result[mask] |= (b[starts[mask] + j] & 0x7F) << (7 * j)
-    sign = (b[ends] & 0x40) != 0
-    result[sign] -= np.left_shift(1, 7 * lengths[sign])
-    return result
+def leb128_encode(values: np.ndarray) -> bytes:
+    """Signed LEB128, like write_leb_128() in src/nnue/nnue_common.h
+    (vectorized, in chunks to bound memory)."""
+    v = values.ravel()
+    return b"".join(_leb128_encode_chunk(v[i:i + LEB128_CHUNK])
+                    for i in range(0, len(v), LEB128_CHUNK))
+
+
+def leb128_decode(data: bytes, count: int, dtype=np.int64) -> np.ndarray:
+    b = np.frombuffer(data, dtype=np.uint8)
+    out = np.empty(count, dtype=dtype)
+    pos, done = 0, 0
+    while done < count:
+        k = min(LEB128_CHUNK, count - done)
+        window = b[pos:pos + 10 * k].astype(np.int64)
+        ends = np.flatnonzero((window & 0x80) == 0)
+        if len(ends) < k:
+            raise ValueError("truncated LEB128 block")
+        ends = ends[:k]
+        starts = np.concatenate([[0], ends[:-1] + 1])
+        lengths = ends - starts + 1
+        result = np.zeros(k, dtype=np.int64)
+        for j in range(int(lengths.max())):
+            mask = j < lengths
+            result[mask] |= (window[starts[mask] + j] & 0x7F) << (7 * j)
+        sign = (window[ends] & 0x40) != 0
+        result[sign] -= np.left_shift(1, 7 * lengths[sign])
+        out[done:done + k] = result
+        done += k
+        pos += int(ends[-1]) + 1
+    return out
 
 
 def _write_leb(f, values: np.ndarray):
@@ -85,11 +109,11 @@ def _write_leb(f, values: np.ndarray):
     f.write(payload)
 
 
-def _read_leb(f, count: int) -> np.ndarray:
+def _read_leb(f, count: int, dtype=np.int64) -> np.ndarray:
     if f.read(len(LEB128_MAGIC)) != LEB128_MAGIC:
         raise ValueError("missing LEB128 block")
     (n,) = struct.unpack("<I", f.read(4))
-    return leb128_decode(f.read(n), count)
+    return leb128_decode(f.read(n), count, dtype)
 
 
 # ---------------------------------------------------------------- quantization
@@ -101,16 +125,20 @@ def quantize(model) -> dict:
                        NNUE2SCORE, OUTPUT_SCALE, MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT)
 
     with torch.no_grad():
-        w = model.ft.weight[:F.NUM_FEATURES].detach().cpu().double().numpy()
+        # Feature transformer: done with torch in float32 to keep memory low
+        # (the "att" architecture has 30240 x 2048 weights)
+        w = model.ft.weight.detach()[:F.NUM_FEATURES]
         b = model.ft_bias.detach().cpu().double().numpy()
 
         q = {}
         q["ft_bias"] = np.round(b[:L1] * FT_SCALE).astype(np.int64)
-        q["ft_weight"] = np.round(w[:, :L1] * FT_SCALE).astype(np.int64)
-        q["psqt"] = np.round(w[:, L1:] * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
-        for name in ("ft_bias", "ft_weight"):
-            if np.abs(q[name]).max() > 16383:   # doubled by the engine into int16
-                raise ValueError(f"{name} out of range: {np.abs(q[name]).max()}")
+        ftw = torch.round(w[:, :L1].float() * FT_SCALE)
+        if ftw.abs().max().item() > 16383 or np.abs(q["ft_bias"]).max() > 16383:
+            raise ValueError("feature transformer weights out of range (doubled by the engine "
+                             "into int16)")
+        q["ft_weight"] = ftw.to(torch.int16).cpu().numpy()
+        del ftw
+        q["psqt"] = np.round(w[:, L1:].cpu().double().numpy() * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
 
         st = model.stacks
         l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, L2 + 1, L1)
@@ -140,10 +168,10 @@ def quantize(model) -> dict:
 def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with trainer/"):
     buf = io.BytesIO()
     desc = description.encode("utf-8")
-    buf.write(struct.pack("<III", VERSION, NETWORK_HASH, len(desc)))
+    buf.write(struct.pack("<III", VERSION, network_hash(), len(desc)))
     buf.write(desc)
 
-    buf.write(struct.pack("<I", FT_HASH))
+    buf.write(struct.pack("<I", ft_hash()))
     _write_leb(buf, q["ft_bias"].astype(np.int16))
     _write_leb(buf, q["ft_weight"].astype(np.int16))
     _write_leb(buf, q["psqt"].astype(np.int32))
@@ -159,7 +187,7 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
 
     import zstandard
     with open(path, "wb") as f:
-        f.write(zstandard.ZstdCompressor(level=19, threads=-1).compress(buf.getvalue()))
+        f.write(zstandard.ZstdCompressor(level=12, threads=-1).compress(buf.getvalue()))
 
 
 def read_nnue(path: str) -> dict:
@@ -171,15 +199,18 @@ def read_nnue(path: str) -> dict:
         pass  # not compressed
     f = io.BytesIO(raw)
     version, nhash, dlen = struct.unpack("<III", f.read(12))
-    if version != VERSION or nhash != NETWORK_HASH:
-        raise ValueError(f"incompatible network (version {version:#x}, hash {nhash:#x})")
+    if version != VERSION or nhash != network_hash():
+        known = {S_hash: name for name, S_hash in _arch_network_hashes().items()}
+        hint = f" (looks like arch '{known[nhash]}')" if nhash in known else ""
+        raise ValueError(f"incompatible network for arch '{F.ARCH}' "
+                         f"(version {version:#x}, hash {nhash:#x}){hint}")
     description = f.read(dlen).decode("utf-8", "replace")
     (fth,) = struct.unpack("<I", f.read(4))
-    if fth != FT_HASH:
+    if fth != ft_hash():
         raise ValueError("feature transformer hash mismatch")
     q = {"description": description}
     q["ft_bias"] = _read_leb(f, L1)
-    q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1).reshape(F.NUM_FEATURES, L1)
+    q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
     q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
 
     def arr(dtype, n):
@@ -202,6 +233,25 @@ def read_nnue(path: str) -> dict:
     return q
 
 
+def _arch_network_hashes() -> dict:
+    return {name: (h ^ (2048 * 2)) ^ ARCH_HASH for name, (_, h, _) in F.ARCHS.items()}
+
+
+def detect_arch(path: str) -> str:
+    """Architecture of a .nnue file, from its hash."""
+    import zstandard
+    raw = open(path, "rb").read()
+    try:
+        raw = zstandard.ZstdDecompressor().decompressobj().decompress(raw)
+    except zstandard.ZstdError:
+        pass
+    _, nhash, _ = struct.unpack("<III", raw[:12])
+    for name, h in _arch_network_hashes().items():
+        if h == nhash:
+            return name
+    raise ValueError(f"unknown network hash {nhash:#x}")
+
+
 def load_into_model(q: dict, model):
     """Dequantize a network into a model (to continue training from it)."""
     import torch
@@ -209,7 +259,7 @@ def load_into_model(q: dict, model):
                        NNUE2SCORE, OUTPUT_SCALE)
     hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
     with torch.no_grad():
-        model.ft.weight[:F.NUM_FEATURES, :L1] = torch.tensor(q["ft_weight"] / FT_SCALE)
+        model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
         model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
@@ -242,7 +292,7 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
         acc = 2 * q["ft_bias"].copy()               # the engine doubles the FT on load
         ps = np.zeros(PSQT, dtype=np.int64)
         for i in feats:
-            acc += 2 * q["ft_weight"][i]
+            acc += 2 * q["ft_weight"][i].astype(np.int64)
             ps += q["psqt"][i]
         a = np.clip(acc[:L1 // 2], 0, 254)
         b = np.clip(acc[L1 // 2:], 0, 254)
@@ -278,15 +328,17 @@ def main():
     from model import NNUE
 
     if args.to_checkpoint:
+        F.set_arch(detect_arch(args.source))
         model = NNUE(init_psqt=False)
         load_into_model(read_nnue(args.source), model)
-        torch.save({"model": model.state_dict()}, args.target)
+        torch.save({"model": model.state_dict(), "arch": F.ARCH}, args.target)
     else:
         ckpt = torch.load(args.source, map_location="cpu")
+        F.set_arch(ckpt.get("arch", "default"))
         model = NNUE(init_psqt=False)
         model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
         write_nnue(quantize(model), args.target, args.description)
-    print("written", args.target)
+    print(f"written {args.target} (arch {F.ARCH})")
 
 
 if __name__ == "__main__":

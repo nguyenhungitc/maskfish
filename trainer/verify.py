@@ -49,7 +49,11 @@ def main():
     ap.add_argument("--checkpoint", help="checkpoint to compare the float model with")
     ap.add_argument("--positions", type=int, default=200)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS),
+                    help="architecture of the random test network (ignored with --net)")
     args = ap.parse_args()
+    F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
+    print(f"arch {F.ARCH}")
 
     import torch
     from model import NNUE, NNUE2SCORE
@@ -70,6 +74,7 @@ def main():
             for p in model.stacks.parameters():
                 p.uniform_(-0.5, 0.5)
             model.ft.weight[:, :2048].uniform_(-0.1, 0.1)
+            model.ft.weight[:, 2048:].uniform_(-0.2, 0.2)   # also test every PSQT row
             model.ft.weight[F.PAD_INDEX].zero_()
         model.clip_weights()
         q = S.quantize(model)

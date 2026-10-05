@@ -1,6 +1,6 @@
 """Writes a material-only starting network (no Jieqi network exists yet).
 
-    python init_net.py gen0.nnue
+    python init_net.py gen0.nnue [--arch att]
 
 The PSQT weights hold the piece values (a hidden piece counts as the average
 value of the 15 pieces of a side) and the layer stacks output 0, so the
@@ -8,17 +8,21 @@ engine plays with a material evaluation. Use it to generate the first data,
 train, then generate again with the trained network, and so on.
 """
 
-import sys
+import argparse
 
 import torch
 
+import jieqi_features as F
 import serialize as S
 from model import NNUE
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit(__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out")
+    ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
+    args = ap.parse_args()
+    F.set_arch(args.arch)
     torch.manual_seed(0)
     model = NNUE(init_psqt=True)
     with torch.no_grad():
@@ -28,9 +32,9 @@ def main():
         model.stacks.l2.bias.zero_()
         model.stacks.output.weight.zero_()
         model.stacks.output.bias.zero_()
-    S.write_nnue(S.quantize(model), sys.argv[1], "Jieqi material-only starting net")
-    torch.save({"model": model.state_dict()}, sys.argv[1] + ".pt")
-    print("written", sys.argv[1])
+    S.write_nnue(S.quantize(model), args.out, f"Jieqi material-only starting net ({F.ARCH})")
+    torch.save({"model": model.state_dict(), "arch": F.ARCH}, args.out + ".pt")
+    print(f"written {args.out} (arch {F.ARCH})")
 
 
 if __name__ == "__main__":

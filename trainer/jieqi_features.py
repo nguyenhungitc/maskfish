@@ -11,6 +11,15 @@ src/nnue/nnue_accumulator.cpp:
   (own / opponent), activated once per piece in the pool, i.e. its weight is
   multiplied by the count.
 
+Two architectures exist (select with set_arch() before building a model):
+
+* "default": the engine built normally.
+* "att": the engine built with `make nnue=att`. The feature transformer is
+  also bucketed by the visible attacking material of the perspective's side
+  (4 attack buckets: has a rook? has a knight or a cannon?) and, when both
+  kings are on the middle file, the board is mirrored according to its
+  left/right balance ("mid mirror"). Both ideas come from Pikafish.
+
 If you change the feature set in the engine, change it here too and re-run
 verify.py.
 """
@@ -25,14 +34,32 @@ SQUARE_NB = 90
 
 PS_NB = 14 * SQUARE_NB              # 1260
 NUM_KING_BUCKETS = 6
-NUM_FEATURES = NUM_KING_BUCKETS * PS_NB   # 7560
 MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62
-PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 
 NUM_PSQT_BUCKETS = 16
 NUM_LAYER_STACKS = 16
 
-FEATURE_HASH = 0x0D17B100
+ARCHS = {
+    # name: (attack buckets, feature hash, mid mirror)
+    "default": (1, 0x0D17B100, False),
+    "att": (4, 0x7A17B104, True),
+}
+
+ARCH = "default"
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR = ARCHS[ARCH]
+NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
+PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
+
+
+def set_arch(name: str):
+    """Selects the network architecture (call before creating a model)."""
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, NUM_FEATURES, PAD_INDEX
+    if name not in ARCHS:
+        raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
+    ARCH = name
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR = ARCHS[name]
+    NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
+    PAD_INDEX = NUM_FEATURES
 
 # Engine piece codes (src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)
@@ -128,6 +155,72 @@ def king_bucket(ksq: int, oksq: int) -> tuple[int, bool]:
     return bucket, mirror
 
 
+# ---- "att" architecture: mid mirror (Pikafish) and attack buckets
+
+MASK64 = (1 << 64) - 1
+BALANCE_ENCODING = 0xA4A92A74E989D3A7
+_MID_SHIFTS = ((0, 0), (44, 0), (60, 36), (47, 7), (53, 21), (50, 14), (57, 29), (0, 0))
+
+
+def _mid_mirror_encoding(pc: int, s: int) -> int:
+    c, pt = pc >> 3, pc & 7
+    f, r = s % FILE_NB, s // FILE_NB
+    if f == 4:
+        return 0
+    if pt == KING:
+        return 1 << 63
+    r_ = r if c == WHITE else 9 - r
+    f_ = f if f < 4 else 8 - f
+    s1, s2 = _MID_SHIFTS[pt]
+    e = (1 << s1) | (((3 - f_) * 10 + r_) << s2)
+    return e if f < 4 else (-e) & MASK64
+
+
+MID_MIRROR_ENCODING = [[_mid_mirror_encoding(pc, s) if 0 < (pc & 7) <= KING else 0
+                        for s in range(SQUARE_NB)] for pc in range(16)]
+
+
+def mid_encodings(pos) -> list[int]:
+    """Sum of the encodings of the pieces of each side (dark pieces count as
+    the kind of their square), like Position::midEncoding in the engine."""
+    enc = [BALANCE_ENCODING, BALANCE_ENCODING]
+    for s in range(SQUARE_NB):
+        pc = pos.board[s]
+        if pc:
+            enc[pc >> 3] = (enc[pc >> 3] + MID_MIRROR_ENCODING[pc][s]) & MASK64
+    return enc
+
+
+def requires_mid_mirror(enc: list[int], c: int) -> bool:
+    e, o = enc[c], enc[1 - c]
+    return bool((1 << 63) & e & o) and (e < BALANCE_ENCODING
+                                       or (e == BALANCE_ENCODING and o < BALANCE_ENCODING))
+
+
+def attack_bucket(pos, c: int) -> int:
+    """Visible attacking material of side c: 2 * has rook + has knight/cannon."""
+    rook = minor = False
+    for s in range(SQUARE_NB):
+        pc = pos.board[s]
+        if pc and (pc >> 3) == c and not pos.dark[s]:
+            pt = pc & 7
+            rook |= pt == ROOK
+            minor |= pt in (KNIGHT, CANNON)
+    return 2 * int(rook) + int(minor)
+
+
+def feature_bucket(pos, perspective: int) -> tuple[int, bool]:
+    """Feature transformer bucket and mirroring (engine: make_feature_bucket)."""
+    ksq = pos.king_square(perspective)
+    oksq = pos.king_square(1 - perspective)
+    bucket, mirror = king_bucket(ksq, oksq)
+    if not MID_MIRROR:
+        return bucket, mirror
+    if (bucket & 1) and (_KB[oksq] & 1) and requires_mid_mirror(mid_encodings(pos), perspective):
+        mirror = True
+    return bucket * ATTACK_BUCKETS + attack_bucket(pos, perspective), mirror
+
+
 # IndexMap[mirror][rotate][square]
 INDEX_MAP = [[[0] * SQUARE_NB for _ in range(2)] for _ in range(2)]
 for _mi in range(2):
@@ -219,9 +312,7 @@ def parse_fen(fen: str) -> JieqiPosition:
 
 def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
     """Active feature indices for one perspective (pool features repeated)."""
-    ksq = pos.king_square(perspective)
-    oksq = pos.king_square(1 - perspective)
-    bucket, mirror = king_bucket(ksq, oksq)
+    bucket, mirror = feature_bucket(pos, perspective)
     imap = INDEX_MAP[int(mirror)][int(perspective == BLACK)]
     psi = PIECE_SQUARE_INDEX[perspective]
     dri = DARK_REST_INDEX[perspective]
@@ -267,7 +358,7 @@ def feature_material_values() -> list[float]:
     feature, used to initialize the PSQT weights: own pieces positive,
     opponent's negative, dark pieces at the average value of a hidden piece."""
     values = [0.0] * NUM_FEATURES
-    for bucket in range(NUM_KING_BUCKETS):
+    for bucket in range(NUM_KING_BUCKETS * ATTACK_BUCKETS):
         base = PS_NB * bucket
         for pt, ps_own, ps_opp in ((ROOK, PS_W_ROOK, PS_B_ROOK),
                                    (CANNON, PS_W_CANNON, PS_B_CANNON),

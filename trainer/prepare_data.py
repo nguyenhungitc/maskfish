@@ -1,9 +1,10 @@
 """Converts text training data (fen | score | result) into binary arrays that
 train.py reads directly (memory-mapped, no parsing during training).
 
-    python prepare_data.py data/gen1.txt data/gen2.txt --out data/train
+    python prepare_data.py data/gen1.txt data/gen2.txt --out data/train [--arch att]
     -> data/train.features.npy  int16 (N, 2, 64): stm / nstm feature indices
        data/train.meta.npy      (N,) records: bucket, score, result
+       data/train.arch          architecture of the features (see jieqi_features)
 
 Positions are shuffled. Lines that do not parse are skipped.
 """
@@ -18,6 +19,10 @@ import numpy as np
 import jieqi_features as F
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16)])
+
+
+def _init_worker(arch: str):
+    F.set_arch(arch)
 
 
 def parse_line(line: str):
@@ -39,14 +44,16 @@ def main():
                     help="drop positions with a larger |score| (internal units)")
     ap.add_argument("--workers", type=int, default=mp.cpu_count())
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
     args = ap.parse_args()
+    F.set_arch(args.arch)
 
     lines = []
     for path in args.inputs:
         with open(path) as f:
             lines.extend(l for l in f if l.strip())
 
-    with mp.Pool(args.workers) as pool:
+    with mp.Pool(args.workers, initializer=_init_worker, initargs=(args.arch,)) as pool:
         parsed = [p for p in pool.imap(parse_line, lines, chunksize=4096)
                   if p is not None and abs(p[3]) <= args.max_score]
 
@@ -64,6 +71,8 @@ def main():
         meta[dst] = (b, result, max(-32000, min(32000, score)))
     feats.flush()
     meta.flush()
+    with open(args.out + ".arch", "w") as f:
+        f.write(args.arch + "\n")
     print(f"{n} positions ({len(lines) - n} skipped) -> {args.out}.*.npy")
 
 
