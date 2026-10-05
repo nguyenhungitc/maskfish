@@ -138,9 +138,7 @@ void AccumulatorStack::forward_update_incremental(
     assert(begin < accumulators.size());
     assert((accumulators[begin].acc<Dimensions>()).computed[Perspective]);
 
-    const Square ksq      = pos.king_square(Perspective);
-    const Square oksq     = pos.king_square(~Perspective);
-    auto [bucket, mirror] = FeatureSet::KingBuckets[ksq][oksq];
+    auto [bucket, mirror] = FeatureSet::make_feature_bucket(pos, Perspective);
 
     for (std::size_t next = begin + 1; next < size; next++)
     {
@@ -192,9 +190,7 @@ void AccumulatorStack::backward_update_incremental(
     assert(end < size);
     assert((latest().acc<Dimensions>()).computed[Perspective]);
 
-    const Square ksq      = pos.king_square(Perspective);
-    const Square oksq     = pos.king_square(~Perspective);
-    auto [bucket, mirror] = FeatureSet::KingBuckets[ksq][oksq];
+    auto [bucket, mirror] = FeatureSet::make_feature_bucket(pos, Perspective);
 
     for (std::int64_t next = std::int64_t(size) - 2; next >= std::int64_t(end); next--)
         update_accumulator_incremental<Perspective, false>(
@@ -409,13 +405,9 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
 
     using Tiling [[maybe_unused]] = SIMDTiling<Dimensions, Dimensions, PSQTBuckets>;
 
-    const Square ksq      = pos.king_square(Perspective);
-    const Square oksq     = pos.king_square(~Perspective);
-    auto [bucket, mirror] = FeatureSet::KingBuckets[ksq][oksq];
+    auto [bucket, mirror] = FeatureSet::make_feature_bucket(pos, Perspective);
 
-    auto cache_index = AccumulatorCaches::KingCacheMaps[ksq];
-    if (cache_index < 3 && mirror)
-        cache_index += 9;
+    auto cache_index = FeatureSet::make_cache_index(pos, Perspective);
 
     auto&                 entry = cache[cache_index][Perspective];
     FeatureSet::IndexList removed, added;

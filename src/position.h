@@ -167,6 +167,9 @@ class Position {
     // Major material (rooks, cannons, knights) counting each dark piece at the
     // expected major value of a piece drawn from its owner's pool
     Value    jieqi_major_material() const;
+#ifdef JIEQI_NNUE_ATT
+    uint64_t mid_encoding(Color c) const { return midEncoding[c]; }
+#endif
 
     const int&                         rest_piece(Piece pc) const;
     // Allocation-free variant used in the search hot path (chance nodes).
@@ -210,6 +213,9 @@ class Position {
     int        gamePly;
     Color      sideToMove;
     int        restPieces[PIECE_NB];
+#ifdef JIEQI_NNUE_ATT
+    uint64_t   midEncoding[COLOR_NB];  // see HalfKAv2_hm::MidMirrorEncoding
+#endif
 
     // Bloom filter for fast repetition filtering
     BloomFilter filter;
@@ -367,6 +373,9 @@ inline void Position::put_piece(Piece pc, Square s) {
     byColorBB[color_of(pc)] |= s;
     pieceCount[pc]++;
     pieceCount[make_piece(color_of(pc), ALL_PIECES)]++;
+#ifdef JIEQI_NNUE_ATT
+    midEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][s];
+#endif
 }
 
 inline void Position::remove_piece(Square s) {
@@ -378,6 +387,9 @@ inline void Position::remove_piece(Square s) {
     board[s] = NO_PIECE;
     pieceCount[pc]--;
     pieceCount[make_piece(color_of(pc), ALL_PIECES)]--;
+#ifdef JIEQI_NNUE_ATT
+    midEncoding[color_of(pc)] -= Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][s];
+#endif
 }
 
 inline void Position::move_piece(Square from, Square to) {
@@ -391,6 +403,10 @@ inline void Position::move_piece(Square from, Square to) {
     board[to]   = pc;
     if (type_of(pc) == KING)
         kingSquare[color_of(pc)] = to;
+#ifdef JIEQI_NNUE_ATT
+    midEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][to]
+                               - Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][from];
+#endif
 }
 
 inline void Position::do_move(Move m, StateInfo& newSt, const TranspositionTable* tt = nullptr) {

@@ -87,11 +87,22 @@ class HalfKAv2_hm {
     // Feature name
     static constexpr const char* Name = "HalfKAv2_hm";
 
+#ifdef JIEQI_NNUE_ATT
+    // Experimental architecture (make nnue=att): the feature transformer is
+    // also bucketed by the visible attacking material of the perspective's
+    // side (has a rook? has a knight or a cannon?), and the board is mirrored
+    // by its left/right balance when both kings are on the middle file.
+    // Both ideas come from Pikafish (xiangqi), also used by AB-JChess.
+    static constexpr std::uint32_t HashValue      = 0x7a17b104;
+    static constexpr IndexType     AttackBucketNB = 4;
+#else
     // Hash value embedded in the evaluation file
-    static constexpr std::uint32_t HashValue = 0xd17b100;
+    static constexpr std::uint32_t HashValue      = 0xd17b100;
+    static constexpr IndexType     AttackBucketNB = 1;
+#endif
 
     // Number of feature dimensions
-    static constexpr IndexType Dimensions = 6 * static_cast<IndexType>(PS_NB);
+    static constexpr IndexType Dimensions = 6 * AttackBucketNB * static_cast<IndexType>(PS_NB);
 
     // Get king_index and mirror information
     static constexpr auto KingBuckets = []() {
@@ -125,6 +136,56 @@ class HalfKAv2_hm {
             }
         return v;
     }();
+
+#ifdef JIEQI_NNUE_ATT
+    // Mirror decision when both kings are on the middle file and midMirror
+    // says the position is "right-heavy" (as in Pikafish)
+    static constexpr bool king_mirror(Square ksq, Square oksq, bool midMirror) {
+        const bool kingMid  = (KingBuckets[ksq][oksq].first & 1);
+        const bool okingMid = (KingBuckets[oksq][ksq].first & 1);
+        return KingBuckets[ksq][oksq].second || (kingMid && okingMid && midMirror);
+    }
+
+    // Left/right balance encoding of the pieces of one side (Pikafish):
+    // symmetric material adds up to BalanceEncoding, a king off the middle
+    // file sets bit 63. Dark pieces count as the kind of their square.
+    static constexpr auto MidMirrorEncoding = [] {
+        std::array<std::array<std::uint64_t, SQUARE_NB>, PIECE_NB> enc{};
+        constexpr std::uint8_t shifts[8][2]{{0, 0},   {44, 0},  {60, 36}, {47, 7},
+                                            {53, 21}, {50, 14}, {57, 29}, {0, 0}};
+        for (int c = WHITE; c <= BLACK; ++c)
+            for (int pt = ROOK; pt <= KING; ++pt)
+                for (int r = RANK_0; r < RANK_NB; ++r)
+                    for (int f = FILE_A; f < FILE_NB; ++f)
+                    {
+                        std::uint64_t e = 0;
+                        if (f != FILE_E && pt != KING)
+                        {
+                            const int r_ = c == WHITE ? r : RANK_9 - r;
+                            const int f_ = f < FILE_E ? f : FILE_I - f;
+                            e = (1ULL << shifts[pt][0])
+                              | (std::uint64_t((FILE_D - f_) * 10 + r_) << shifts[pt][1]);
+                            e = f < FILE_E ? e : std::uint64_t(-std::int64_t(e));
+                        }
+                        else if (f != FILE_E && pt == KING)
+                            e = 1ULL << 63;
+                        enc[make_piece(Color(c), PieceType(pt))][make_square(File(f), Rank(r))] = e;
+                    }
+        return enc;
+    }();
+
+    static constexpr std::uint64_t BalanceEncoding = 0xa4a92a74e989d3a7ULL;
+
+    static bool requires_mid_mirror(const Position& pos, Color c);
+    static int  make_attack_bucket(const Position& pos, Color c);
+#endif
+
+    // Feature transformer bucket and mirroring for one perspective
+    static std::pair<int, bool> make_feature_bucket(const Position& pos, Color perspective);
+
+    // Index in the accumulator refresh cache (AccumulatorCaches)
+    static int make_cache_index(const Position& pos, Color perspective);
+    static constexpr int CacheEntriesPerColor = 12 * static_cast<int>(AttackBucketNB);
 
     // Square index mapping based on condition (Mirror, Rotate)
     static constexpr auto IndexMap = []() {

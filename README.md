@@ -183,6 +183,22 @@ put a Jieqi network at `src/pikafish.nnue` before building, or point the
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network.
 
+### Experimental network architecture
+
+`make -j build nnue=att` builds the engine for a different network (not
+compatible with the default one, and rejected by a default build):
+
+* **attack buckets**: the feature transformer has 4 sets of weights per king
+  bucket, selected by the visible attacking material of each side (has a
+  revealed rook? a revealed knight or cannon?), 30240 inputs instead of 7560;
+* **mid mirror**: when both kings are on the middle file, the board is
+  mirrored according to its left/right balance, so that the network sees a
+  canonical orientation (dark pieces count as the kind of their square).
+
+Both ideas come from Pikafish (xiangqi) and are also used by AB-JChess. Train
+such a network with `--arch att` in `trainer/`, and compare it with a default
+network trained on the same data before adopting it.
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

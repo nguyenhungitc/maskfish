@@ -46,6 +46,54 @@ inline IndexType HalfKAv2_hm::make_dark_rest_index(Piece pc, int bucket) {
 template IndexType HalfKAv2_hm::make_dark_rest_index<WHITE>(Piece pc, int bucket);
 template IndexType HalfKAv2_hm::make_dark_rest_index<BLACK>(Piece pc, int bucket);
 
+#ifdef JIEQI_NNUE_ATT
+bool HalfKAv2_hm::requires_mid_mirror(const Position& pos, Color c) {
+    return ((1ULL << 63) & pos.mid_encoding(c) & pos.mid_encoding(~c))
+        && (pos.mid_encoding(c) < BalanceEncoding
+            || (pos.mid_encoding(c) == BalanceEncoding && pos.mid_encoding(~c) < BalanceEncoding));
+}
+
+// Visible (revealed) attacking material of one side
+int HalfKAv2_hm::make_attack_bucket(const Position& pos, Color c) {
+    const Bitboard visible = pos.pieces(c) & ~pos.pieces(DARK);
+    return 2 * bool(visible & pos.pieces(ROOK)) + bool(visible & pos.pieces(KNIGHT, CANNON));
+}
+#endif
+
+std::pair<int, bool> HalfKAv2_hm::make_feature_bucket(const Position& pos, Color perspective) {
+    const Square ksq  = pos.king_square(perspective);
+    const Square oksq = pos.king_square(~perspective);
+#ifdef JIEQI_NNUE_ATT
+    const bool mirror = king_mirror(ksq, oksq, requires_mid_mirror(pos, perspective));
+    return {KingBuckets[ksq][oksq].first * int(AttackBucketNB) + make_attack_bucket(pos, perspective),
+            mirror};
+#else
+    return KingBuckets[ksq][oksq];
+#endif
+}
+
+int HalfKAv2_hm::make_cache_index(const Position& pos, Color perspective) {
+    // clang-format off
+    static constexpr uint8_t KingCacheMaps[SQUARE_NB] = {
+      0,  0,  0,  6,  0,  3,  0,  0,  0,
+      0,  0,  0,  7,  1,  4,  0,  0,  0,
+      0,  0,  0,  8,  2,  5,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  8,  2,  5,  0,  0,  0,
+      0,  0,  0,  7,  1,  4,  0,  0,  0,
+      0,  0,  0,  6,  0,  3,  0,  0,  0,
+    };
+    // clang-format on
+    const auto [bucket, mirror] = make_feature_bucket(pos, perspective);
+    int index = KingCacheMaps[pos.king_square(perspective)];
+    if (index < 3 && mirror)
+        index += 9;  // king on the middle file, mirrored
+    return index * int(AttackBucketNB) + bucket % int(AttackBucketNB);
+}
+
 // Get layer stack bucket
 IndexType HalfKAv2_hm::make_layer_stack_bucket(const Position& pos) {
     return LayerStackBuckets[pos.count<ALL_PIECES>()];

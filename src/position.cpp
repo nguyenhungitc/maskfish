@@ -152,6 +152,9 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
     std::istringstream ss(fenStr);
 
     std::memset(this, 0, sizeof(Position));
+#ifdef JIEQI_NNUE_ATT
+    midEncoding[WHITE] = midEncoding[BLACK] = Eval::NNUE::FeatureSet::BalanceEncoding;
+#endif
 
     std::memset(si, 0, sizeof(StateInfo));
     st = si;
@@ -528,6 +531,13 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionT
         dp->add_sq = s;
     }
 
+#ifdef JIEQI_NNUE_ATT
+    // Revealing a piece can change the attack bucket and the mid mirror
+    const std::pair<int, bool> bucketBefore[COLOR_NB] = {
+      Eval::NNUE::FeatureSet::make_feature_bucket(*this, WHITE),
+      Eval::NNUE::FeatureSet::make_feature_bucket(*this, BLACK)};
+#endif
+
     assert(color_of(pc) == us);
 
     // Flip the piece
@@ -560,6 +570,13 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionT
 
     // Update king attacks used for fast check detection
     set_check_info();
+
+#ifdef JIEQI_NNUE_ATT
+    if (dp)
+        for (Color c : {WHITE, BLACK})
+            dp->requires_refresh[c] |=
+              Eval::NNUE::FeatureSet::make_feature_bucket(*this, c) != bucketBefore[c];
+#endif
 
     assert(pos_is_ok());
 
@@ -678,6 +695,14 @@ DirtyPiece Position::do_move(Move                      m,
     assert(captured == NO_PIECE || color_of(captured) == them);
     assert(type_of(captured) != KING);
 
+#ifdef JIEQI_NNUE_ATT
+    // A move can change the feature bucket (attack bucket, mid mirror) of
+    // either side: compare before and after (see the end of this function)
+    const std::pair<int, bool> bucketBefore[COLOR_NB] = {
+      Eval::NNUE::FeatureSet::make_feature_bucket(*this, WHITE),
+      Eval::NNUE::FeatureSet::make_feature_bucket(*this, BLACK)};
+#endif
+
     // Increment ply counters.
     // In particular, rule40 will be reset to zero later on in case of a capture.
     ++gamePly;
@@ -776,6 +801,12 @@ DirtyPiece Position::do_move(Move                      m,
         set_check_info();
     else
         byTypeBB[DARK] ^= from | to;
+
+#ifdef JIEQI_NNUE_ATT
+    for (Color c : {WHITE, BLACK})
+        dp.requires_refresh[c] |=
+          Eval::NNUE::FeatureSet::make_feature_bucket(*this, c) != bucketBefore[c];
+#endif
 
     assert(pos_is_ok());
 

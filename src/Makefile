@@ -74,6 +74,8 @@ VPATH = $(shell find . -type d | tr '\n' ':')
 #                     --- ( address   )      --- enable memory access checks
 #                     --- ...etc...          --- see compiler documentation for supported sanitizers
 # optimize = yes/no   --- (-O3/-fast etc.)   --- Enable/Disable optimizations
+# nnue = default/att  --- -DJIEQI_NNUE_ATT   --- Experimental network with attack buckets
+#                                                and mid mirror (needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -131,6 +133,7 @@ endif
 optimize = yes
 debug = no
 sanitize = none
+nnue = default
 bits = 64
 prefetch = no
 popcnt = no
@@ -623,6 +626,11 @@ ifneq ($(comp),mingw)
 			endif
 		endif
 	endif
+endif
+
+### 3.2.0 Network architecture
+ifeq ($(nnue),att)
+	CXXFLAGS += -DJIEQI_NNUE_ATT
 endif
 
 ### 3.2.1 Debugging
