@@ -20,11 +20,12 @@ viết riêng cho bộ đặc trưng và định dạng file của engine này.
 3. [Cài đặt](#3-cài-đặt)
 4. [Quy trình train chi tiết](#4-quy-trình-train-chi-tiết)
 5. [Lịch trình gợi ý cho các thế hệ](#5-lịch-trình-gợi-ý-cho-các-thế-hệ)
-6. [Thử nghiệm sau khi có mạng nền](#6-thử-nghiệm-sau-khi-có-mạng-nền)
-7. [Định dạng dữ liệu](#7-định-dạng-dữ-liệu)
-8. [Dung lượng và thời gian](#8-dung-lượng-và-thời-gian)
-9. [Xử lý sự cố](#9-xử-lý-sự-cố)
-10. [Khi kiến trúc mạng của engine thay đổi](#10-khi-kiến-trúc-mạng-của-engine-thay-đổi)
+6. [Dùng engine khác: AB-JChess và nhánh old](#6-dùng-engine-khác-ab-jchess-và-nhánh-old)
+7. [Thử nghiệm sau khi có mạng nền](#7-thử-nghiệm-sau-khi-có-mạng-nền)
+8. [Định dạng dữ liệu](#8-định-dạng-dữ-liệu)
+9. [Dung lượng và thời gian](#9-dung-lượng-và-thời-gian)
+10. [Xử lý sự cố](#10-xử-lý-sự-cố)
+11. [Khi kiến trúc mạng của engine thay đổi](#11-khi-kiến-trúc-mạng-của-engine-thay-đổi)
 
 ## 1. Các thành phần
 
@@ -37,6 +38,7 @@ viết riêng cho bộ đặc trưng và định dạng file của engine này.
 | `verify.py` | So đánh giá của engine với trainer, phải khớp từng bit |
 | `match.py` | Đấu giữa hai mạng / hai bộ tùy chọn / hai bản build, có SPRT |
 | `fit_scaling.py` | Fit hằng số điểm → xác suất thắng từ dữ liệu self-play |
+| `rescore.py` | Cho một engine khác (ví dụ AB-JChess) chấm điểm lại các thế cờ |
 | `serialize.py` | Xuất / đọc file `.nnue`, chuyển `.nnue` thành checkpoint |
 | `jieqi_features.py` | Đặc trưng đầu vào, bản sao của `src/nnue/features/half_ka_v2_hm` |
 | `model.py` | Mô hình PyTorch và giới hạn trọng số |
@@ -57,7 +59,7 @@ theo đơn vị nội bộ) và lệnh `evalraw` (in đầu ra thô của mạng
 - **RAM:** khoảng 2 GB cho `prepare_data.py` với shard mặc định; `train.py`
   đọc dữ liệu kiểu memory-map nên không cần nạp hết vào RAM.
 - **Ổ đĩa:** nên dùng SSD cho dữ liệu đã chuẩn bị. Xem
-  [mục 8](#8-dung-lượng-và-thời-gian) để ước tính dung lượng.
+  [mục 9](#9-dung-lượng-và-thời-gian) để ước tính dung lượng.
 
 **Phần mềm**
 
@@ -112,7 +114,7 @@ python verify.py --engine ../src/pikafish
 
 Kết quả phải là `N/N positions bit-exact with the engine`. **Nếu không khớp
 thì đừng train**: engine và trainer đang hiểu mạng khác nhau (thường do
-engine đã đổi kiến trúc, xem [mục 10](#10-khi-kiến-trúc-mạng-của-engine-thay-đổi)).
+engine đã đổi kiến trúc, xem [mục 11](#11-khi-kiến-trúc-mạng-của-engine-thay-đổi)).
 
 ### 3.4. Tổ chức thư mục (gợi ý)
 
@@ -135,7 +137,8 @@ mạng hiện tại ──► sinh dữ liệu ──► chuẩn bị ──► 
      └────────────── mạng mới thắng thì trở thành mạng hiện tại ◄────────┘
 ```
 
-Thế hệ 0 bắt đầu từ mạng chỉ tính vật chất. Các bước dưới đây mô tả một thế
+Thế hệ 0 bắt đầu từ mạng chỉ tính vật chất. Nếu có AB-JChess, có thể thay thế hệ 0 bằng dữ liệu
+do AB sinh ra để mạng đầu tiên mạnh hơn nhiều ([mục 6](#6-dùng-engine-khác-ab-jchess-và-nhánh-old)). Các bước dưới đây mô tả một thế
 hệ; lặp lại với số thế hệ tăng dần.
 
 ### Bước 1. Mạng khởi đầu (chỉ làm một lần)
@@ -211,9 +214,10 @@ file `data/train0.arch` ghi kiến trúc.
 | Tham số | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `--shard-size` | 2 000 000 | Số thế cờ mỗi shard. RAM cần khoảng 2 × 260 byte × giá trị này; giảm nếu thiếu RAM |
-| `--max-score` | 10000 | Bỏ thế cờ có \|điểm\| lớn hơn (đơn vị nội bộ) |
+| `--max-score` | 10000 | Bỏ thế cờ có \|điểm\| lớn hơn (đơn vị nội bộ, sau khi nhân `--score-scale`) |
+| `--score-scale` | 1.0 | Nhân điểm với hệ số này, để đổi điểm của engine khác sang đơn vị nội bộ ([mục 6](#6-dùng-engine-khác-ab-jchess-và-nhánh-old)) |
 | `--workers` | số nhân | Số tiến trình phân tích FEN |
-| `--arch` | `default` | `att` cho kiến trúc thử nghiệm ([mục 6.2](#62-kiến-trúc-att)) |
+| `--arch` | `default` | `att` cho kiến trúc thử nghiệm ([mục 7.2](#72-kiến-trúc-att)) |
 
 Mỗi shard được xáo trộn trước khi ghi; khi train, mỗi batch lấy từ một shard
 ngẫu nhiên, nên dữ liệu được trộn đều giữa các shard.
@@ -361,9 +365,121 @@ Nguyên tắc chung:
 - Sau vài thế hệ, thử train lại từ đầu (không `--init-net`) trên toàn bộ dữ
   liệu tốt và so với mạng train tiếp; cách nào thắng thì giữ.
 
-## 6. Thử nghiệm sau khi có mạng nền
+## 6. Dùng engine khác: AB-JChess và nhánh old
 
-### 6.1. Các tùy chọn search
+Hai engine cờ úp hoàn chỉnh khác dùng được với các công cụ ở đây (đã kiểm
+tra: lệnh `d`, `go perft`, cách viết nước đi có danh tính lật, nước ăn quân
+úp không kèm danh tính đều tương thích):
+
+- **AB-JChess** (https://github.com/lxsgx23/AB-JChess): có mạng NNUE đã train,
+  phát hành trong `Releases` (file `0.2b_bmi2.zip` gồm `AB-JChess.exe` cho
+  Windows và mạng `abjchess-20260911.nnue`). Mạnh hơn nhiều so với mạng chỉ
+  tính vật chất, nên dùng làm **"thầy"** để sinh dữ liệu (chưng cất) và làm
+  **thước đo**.
+- **Nhánh `old`** của repo này: đánh giá thủ công, chưa đo sức mạnh, và đánh
+  giá **lệch màu** (khoảng +375 cp cho Đỏ ở thế khai cuộc với 5000 node). Không
+  nên dùng làm thầy (mạng sẽ học cả độ lệch); dùng làm **đối thủ tham chiếu**.
+
+Hai engine này không có tùy chọn `RawScore`: điểm in ra là cp đã chuẩn hóa
+theo thang riêng của từng engine. Vì vậy dữ liệu do chúng chấm điểm phải
+được **đổi thang** trước khi train (bước 6.3).
+
+### 6.1. Build AB-JChess
+
+```
+git clone https://github.com/lxsgx23/AB-JChess
+# tải 0.2b_bmi2.zip từ trang Releases, chép abjchess-20260911.nnue vào AB-JChess/src
+make -C AB-JChess/src -j build ARCH=x86-64-avx2
+```
+
+Trên Windows có thể dùng thẳng `AB-JChess.exe` trong file zip. Khi gọi AB, nên
+thêm `ChasingRule=github` để AB dùng luật bắt dai gần với engine này (mặc định
+của AB là SkyRule).
+
+### 6.2. Cách A: AB tự chơi để sinh dữ liệu
+
+Thay cho bước 1–2 của thế hệ đầu (mạng vật chất):
+
+```
+python gen_data.py --engine AB-JChess/src/AB-JChess \
+    --net AB-JChess/src/abjchess-20260911.nnue --opt ChasingRule=github \
+    --games 50000 --nodes 5000 --adjudicate 1000 --workers 15 \
+    --seed 100 --out data/ab0.txt
+```
+
+- `--adjudicate` tính theo thang cp của AB. 1000 chỉ là giá trị ban đầu: sau
+  khi có dữ liệu, xem bảng của `fit_scaling.py` (bước 6.3) và chọn mức điểm mà
+  tỉ lệ thắng quan sát được gần 100%.
+- AB chậm hơn engine này (mạng lớn hơn nhiều): đo sơ bộ khoảng 7 thế cờ/giây
+  mỗi worker trong một lần chạy ngắn (gồm cả thời gian nạp mạng).
+
+### 6.3. Đổi thang điểm và train
+
+```
+python fit_scaling.py data/ab0.txt
+# giả sử in ra "fitted scale: 250.0" -> hệ số = 361 / 250 = 1.444
+python prepare_data.py data/ab0.txt --out data/train_ab0 --score-scale 1.444
+python prepare_data.py data/ab_val.txt --out data/val_ab --score-scale 1.444
+python train.py data/train_ab0 --val data/val_ab --out runs/ab1 \
+    --epochs 40 --epoch-size 10000000
+```
+
+`361` là hằng số mặc định của trainer (`--scaling`) và gần bằng hằng số engine
+này dùng; nếu đã fit được hằng số riêng cho engine này thì dùng nó thay cho
+361. Hệ số đổi thang cần fit lại cho mỗi thiết lập của AB (mạng, số node).
+
+Dữ liệu đã đổi thang dùng chung được với dữ liệu tự chơi của engine này:
+chuẩn bị riêng từng phần (mỗi phần với `--score-scale` của nó) rồi đưa nhiều
+prefix vào `train.py`.
+
+### 6.4. Cách B: chấm điểm lại dữ liệu tự chơi bằng AB
+
+Khi engine này đã có mạng, dữ liệu tự chơi của nó đa dạng và rẻ để sinh, còn
+AB chấm điểm chính xác hơn. Kết hợp hai thứ bằng `rescore.py`:
+
+```
+python rescore.py data/gen3.txt --out data/gen3_ab.txt \
+    --engine AB-JChess/src/AB-JChess --net AB-JChess/src/abjchess-20260911.nnue \
+    --opt ChasingRule=github --nodes 20000 --workers 15
+python fit_scaling.py data/gen3_ab.txt
+python prepare_data.py data/gen3_ab.txt --out data/train3_ab --score-scale <361/s>
+```
+
+- Mỗi thế cờ giữ kết quả ván gốc và nhận điểm search của AB cho bên đi.
+- Thế cờ AB báo chiếu bí, hoặc có nước tốt nhất là ăn quân, bị bỏ.
+- Bị ngắt thì chạy lại đúng lệnh, thêm `--resume`.
+
+### 6.5. Đo sức mạnh với AB và nhánh old
+
+```
+# so với AB (dùng --movetime: số node của hai engine không so sánh được)
+python match.py --engine-a ../src/pikafish --net-a nets/genN.nnue \
+    --engine-b AB-JChess/src/AB-JChess --net-b AB-JChess/src/abjchess-20260911.nnue \
+    --opt-b ChasingRule=github --movetime 1000 --workers 15
+
+# so với nhánh old (không cần --net-b)
+python match.py --engine-a ../src/pikafish --net-a nets/genN.nnue \
+    --engine-b ../../jieqi-old/src/PikaJieQi --movetime 1000 --workers 15
+```
+
+Không cần `--sprt` khi chỉ muốn ước lượng Elo: bỏ đi và đặt `--pairs`. Vì thang
+điểm của hai bên khác nhau, ngưỡng xử thắng của `match.py` hầu như không kích
+hoạt; ván kết thúc bằng chiếu bí, 120 nửa nước không ăn quân hoặc
+`--max-plies` (chậm hơn nhưng vẫn đúng).
+
+Lộ trình gợi ý: train vài thế hệ đầu bằng dữ liệu của AB (cách A), sau đó tự
+chơi bằng engine này và chấm điểm lại bằng AB (cách B), và chuyển hẳn sang tự
+chơi khi mạng của engine này tiến gần AB trong các trận đo.
+
+### 6.6. Về quyền sử dụng
+
+Mã nguồn của AB-JChess theo GPL-3; bản phát hành ghi miễn phí và cấm bán lại.
+Một mạng train từ điểm đánh giá của AB có thể coi là sản phẩm phái sinh: hãy
+ghi công AB-JChess khi phát hành mạng và cân nhắc hỏi ý các tác giả.
+
+## 7. Thử nghiệm sau khi có mạng nền
+
+### 7.1. Các tùy chọn search
 
 Engine có các tùy chọn thử nghiệm (xem README chính), kiểm tra từng cái một
 bằng `match.py`, cùng một mạng:
@@ -380,7 +496,7 @@ Các tùy chọn đáng thử: `ProbCutDarkCapture`, `TTPenalize`,
 lại hai tính năng đang bật mặc định). Tùy chọn nào thắng SPRT thì có thể đặt
 làm mặc định trong `src/engine.cpp`.
 
-### 6.2. Kiến trúc `att`
+### 7.2. Kiến trúc `att`
 
 Kiến trúc thử nghiệm có bucket tấn công và mid mirror (xem README chính).
 Mạng `att` không tương thích với bản build thường.
@@ -423,7 +539,7 @@ python match.py --engine-a ../src/pikafish-att --net-a runs/att1/epoch_40.nnue \
 Mạng `att` có thể chậm hơn (accumulator phải tính lại nhiều hơn), nên so
 bằng `--movetime` sẽ công bằng hơn `--nodes`.
 
-## 7. Định dạng dữ liệu
+## 8. Định dạng dữ liệu
 
 **Văn bản** (`gen_data.py` ghi ra, `prepare_data.py` và `fit_scaling.py` đọc):
 
@@ -442,7 +558,7 @@ và điểm theo đơn vị nội bộ (`RawScore`).
 - `PREFIX-NNNNN.meta.npy`: bản ghi `bucket` (layer stack), `result`, `score`;
 - `PREFIX.arch`: tên kiến trúc.
 
-## 8. Dung lượng và thời gian
+## 9. Dung lượng và thời gian
 
 Các con số đo trên máy thử, chỉ để ước lượng; hãy đo lại trên máy của bạn.
 
@@ -459,7 +575,7 @@ Các con số đo trên máy thử, chỉ để ước lượng; hãy đo lại 
 Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epoch-size
 1000000`) để đo trước khi đặt lịch.
 
-## 9. Xử lý sự cố
+## 10. Xử lý sự cố
 
 | Hiện tượng | Nguyên nhân / cách xử lý |
 | --- | --- |
@@ -471,10 +587,11 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 | Loss thành `nan` hoặc tăng vọt | Giảm `--lr` (ví dụ 5e-4), kiểm tra dữ liệu có điểm bất thường (giảm `--max-score`) |
 | Train chậm, GPU không bận | Dữ liệu nằm trên ổ chậm: chuyển sang SSD; tăng `--batch-size` |
 | `gen_data.py` bị ngắt | Dùng các file `.partN` còn lại như dữ liệu bình thường |
+| AB-JChess / nhánh old in `No such option: RawScore` | Bình thường: các engine này không có tùy chọn đó; điểm của chúng phải đổi thang bằng `--score-scale` ([mục 6.3](#63-đổi-thang-điểm-và-train)) |
 | Hai lần sinh dữ liệu trùng nhau | Quên đặt `--seed` khác nhau |
 | SPRT mãi không kết thúc | Hai bên gần như ngang nhau; dừng tay và coi là không cải thiện, hoặc dùng khoảng hẹp hơn như `--sprt 0 3` với số cặp lớn |
 
-## 10. Khi kiến trúc mạng của engine thay đổi
+## 11. Khi kiến trúc mạng của engine thay đổi
 
 `jieqi_features.py` (các bộ đặc trưng, `ARCHS`), `model.py` và các hằng số
 đầu file `serialize.py` (hash, kích thước, hệ số lượng tử) mô tả engine. Sau

@@ -12,6 +12,10 @@ shuffled before it is written, so the memory needed is about
 2 x 260 bytes x shard size whatever the amount of data. train.py draws its
 batches from random shards, which mixes the data across shards.
 Lines that do not parse are skipped.
+
+Data scored by another engine (AB-JChess, see rescore.py) uses that engine's
+score scale: convert it with --score-scale 361/s, where s is the scale that
+fit_scaling.py finds on that data.
 """
 
 from __future__ import annotations
@@ -29,10 +33,11 @@ META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.in
 CHUNK_LINES = 16384
 
 
-def _init_worker(arch: str, max_score: int):
-    global _MAX_SCORE
+def _init_worker(arch: str, max_score: int, score_scale: float):
+    global _MAX_SCORE, _SCORE_SCALE
     F.set_arch(arch)
     _MAX_SCORE = max_score
+    _SCORE_SCALE = score_scale
 
 
 def parse_chunk(lines: list[str]):
@@ -43,7 +48,7 @@ def parse_chunk(lines: list[str]):
     for line in lines:
         try:
             fen, score, result = (x.strip() for x in line.split("|"))
-            score, result = int(float(score)), int(float(result))
+            score, result = int(round(float(score) * _SCORE_SCALE)), int(float(result))
             if abs(score) > _MAX_SCORE or result not in (-1, 0, 1):
                 continue
             s, o, b, _ = F.fen_to_features(fen)
@@ -82,7 +87,10 @@ def main():
     ap.add_argument("inputs", nargs="+")
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-score", type=int, default=10000,
-                    help="drop positions with a larger |score| (internal units)")
+                    help="drop positions with a larger |score| (internal units, after --score-scale)")
+    ap.add_argument("--score-scale", type=float, default=1.0,
+                    help="multiply the scores by this factor, to convert the scores of another "
+                         "engine to this engine's internal units (361 / scale fitted on that data)")
     ap.add_argument("--shard-size", type=int, default=2_000_000, help="positions per shard")
     ap.add_argument("--workers", type=int, default=mp.cpu_count())
     ap.add_argument("--seed", type=int, default=1)
@@ -95,7 +103,7 @@ def main():
     shard, buf_f, buf_m, buffered = 0, [], [], 0
     total_in = total_out = 0
     with mp.Pool(args.workers, initializer=_init_worker,
-                 initargs=(args.arch, args.max_score)) as pool:
+                 initargs=(args.arch, args.max_score, args.score_scale)) as pool:
         for feats, meta, n_in in pool.imap(parse_chunk, read_chunks(args.inputs)):
             total_in += n_in
             buf_f.append(feats)
