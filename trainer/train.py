@@ -1,7 +1,11 @@
 """Trains the Jieqi NNUE.
 
-    python train.py data/train --val data/val --epochs 400 --epoch-size 50000000 \
-        --batch-size 16384 --out runs/exp1 [--resume runs/exp1/last.pt | --init-net old.nnue]
+    python train.py data/train0 data/train1 --val data/val --epochs 400 \
+        --epoch-size 50000000 --batch-size 16384 --out runs/exp1 \
+        [--resume runs/exp1/last.pt | --init-net old.nnue]
+
+Each data argument is a prefix written by prepare_data.py (all its shards are
+used); several prefixes can be given, e.g. the data of several generations.
 
 After every epoch: runs/exp1/epoch_N.pt, runs/exp1/last.pt and
 runs/exp1/epoch_N.nnue (ready for the engine's EvalFile option).
@@ -16,6 +20,7 @@ target mixes the search score and the game result with --lambda:
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import os
 import time
@@ -36,23 +41,62 @@ def data_arch(prefix: str) -> str:
         return "default"
 
 
+def shard_prefixes(prefix: str) -> list[str]:
+    """Shards of a prefix: prefix-NNNNN.*, or prefix.* (older single-file format)."""
+    if os.path.exists(prefix + ".features.npy"):
+        return [prefix]
+    shards = sorted(p[:-len(".features.npy")] for p in glob.glob(glob.escape(prefix) + "-*.features.npy"))
+    if not shards:
+        raise SystemExit(f"no data found for prefix {prefix!r}")
+    return shards
+
+
 class Data:
-    def __init__(self, prefix: str):
-        self.arch = data_arch(prefix)
-        self.features = np.load(prefix + ".features.npy", mmap_mode="r")
-        self.meta = np.load(prefix + ".meta.npy", mmap_mode="r")
-        self.n = len(self.meta)
+    """All the shards of one or more prefixes, memory-mapped."""
+
+    def __init__(self, prefixes: list[str]):
+        archs = {data_arch(p) for p in prefixes}
+        if len(archs) != 1:
+            raise SystemExit(f"data prefixes have different architectures: {sorted(archs)}")
+        self.arch = archs.pop()
+        self.shards = []
+        for prefix in prefixes:
+            for sp in shard_prefixes(prefix):
+                f = np.load(sp + ".features.npy", mmap_mode="r")
+                m = np.load(sp + ".meta.npy", mmap_mode="r")
+                if len(m):
+                    self.shards.append((f, m))
+        self.sizes = np.array([len(m) for _, m in self.shards], dtype=np.int64)
+        self.n = int(self.sizes.sum())
+        if self.n == 0:
+            raise SystemExit("empty data set")
 
     def batches(self, batch_size: int, count: int, rng: np.random.Generator, device):
-        """'count' batches; contiguous chunks from random offsets (the data
-        is already shuffled), which keeps memory-mapped reads fast."""
+        """'count' batches. Each one is a contiguous chunk at a random offset of
+        a random shard (chosen in proportion to its size); shards are already
+        shuffled, and contiguous reads keep memory-mapped access fast."""
+        probs = self.sizes / self.n
         for _ in range(count):
-            start = int(rng.integers(0, max(1, self.n - batch_size + 1)))
-            yield self.get(start, min(self.n, start + batch_size), device)
+            k = int(rng.choice(len(self.shards), p=probs))
+            size = int(self.sizes[k])
+            start = int(rng.integers(0, max(1, size - batch_size + 1)))
+            yield self._get(k, start, min(size, start + batch_size), device)
 
-    def get(self, a: int, b: int, device):
-        f = torch.from_numpy(np.ascontiguousarray(self.features[a:b]).astype(np.int64))
-        m = self.meta[a:b]
+    def sequential(self, batch_size: int, limit: int, device):
+        """Batches over the beginning of the data (for validation)."""
+        done = 0
+        for k, size in enumerate(self.sizes.tolist()):
+            for a in range(0, size, batch_size):
+                if done >= limit:
+                    return
+                b = min(size, a + batch_size, a + limit - done)
+                done += b - a
+                yield b - a, self._get(k, a, b, device)
+
+    def _get(self, k: int, a: int, b: int, device):
+        feats, meta = self.shards[k]
+        f = torch.from_numpy(np.ascontiguousarray(feats[a:b]).astype(np.int64))
+        m = meta[a:b]
         return (f[:, 0].to(device, non_blocking=True), f[:, 1].to(device, non_blocking=True),
                 torch.from_numpy(m["bucket"].astype(np.int64)).to(device),
                 torch.from_numpy(m["score"].astype(np.float32)).to(device),
@@ -70,8 +114,8 @@ def loss_fn(model, batch, scaling: float, lam: float):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("train", help="prefix written by prepare_data.py")
-    ap.add_argument("--val", help="validation prefix")
+    ap.add_argument("train", nargs="+", help="prefix(es) written by prepare_data.py")
+    ap.add_argument("--val", nargs="+", help="validation prefix(es)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--epoch-size", type=int, default=20_000_000, help="positions per epoch")
@@ -141,10 +185,9 @@ def main():
             model.eval()
             vl, vn = 0.0, 0
             with torch.no_grad():
-                for a in range(0, min(val.n, 1_000_000), args.batch_size):
-                    b = min(val.n, a + args.batch_size)
-                    vl += loss_fn(model, val.get(a, b, device), args.scaling, args.lam).item() * (b - a)
-                    vn += b - a
+                for n, batch in val.sequential(args.batch_size, 1_000_000, device):
+                    vl += loss_fn(model, batch, args.scaling, args.lam).item() * n
+                    vn += n
             msg += f", val loss {vl / max(1, vn):.6f}"
         msg += f", lr {sched.get_last_lr()[0]:.2e}, {time.time() - t0:.0f}s"
         print(msg, flush=True)
