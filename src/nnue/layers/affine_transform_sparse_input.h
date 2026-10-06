@@ -184,9 +184,11 @@ class AffineTransformSparseInput {
         constexpr IndexType NumChunks = ceil_to_multiple<IndexType>(InputDimensions, 8) / ChunkSize;
         constexpr IndexType NumAccums = OutputDimensions / OutputSimdWidth;
         // If we're using high-latency dot product instructions, split the accumulators
-        // to create 3 separate dependency chains and merge at the end
+        // into separate dependency chains and merge at the end
         constexpr IndexType NumRegs =
-    #if defined(USE_VNNI) || defined(USE_NEON_DOTPROD)
+    #if defined(USE_AVXVNNI)
+          2 * NumAccums;
+    #elif defined(USE_VNNI) || defined(USE_NEON_DOTPROD)
           3 * NumAccums;
     #else
           NumAccums;
@@ -207,7 +209,31 @@ class AffineTransformSparseInput {
 
         // convince GCC to not do weird pointer arithmetic in the following loop
         const std::int8_t* weights_cp = weights;
-    #if defined(USE_VNNI) || defined(USE_NEON_DOTPROD)
+    #if defined(USE_AVXVNNI)
+        for (IndexType k = NumAccums; k < NumRegs; ++k)
+            acc[k] = vec_zero();
+
+        while (end - start >= 2)
+        {
+            const std::ptrdiff_t i0 = *start++;
+            const std::ptrdiff_t i1 = *start++;
+            const invec_t        in0 =
+              vec_set_32(load_as<std::int32_t>(input + i0 * sizeof(std::int32_t)));
+            const invec_t in1 =
+              vec_set_32(load_as<std::int32_t>(input + i1 * sizeof(std::int32_t)));
+            const auto col0 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+            const auto col1 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+            for (IndexType k = 0; k < NumAccums; ++k)
+            {
+                vec_add_dpbusd_32(acc[k], in0, col0[k]);
+                vec_add_dpbusd_32(acc[k + NumAccums], in1, col1[k]);
+            }
+        }
+        for (IndexType k = 0; k < NumAccums; ++k)
+            acc[k] = vec_add_32(acc[k], acc[k + NumAccums]);
+    #elif defined(USE_VNNI) || defined(USE_NEON_DOTPROD)
         #if defined(USE_VNNI)
         for (IndexType k = NumAccums; k < NumRegs; ++k)
             acc[k] = vec_zero();
