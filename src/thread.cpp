@@ -159,6 +159,9 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
         boundThreadToNumaNode.clear();
     }
 
+    sharedHistories.clear();
+    sharedHistoriesClaimed.clear();
+
     const size_t requested = sharedState.options["Threads"];
 
     if (requested > 0)  // create new thread(s)
@@ -184,6 +187,25 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
         boundThreadToNumaNode = doBindThreads
                                 ? numaConfig.distribute_threads_among_numa_nodes(requested)
                                 : std::vector<NumaIndex>{};
+
+        // Allocate the shared histories of each NUMA node used, on that node
+        if (bool(sharedState.options["SharedHistory"]))
+        {
+            std::set<NumaIndex> nodes(boundThreadToNumaNode.begin(), boundThreadToNumaNode.end());
+            if (nodes.empty())
+                nodes.insert(0);
+
+            for (NumaIndex n : nodes)
+            {
+                auto alloc = [&]() {
+                    sharedHistories[n] = make_unique_large_page<Search::HistoryTables>();
+                };
+                if (doBindThreads)
+                    numaConfig.execute_on_numa_node(n, alloc);
+                else
+                    alloc();
+            }
+        }
 
         while (threads.size() < requested)
         {
@@ -415,6 +437,18 @@ std::vector<size_t> ThreadPool::get_bound_thread_count_by_numa_node() const {
     }
 
     return counts;
+}
+
+Search::HistoryTables* ThreadPool::claim_shared_histories(NumaIndex n, bool& owner) {
+    auto it = sharedHistories.find(n);
+    if (it == sharedHistories.end())
+    {
+        owner = false;
+        return nullptr;
+    }
+    // Workers are created one after the other, so this needs no lock
+    owner = sharedHistoriesClaimed.insert(n).second;
+    return it->second.get();
 }
 
 size_t ThreadPool::numa_nodes() const {

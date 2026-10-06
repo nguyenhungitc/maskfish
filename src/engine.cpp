@@ -160,6 +160,13 @@ Engine::Engine(std::optional<std::string> path) :
     // After the root search failed high (and was re-searched at a reduced
     // depth), increase the depth back gradually in the next iterations.
     options.add("FailHighRecovery", Option(false));
+    // Share the continuation, pawn and correction histories between the
+    // threads of a NUMA node (only matters with Threads > 1). Changing it
+    // recreates the threads.
+    options.add("SharedHistory", Option(false, [this](const Option&) {
+                    resize_threads();
+                    return std::nullopt;
+                }));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

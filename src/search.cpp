@@ -163,6 +163,20 @@ Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
                        NumaReplicatedAccessToken       token) :
+    sharedHistories(sharedState.threads.claim_shared_histories(token.get_numa_index(),
+                                                               ownsSharedHistories)),
+    continuationHistory(sharedHistories ? sharedHistories->continuationHistory
+                                        : ownHistories.continuationHistory),
+    pawnHistory(sharedHistories ? sharedHistories->pawnHistory : ownHistories.pawnHistory),
+    pawnCorrectionHistory(sharedHistories ? sharedHistories->pawnCorrectionHistory
+                                          : ownHistories.pawnCorrectionHistory),
+    minorPieceCorrectionHistory(sharedHistories ? sharedHistories->minorPieceCorrectionHistory
+                                                : ownHistories.minorPieceCorrectionHistory),
+    nonPawnCorrectionHistory(sharedHistories ? sharedHistories->nonPawnCorrectionHistory
+                                             : ownHistories.nonPawnCorrectionHistory),
+    continuationCorrectionHistory(sharedHistories
+                                    ? sharedHistories->continuationCorrectionHistory
+                                    : ownHistories.continuationCorrectionHistory),
     // Unpack the SharedState struct into member variables
     threadIdx(threadId),
     numaAccessToken(token),
@@ -568,22 +582,26 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 void Search::Worker::clear() {
     mainHistory.fill(51);
     captureHistory.fill(-560);
-    pawnHistory.fill(-1083);
-    pawnCorrectionHistory.fill(6);
-    minorPieceCorrectionHistory.fill(0);
-    nonPawnCorrectionHistory.fill(0);
-
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(7);
+    // Shared histories are cleared once, by the Worker that owns them
+    if (!sharedHistories || ownsSharedHistories)
+    {
+        pawnHistory.fill(-1083);
+        pawnCorrectionHistory.fill(6);
+        minorPieceCorrectionHistory.fill(0);
+        nonPawnCorrectionHistory.fill(0);
 
-    for (bool inCheck : {false, true})
-        for (StatsType c : {NoCaptures, Captures})
-            for (auto& to : continuationHistory[inCheck][c])
-                for (auto& h : to)
-                    h.fill(-548);
+        for (auto& to : continuationCorrectionHistory)
+            for (auto& h : to)
+                h.fill(7);
+
+        for (bool inCheck : {false, true})
+            for (StatsType c : {NoCaptures, Captures})
+                for (auto& to : continuationHistory[inCheck][c])
+                    for (auto& h : to)
+                        h.fill(-548);
+    }
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2321 / (849 / 10.0) * std::log(i));

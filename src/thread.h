@@ -24,8 +24,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include "memory.h"
@@ -148,6 +150,10 @@ class ThreadPool {
     std::vector<size_t> get_bound_thread_count_by_numa_node() const;
     size_t              numa_nodes() const;
 
+    // Shared histories (UCI option SharedHistory) of a NUMA node, or nullptr if
+    // not shared. The first Worker that claims them is their owner (clears them).
+    Search::HistoryTables* claim_shared_histories(NumaIndex n, bool& owner);
+
     void ensure_network_replicated();
 
     std::atomic_bool stop, increaseDepth;
@@ -163,6 +169,9 @@ class ThreadPool {
     StateListPtr                         setupStates;
     std::vector<std::unique_ptr<Thread>> threads;
     std::vector<NumaIndex>               boundThreadToNumaNode;
+
+    std::map<NumaIndex, LargePagePtr<Search::HistoryTables>> sharedHistories;
+    std::set<NumaIndex>                                      sharedHistoriesClaimed;
 
     uint64_t accumulate(std::atomic<uint64_t> Search::Worker::* member) const {
 

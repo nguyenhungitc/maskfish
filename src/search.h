@@ -267,6 +267,18 @@ class NullSearchManager: public ISearchManager {
 // Search::Worker is the class that does the actual search.
 // It is instantiated once per thread, and it is responsible for keeping track
 // of the search history, and storing data required for the search.
+// The histories that can be shared between the threads of a NUMA node
+// (UCI option SharedHistory). Without sharing, each Worker uses its own copy.
+struct HistoryTables {
+    ContinuationHistory continuationHistory[2][2];
+    PawnHistory         pawnHistory;
+
+    CorrectionHistory<Pawn>         pawnCorrectionHistory;
+    CorrectionHistory<Minor>        minorPieceCorrectionHistory;
+    CorrectionHistory<NonPawn>      nonPawnCorrectionHistory;
+    CorrectionHistory<Continuation> continuationCorrectionHistory;
+};
+
 class Worker {
    public:
     Worker(SharedState&, std::unique_ptr<ISearchManager>, size_t, NumaReplicatedAccessToken);
@@ -288,13 +300,21 @@ class Worker {
     LowPlyHistory    lowPlyHistory;
 
     CapturePieceToHistory captureHistory;
-    ContinuationHistory   continuationHistory[2][2];
-    PawnHistory           pawnHistory;
 
-    CorrectionHistory<Pawn>         pawnCorrectionHistory;
-    CorrectionHistory<Minor>        minorPieceCorrectionHistory;
-    CorrectionHistory<NonPawn>      nonPawnCorrectionHistory;
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
+    // Shared tables of this thread's NUMA node (nullptr when not shared), and
+    // whether this Worker is the one that clears them.
+    bool           ownsSharedHistories = false;  // declared first: set by the claim below
+    HistoryTables* sharedHistories     = nullptr;
+    HistoryTables  ownHistories;
+
+    // The tables actually used: references into sharedHistories or ownHistories
+    ContinuationHistory (&continuationHistory)[2][2];
+    PawnHistory& pawnHistory;
+
+    CorrectionHistory<Pawn>&         pawnCorrectionHistory;
+    CorrectionHistory<Minor>&        minorPieceCorrectionHistory;
+    CorrectionHistory<NonPawn>&      nonPawnCorrectionHistory;
+    CorrectionHistory<Continuation>& continuationCorrectionHistory;
 
     TTMoveHistory ttMoveHistory;
 
