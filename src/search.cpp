@@ -279,6 +279,7 @@ void Search::Worker::iterative_deepening() {
     multiCutHistory    = bool(options["MultiCutHistory"]);
     cmhc               = bool(options["CMHC"]);
     seekMateOption     = bool(options["SeekMate"]);
+    pruningTweaks      = bool(options["PruningTweaks"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -830,7 +831,7 @@ Value Search::Worker::search(
     // Step 6. Razoring
     // If eval is really low, skip search entirely and return the qsearch value.
     // For PvNodes, we must have a guard against mates being returned.
-    if (!PvNode && eval < alpha - 1130 - 252 * depth * depth)
+    if ((pruningTweaks ? allNode : !PvNode) && eval < alpha - 1130 - 252 * depth * depth)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 7. Futility pruning: child node
@@ -854,13 +855,15 @@ Value Search::Worker::search(
 
     // Step 8. Null move search with verification search
     if (cutNode && (ss - 1)->currentMove != Move::null() && eval >= beta
-        && ss->staticEval >= beta - 9 * depth + 201 && !excludedMove && pos.major_material(us)
-        && ss->ply >= thisThread->nmpMinPly && !is_loss(beta))
+        && ss->staticEval >= beta - 9 * depth - 50 * (pruningTweaks && improving) + 201
+        && !excludedMove && pos.major_material(us) && ss->ply >= thisThread->nmpMinPly
+        && (pruningTweaks ? beta >= -2000 : !is_loss(beta)))
     {
         assert(eval - beta >= 0);
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (and on the static
+        // evaluation with PruningTweaks)
+        Depth R = 7 + depth / 3 + (pruningTweaks ? std::max((ss->staticEval - beta) / 256, 0) : 0);
 
         ss->currentMove                   = Move::null();
         ss->continuationHistory           = &thisThread->continuationHistory[0][0][NO_PIECE][0];
@@ -915,7 +918,7 @@ Value Search::Worker::search(
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &thisThread->captureHistory);
-        Depth      probCutDepth = std::max(depth - 5, 0);
+        Depth      probCutDepth = std::max(depth - 5 - (pruningTweaks && improving), 0);
 
         while ((move = mp.next_move()) != Move::none())
         {
@@ -1057,7 +1060,8 @@ moves_loop:  // When in check, search starts here
                 if (!givesCheck && lmrDepth < 18 && !ss->inCheck)
                 {
                     Value futilityValue = ss->staticEval + 307 + 365 * lmrDepth
-                                        + PieceValue[capturedPiece] + 105 * captHist / 491;
+                                        + PieceValue[capturedPiece] + 105 * captHist / 491
+                                        + 275 * (pruningTweaks && move.to_sq() == prevSq);
                     if (futilityValue <= alpha)
                         continue;
                 }

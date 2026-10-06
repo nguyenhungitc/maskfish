@@ -149,6 +149,11 @@ Engine::Engine(std::optional<std::string> path) :
     // When the root score suggests a forced mate, futility-prune only at low
     // depth and skip singular extensions, to find the mate faster.
     options.add("SeekMate", Option(false));
+    // Small pruning changes: razoring only at expected ALL nodes, more null
+    // move pruning when improving and a reduction growing with the static eval
+    // margin, deeper probcut reduction when improving, and a larger capture
+    // futility margin when recapturing the piece that just moved.
+    options.add("PruningTweaks", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
