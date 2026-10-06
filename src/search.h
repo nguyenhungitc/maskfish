@@ -300,7 +300,8 @@ class Worker {
 
     // Experimental search options ported from Pikafish (see engine.cpp), off by
     // default. Public because the free history update functions read them.
-    bool contCorr4Ply = false;
+    bool contCorr4Ply    = false;
+    bool multiCutHistory = false;
 
    private:
     void iterative_deepening();

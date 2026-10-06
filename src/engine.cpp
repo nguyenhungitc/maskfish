@@ -140,6 +140,9 @@ Engine::Engine(std::optional<std::string> path) :
     // with SPRT (trainer/match.py --opt-a Name=true).
     // Continuation correction history also from the move 4 plies back.
     options.add("ContCorr4Ply", Option(false));
+    // On a multi-cut, penalize the ttMove in ttMoveHistory and use the cut
+    // value to update the correction histories.
+    options.add("MultiCutHistory", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

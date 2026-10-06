@@ -275,6 +275,7 @@ void Search::Worker::iterative_deepening() {
     ttPenalize         = bool(options["TTPenalize"]);
     chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
     contCorr4Ply       = bool(options["ContCorr4Ply"]);
+    multiCutHistory    = bool(options["MultiCutHistory"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1138,7 +1139,24 @@ moves_loop:  // When in check, search starts here
             // singular (multiple moves fail high), and we can prune the whole
             // subtree by returning a softbound.
             else if (value >= beta && !is_decisive(value))
+            {
+                if (multiCutHistory)
+                {
+                    // The ttMove was not singular: penalize it in ttMoveHistory,
+                    // and use the multi-cut value to correct the static eval.
+                    ttMoveHistory << -396 - 104 * depth;
+
+                    if (!ss->inCheck && value > ss->staticEval)
+                    {
+                        const int bonus =
+                          std::clamp(int(value - ss->staticEval) * 660 / 1024,
+                                     -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+                        update_correction_history(pos, ss, *this, bonus);
+                    }
+                }
+
                 return value;
+            }
 
             // Negative extensions
             // If other moves failed high over (ttValue - margin) without the
