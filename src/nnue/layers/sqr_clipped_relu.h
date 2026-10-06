@@ -84,6 +84,27 @@ class SqrClippedReLU {
         }
         constexpr IndexType Start = NumChunks * 16;
 
+#elif defined(USE_NEON)
+        static_assert(WeightScaleBits == 6);
+        constexpr IndexType NumChunks = InputDimensions / 16;
+        const auto          in        = reinterpret_cast<const int32x4_t*>(input);
+        const auto          out       = reinterpret_cast<int8x16_t*>(output);
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            const int16x8_t words0 =
+              vcombine_s16(vqmovn_s32(in[i * 4 + 0]), vqmovn_s32(in[i * 4 + 1]));
+            const int16x8_t words1 =
+              vcombine_s16(vqmovn_s32(in[i * 4 + 2]), vqmovn_s32(in[i * 4 + 3]));
+
+            // vqdmulhq computes (2 * a * b) >> 16, so shift out 4 more bits to
+            // get the same total shift of 19 as the SSE2 code above
+            const int16x8_t r0 = vshrq_n_s16(vqdmulhq_s16(words0, words0), 4);
+            const int16x8_t r1 = vshrq_n_s16(vqdmulhq_s16(words1, words1), 4);
+
+            out[i] = vcombine_s8(vqmovn_s16(r0), vqmovn_s16(r1));
+        }
+        constexpr IndexType Start = NumChunks * 16;
+
 #else
         constexpr IndexType Start = 0;
 #endif
