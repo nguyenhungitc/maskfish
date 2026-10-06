@@ -878,6 +878,10 @@ void Position::do_null_move(StateInfo& newSt, const TranspositionTable& tt) {
 
     st->pliesFromNull = 0;
 
+    // A null move captures nothing
+    st->capturedPiece = NO_PIECE;
+    st->captureDark   = false;
+
     sideToMove = ~sideToMove;
 
     set_check_info();
