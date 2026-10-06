@@ -1416,6 +1416,8 @@ moves_loop:  // When in check, search starts here
 
         bonusScale = std::max(bonusScale, 0);
 
+        // scaledBonus ranges from 0 to roughly 2.1M, so the products below
+        // are close to the int range: compute the largest one in 64 bits.
         const int scaledBonus = std::min(153 * depth - 93, 2290) * bonusScale;
 
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
@@ -1426,7 +1428,7 @@ moves_loop:  // When in check, search starts here
 
         if (type_of(pos.piece_on(prevSq)) != PAWN)
             thisThread->pawnHistory[pawn_structure_index(pos)][pos.piece_on(prevSq)][prevSq]
-              << scaledBonus * 1001 / 32768;
+              << int(std::int64_t(scaledBonus) * 1001 / 32768);
     }
 
     // Bonus for prior capture countermove that caused the fail low

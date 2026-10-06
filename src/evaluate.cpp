@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -54,11 +55,12 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
 
     // Blend optimism and eval with nnue complexity
     int nnueComplexity = std::abs(psqt - positional);
-    optimism += optimism * nnueComplexity / 488;
-    nnue -= nnue * nnueComplexity / 11418;
+    optimism += optimism * std::int64_t(nnueComplexity) / 488;
+    nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
 
     int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
-    int v        = (nnue * (18560 + material) + optimism * (2727 + material)) / 33331;
+    int v        = (nnue * std::int64_t(18560 + material) + optimism * std::int64_t(2727 + material))
+          / 33331;
 
     // Damp down the evaluation linearly when shuffling
     v -= (v * pos.rule40_count()) / 217;
