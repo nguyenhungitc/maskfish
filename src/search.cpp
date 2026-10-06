@@ -133,6 +133,19 @@ void update_all_stats(const Position& pos,
                       Move            TTMove,
                       int             moveCount);
 
+// Detect shuffling moves (a piece going back and forth) in order to limit
+// search explosions. Captures are never shuffling; a reveal cannot be either,
+// since a dark piece always stands on its starting square. This code was added
+// upstream as a non-regression fix, so its parameters should not be tuned.
+bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
+    if (pos.capture(move) || pos.rule40_count() < 10)
+        return false;
+    if (pos.state()->pliesFromNull <= 6 || ss->ply < 20)
+        return false;
+    return move.from_sq() == (ss - 2)->currentMove.to_sq()
+        && (ss - 2)->currentMove.from_sq() == (ss - 4)->currentMove.to_sq();
+}
+
 }  // namespace
 
 Search::Worker::Worker(SharedState&                    sharedState,
@@ -1077,7 +1090,7 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && move == ttData.move && !excludedMove
             && depth >= 5 - (thisThread->completedDepth > 32) + ss->ttPv && is_valid(ttData.value)
             && !is_decisive(ttData.value) && (ttData.bound & BOUND_LOWER)
-            && ttData.depth >= depth - 3)
+            && ttData.depth >= depth - 3 && !is_shuffling(move, ss, pos))
         {
             Value singularBeta  = ttData.value - (48 + 72 * (ss->ttPv && !PvNode)) * depth / 59;
             Depth singularDepth = newDepth / 2;
