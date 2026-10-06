@@ -230,17 +230,19 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            // Use a local accumulator to eliminate redundant stores to m.value
+
             // histories
-            m.value = 2 * (*mainHistory)[us][m.from_to()];
-            m.value += 2 * (*pawnHistory)[pawn_structure_index(pos)][pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            int value = 2 * (*mainHistory)[us][m.from_to()];
+            value += 2 * (*pawnHistory)[pawn_structure_index(pos)][pc][to];
+            value += (*continuationHistory[0])[pc][to];
+            value += (*continuationHistory[1])[pc][to];
+            value += (*continuationHistory[2])[pc][to];
+            value += (*continuationHistory[3])[pc][to];
+            value += (*continuationHistory[5])[pc][to];
 
             // bonus for checks
-            m.value +=
+            value +=
               (bool((pt == CANNON ? pos.check_squares(pt) & ~line_bb(from, pos.king_square(~us))
                                   : pos.check_squares(pt))
                     & to)
@@ -253,11 +255,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             {
                 static constexpr int bonus[BISHOP + 1] = {0, 517, 144, 256, 0, 256, 144};
                 int v = threatByLesser[pt] & to ? -95 : 100 * bool(threatByLesser[pt] & from);
-                m.value += bonus[pt] * v;
+                value += bonus[pt] * v;
             }
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.from_to()] / (1 + ply);
+                value += 8 * (*lowPlyHistory)[ply][m.from_to()] / (1 + ply);
+
+            m.value = value;
         }
 
         else  // Type == EVASIONS
