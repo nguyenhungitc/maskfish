@@ -238,8 +238,8 @@ void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::Lim
 
     main_thread()->wait_for_search_finished();
 
-    main_manager()->stopOnPonderhit = stop = abortedSearch = false;
-    main_manager()->ponder                                 = limits.ponderMode;
+    main_manager()->stopOnPonderhit = stop = false;
+    main_manager()->ponder                 = limits.ponderMode;
 
     increaseDepth = true;
 
