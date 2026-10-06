@@ -2160,18 +2160,17 @@ void SearchManager::pv(const Search::Worker&     worker,
     const auto  nodes     = threads.nodes_searched();
     const auto& rootMoves = worker.rootMoves;
     const auto& pos       = worker.rootPos;
-    size_t      pvIdx     = worker.pvIdx;
     size_t      multiPV   = std::min(size_t(worker.options["MultiPV"]), rootMoves.size());
 
     for (size_t i = 0; i < multiPV; ++i)
     {
-        bool updated = rootMoves[i].score != -VALUE_INFINITE;
+        bool usePreviousScore = rootMoves[i].score == -VALUE_INFINITE;
 
-        if (depth == 1 && !updated && i > 0)
+        if (depth == 1 && usePreviousScore && i > 0)
             continue;
 
-        Depth d = updated ? depth : std::max(1, depth - 1);
-        Value v = updated ? rootMoves[i].uciScore : rootMoves[i].previousScore;
+        Depth d = usePreviousScore ? std::max(1, depth - 1) : depth;
+        Value v = usePreviousScore ? rootMoves[i].previousScore : rootMoves[i].uciScore;
 
         if (v == -VALUE_INFINITE)
             v = VALUE_ZERO;
@@ -2215,7 +2214,10 @@ void SearchManager::pv(const Search::Worker&     worker,
         info.score    = {v, pos};
         info.wdl      = wdl;
 
-        if (i == pvIdx && updated)  // previous-scores are exact
+        // Previous scores are exact, even though their bound flags may say otherwise.
+        // A move searched in this iteration keeps its bound flags even when it is not
+        // the current pvIdx (partially searched, or new best move of a stopped search).
+        if (!usePreviousScore)
             info.bound = bound;
 
         TimePoint time = std::max(TimePoint(1), tm.elapsed_time());
