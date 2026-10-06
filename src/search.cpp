@@ -280,6 +280,7 @@ void Search::Worker::iterative_deepening() {
     cmhc               = bool(options["CMHC"]);
     seekMateOption     = bool(options["SeekMate"]);
     pruningTweaks      = bool(options["PruningTweaks"]);
+    lmrTweaks          = bool(options["LMRTweaks"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1250,6 +1251,18 @@ moves_loop:  // When in check, search starts here
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 955 / 9646;
+
+        if (lmrTweaks)
+        {
+            // Reduce quiet moves less when the static eval is well above alpha
+            // (loose alpha window), more when it is below
+            if (!capture && !is_decisive(alpha))
+                r += 3 * std::clamp(alpha - eval, -64, 96);
+
+            // Scale up reductions for expected ALL nodes
+            if (allNode)
+                r += r / (depth + 1);
+        }
 
         // Step 16. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)

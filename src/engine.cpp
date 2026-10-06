@@ -154,6 +154,9 @@ Engine::Engine(std::optional<std::string> path) :
     // margin, deeper probcut reduction when improving, and a larger capture
     // futility margin when recapturing the piece that just moved.
     options.add("PruningTweaks", Option(false));
+    // LMR: reduce quiet moves depending on the static eval vs alpha, and scale
+    // up reductions at expected ALL nodes.
+    options.add("LMRTweaks", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
