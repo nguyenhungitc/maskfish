@@ -1193,11 +1193,11 @@ moves_loop:  // When in check, search starts here
         {
             // In general we want to cap the LMR depth search at newDepth, but when
             // reduction is negative, we allow this move a limited search extension
-            // beyond the first move depth.
-            // To prevent problems when the max value is less than the min value,
-            // std::clamp has been replaced by a more robust implementation.
-            Depth d = std::max(1, std::min(newDepth - r / 1090,
-                                           newDepth + !allNode + (PvNode && !bestMove)))
+            // beyond the first move depth. To avoid search explosion, extensions
+            // are not allowed deep, relative to rootDepth, in the search tree.
+            const int maxExtension =
+              ss->ply < 2 * thisThread->rootDepth ? !allNode + (PvNode && !bestMove) : 0;
+            Depth d = std::max(1, newDepth + std::min(-r / 1090, maxExtension))
                     + (ss - 1)->isPvNode;
 
             ss->reduction = newDepth - d;
