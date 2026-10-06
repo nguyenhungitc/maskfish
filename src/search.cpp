@@ -281,6 +281,7 @@ void Search::Worker::iterative_deepening() {
     seekMateOption     = bool(options["SeekMate"]);
     pruningTweaks      = bool(options["PruningTweaks"]);
     lmrTweaks          = bool(options["LMRTweaks"]);
+    failHighRecoveryOption = bool(options["FailHighRecovery"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -288,6 +289,7 @@ void Search::Worker::iterative_deepening() {
                           int(options["RevealQuietSafety"]), int(options["RevealQuietHighValue"]),
                           int(options["RevealQuietDiversity"])};
     int    delta, iterIdx                        = 0;
+    int    failHighRecovery                      = 0;  // UCI option FailHighRecovery
 
     // Allocate stack with extra size to allow access from (ss - 7) to (ss + 2):
     // (ss - 7) is needed for update_continuation_histories(ss - 1) which accesses (ss - 6),
@@ -366,12 +368,14 @@ void Search::Worker::iterative_deepening() {
             // high/low, re-search with a bigger window until we don't fail
             // high/low anymore.
             int failedHighCnt = 0;
+            if (!pvIdx)
+                failHighRecovery = std::max(0, failHighRecovery - 2);
             while (true)
             {
                 // Adjust the effective depth searched, but ensure at least one
                 // effective increment for every four searchAgain steps (see issue #2717).
-                Depth adjustedDepth =
-                  std::max(1, rootDepth - failedHighCnt - 3 * (searchAgainCounter + 1) / 3);
+                Depth adjustedDepth = std::max(1, rootDepth - failedHighCnt - failHighRecovery
+                                                    - 3 * (searchAgainCounter + 1) / 3);
                 rootDelta = beta - alpha;
                 bestValue = search<Root>(rootPos, ss, alpha, beta, adjustedDepth, false);
 
@@ -419,6 +423,12 @@ void Search::Worker::iterative_deepening() {
 
                 assert(alpha >= -VALUE_INFINITE && beta <= VALUE_INFINITE);
             }
+
+            // After a search that needed a reduced depth to resolve fail highs,
+            // keep the depth reduced in the next iterations and increase it back
+            // gradually (UCI option FailHighRecovery)
+            if (failHighRecoveryOption && failedHighCnt > 0 && !pvIdx)
+                failHighRecovery = (failedHighCnt + 1) / 2 + 2;
 
             // Sort the PV lines searched so far and update the GUI
             std::stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1);
