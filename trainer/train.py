@@ -15,6 +15,16 @@ score are both mapped to a win probability with sigmoid(x / scaling); the
 target mixes the search score and the game result with --lambda:
     target = lambda * sigmoid(score / scaling) + (1 - lambda) * (result + 1) / 2
     loss   = mean(|sigmoid(s / scaling) - target| ^ 2.5)
+
+Training-only techniques (ideas from nnue-pytorch / AB-JChess, none of them
+changes the exported network format):
+* virtual input features and a shared fc0 part (see model.py), on by
+  default (--no-factorize, --no-l1-fact to disable; --factorize-kb adds the
+  king bucket rows that AB-JChess also uses);
+* the output layer learns at --output-lr-scale (0.1) times the base rate;
+* --stack-balance CAP weights each sample by the inverse frequency of its
+  layer stack (capped at CAP, weights normalized to an average of 1 per
+  stack), so that rare stacks (endgames) are not drowned out. Off by default.
 """
 
 from __future__ import annotations
@@ -103,13 +113,29 @@ class Data:
                 torch.from_numpy(m["result"].astype(np.float32)).to(device))
 
 
-def loss_fn(model, batch, scaling: float, lam: float):
+def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None):
     stm, nstm, bucket, score, result = batch
     out = model(stm, nstm, bucket).squeeze(1) * NNUE2SCORE
     q = torch.sigmoid(out / scaling)
     p = torch.sigmoid(score / scaling)
     target = lam * p + (1.0 - lam) * (result + 1.0) * 0.5
-    return torch.pow(torch.abs(q - target), 2.5).mean()
+    loss = torch.pow(torch.abs(q - target), 2.5)
+    if stack_weights is None:
+        return loss.mean()
+    w = stack_weights[bucket]
+    return (loss * w).sum() / w.sum()
+
+
+def stack_balance_weights(data: "Data", cap: float) -> np.ndarray:
+    """Capped inverse-frequency weight of each layer stack, normalized to sum
+    to the number of stacks (AB-JChess's head balancing)."""
+    counts = np.zeros(F.NUM_LAYER_STACKS, dtype=np.float64)
+    for _, meta in data.shards:
+        counts += np.bincount(np.asarray(meta["bucket"], dtype=np.int64),
+                              minlength=F.NUM_LAYER_STACKS)[:F.NUM_LAYER_STACKS]
+    total = counts.sum()
+    raw = np.minimum(cap, total / np.maximum(counts, 1.0))
+    return raw * F.NUM_LAYER_STACKS / raw.sum(), counts
 
 
 def main():
@@ -129,6 +155,17 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-factorize", action="store_true",
+                    help="train without virtual input features")
+    ap.add_argument("--factorize-kb", action="store_true",
+                    help="also a virtual row per king bucket (AB-JChess); off by default")
+    ap.add_argument("--no-l1-fact", action="store_true",
+                    help="train without the fc0 part shared by the layer stacks")
+    ap.add_argument("--output-lr-scale", type=float, default=0.1,
+                    help="learning rate of the output layer relative to --lr")
+    ap.add_argument("--stack-balance", type=float, default=0.0, metavar="CAP",
+                    help="weight samples by inverse layer stack frequency, capped at CAP "
+                         "(e.g. 8); 0 = off")
     args = ap.parse_args()
 
     if args.threads:
@@ -148,22 +185,44 @@ def main():
     print(f"arch {F.ARCH}, train: {train.n} positions" + (f", val: {val.n}" if val else ""),
           flush=True)
 
-    model = NNUE()
-    if args.init_net:
-        S.load_into_model(S.read_nnue(args.init_net), model)
-    model.to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-7)
-    sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=args.gamma)
-    first_epoch = 1
+    ck = None
     if args.resume:
-        ck = torch.load(args.resume, map_location=device)
+        ck = torch.load(args.resume, map_location="cpu")
         if ck.get("arch", "default") != F.ARCH:
             raise SystemExit(f"checkpoint is arch '{ck.get('arch', 'default')}', data is '{F.ARCH}'")
-        model.load_state_dict(ck["model"])
-        if "optimizer" in ck:
+        # keep the factorization of the run being resumed
+        model = NNUE.from_state_dict(ck["model"])
+    else:
+        model = NNUE(factorized=not args.no_factorize, l1_fact=not args.no_l1_fact,
+                     kb_factor=args.factorize_kb)
+        if args.init_net:
+            S.load_into_model(S.read_nnue(args.init_net), model)
+    print(f"factorized inputs: {model.factorized} (king bucket rows: {model.ft_kb is not None}), "
+          f"shared fc0: {model.has_l1_fact}", flush=True)
+    model.to(device)
+
+    output_params = list(model.stacks.output.parameters())
+    output_ids = {id(p) for p in output_params}
+    groups = [{"params": [p for p in model.parameters() if id(p) not in output_ids], "lr": args.lr},
+              {"params": output_params, "lr": args.lr * args.output_lr_scale}]
+    opt = torch.optim.Adam(groups, betas=(0.9, 0.999), eps=1e-7)
+    sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=args.gamma)
+    first_epoch = 1
+    if ck is not None:
+        try:
             opt.load_state_dict(ck["optimizer"])
             sched.load_state_dict(ck["scheduler"])
+        except (KeyError, ValueError) as e:
+            print(f"warning: optimizer state not restored ({e}); starting a new one", flush=True)
         first_epoch = ck.get("epoch", 0) + 1
+        del ck
+
+    stack_weights = None
+    if args.stack_balance > 0:
+        w, counts = stack_balance_weights(train, args.stack_balance)
+        stack_weights = torch.tensor(w, dtype=torch.float32, device=device)
+        print("layer stack counts: " + " ".join(str(int(c)) for c in counts), flush=True)
+        print("layer stack weights: " + " ".join(f"{x:.2f}" for x in w), flush=True)
 
     steps = max(1, args.epoch_size // args.batch_size)
     for epoch in range(first_epoch, args.epochs + 1):
@@ -171,7 +230,7 @@ def main():
         t0, total = time.time(), 0.0
         for i, batch in enumerate(train.batches(args.batch_size, steps, rng, device)):
             opt.zero_grad(set_to_none=True)
-            loss = loss_fn(model, batch, args.scaling, args.lam)
+            loss = loss_fn(model, batch, args.scaling, args.lam, stack_weights)
             loss.backward()
             opt.step()
             model.clip_weights()
@@ -190,6 +249,7 @@ def main():
                     vn += n
             msg += f", val loss {vl / max(1, vn):.6f}"
         msg += f", lr {sched.get_last_lr()[0]:.2e}, {time.time() - t0:.0f}s"
+        # (validation loss is unweighted: the real distribution of positions)
         print(msg, flush=True)
 
         ck = {"model": model.state_dict(), "optimizer": opt.state_dict(),

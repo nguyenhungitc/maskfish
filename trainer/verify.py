@@ -64,18 +64,21 @@ def main():
         q = S.read_nnue(args.net)
         net = args.net
         if args.checkpoint:
-            model = NNUE(init_psqt=False)
             ck = torch.load(args.checkpoint, map_location="cpu")
-            model.load_state_dict(ck["model"] if "model" in ck else ck)
+            model = NNUE.from_state_dict(ck["model"] if "model" in ck else ck)
     else:
         torch.manual_seed(args.seed)
-        model = NNUE()
+        # A factorized model, so that the coalescing done at export is tested too
+        model = NNUE(factorized=True, l1_fact=True, kb_factor=True)
         with torch.no_grad():   # make every layer matter in the test
             for p in model.stacks.parameters():
                 p.uniform_(-0.5, 0.5)
+            model.stacks.l1_fact.weight.uniform_(-0.2, 0.2)
             model.ft.weight[:, :2048].uniform_(-0.1, 0.1)
             model.ft.weight[:, 2048:].uniform_(-0.2, 0.2)   # also test every PSQT row
             model.ft.weight[F.PAD_INDEX].zero_()
+            model.ft_ps.weight.uniform_(-0.03, 0.03)
+            model.ft_kb.weight.uniform_(-0.03, 0.03)
         model.clip_weights()
         q = S.quantize(model)
         tmp = tempfile.NamedTemporaryFile(suffix=".nnue", delete=False)

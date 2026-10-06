@@ -119,11 +119,14 @@ def _read_leb(f, count: int, dtype=np.int64) -> np.ndarray:
 # ---------------------------------------------------------------- quantization
 
 def quantize(model) -> dict:
-    """Integer parameters exactly as they are written to the file."""
+    """Integer parameters exactly as they are written to the file. A
+    factorized model is coalesced first (virtual features and the shared fc0
+    part are folded into the real weights)."""
     import torch
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE, MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT)
 
+    model = model.coalesced()
     with torch.no_grad():
         # Feature transformer: done with torch in float32 to keep memory low
         # (the "att" architecture has 30240 x 2048 weights)
@@ -253,7 +256,8 @@ def detect_arch(path: str) -> str:
 
 
 def load_into_model(q: dict, model):
-    """Dequantize a network into a model (to continue training from it)."""
+    """Dequantize a network into a model (to continue training from it). The
+    training-only factorized parts, if any, are set to zero."""
     import torch
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE)
@@ -272,6 +276,11 @@ def load_into_model(q: dict, model):
         st.l2.bias[:] = torch.tensor(q["fc1_bias"].reshape(-1) / hb)
         st.output.weight[:] = torch.tensor(q["fc2_weight"] / OUTPUT_WEIGHT_SCALE)
         st.output.bias[:] = torch.tensor(q["fc2_bias"] / (NNUE2SCORE * OUTPUT_SCALE))
+        for name in ("ft_ps", "ft_kb"):
+            if getattr(model, name, None) is not None:
+                getattr(model, name).weight.zero_()
+        if getattr(st, "l1_fact", None) is not None:
+            st.l1_fact.weight.zero_()
 
 
 # ---------------------------------------------------------------- integer reference
@@ -335,8 +344,7 @@ def main():
     else:
         ckpt = torch.load(args.source, map_location="cpu")
         F.set_arch(ckpt.get("arch", "default"))
-        model = NNUE(init_psqt=False)
-        model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
+        model = NNUE.from_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
         write_nnue(quantize(model), args.target, args.description)
     print(f"written {args.target} (arch {F.ARCH})")
 

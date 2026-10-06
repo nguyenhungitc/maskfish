@@ -253,11 +253,46 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--resume` | | Tiếp tục một lần train dở từ checkpoint (cả optimizer và số epoch) |
 | `--device` | `cuda` nếu có | `cpu` để ép chạy CPU |
 | `--threads` | 0 | Số luồng CPU cho PyTorch (0 = mặc định) |
+| `--no-factorize` | | Tắt đặc trưng ảo (mặc định bật, xem dưới) |
+| `--factorize-kb` | | Thêm đặc trưng ảo theo bucket vua (AB-JChess dùng; mặc định tắt) |
+| `--no-l1-fact` | | Tắt phần fc0 dùng chung cho các layer stack (mặc định bật) |
+| `--output-lr-scale` | 0.1 | Tốc độ học của lớp đầu ra, tính theo tỉ lệ với `--lr` |
+| `--stack-balance` | 0 (tắt) | Cân bằng loss giữa các layer stack, giá trị là mức trần (ví dụ 8) |
 
 Hàm mất mát giống nnue-pytorch: điểm của mạng và điểm trong dữ liệu đều được
 đổi sang xác suất thắng bằng `sigmoid(điểm / scaling)`, mục tiêu là
 `lambda × xác suất từ điểm + (1 − lambda) × kết quả ván`, và loss là trung
 bình của `|dự đoán − mục tiêu|^2.5`.
+
+**Các kỹ thuật chỉ dùng khi train** (lấy ý tưởng từ nnue-pytorch và AB-JChess).
+Chúng không làm thay đổi định dạng mạng: khi xuất, phần ảo được cộng gộp vào
+trọng số thật, nên engine không cần sửa gì và `verify.py` vẫn phải khớp từng bit.
+
+- **Đặc trưng ảo (factorization):** mỗi đặc trưng "quân X ở ô Y trong bucket
+  vua B" bật thêm một dòng trọng số dùng chung cho mọi bucket vua của "quân X ở
+  ô Y". Điều mạng học được ở một vị trí vua được dùng lại cho các vị trí khác,
+  nên mạng học nhanh hơn khi dữ liệu còn ít (lợi càng nhiều với kiến trúc `att`,
+  24 bucket). Thử nhỏ trên 2 700 thế cờ: val loss tốt nhất giảm từ 0,00331 xuống
+  0,00323. Dòng ảo theo bucket vua (`--factorize-kb`) được cộng một lần cho mỗi
+  đặc trưng đang bật nên học rất nhanh; trong cùng bài thử nó làm kết quả kém đi
+  (0,00343), nên mặc định tắt.
+- **fc0 dùng chung (`l1_fact`):** một phần của lớp fc0 dùng chung cho 16 layer
+  stack, để các stack ít mẫu (tàn cuộc) bắt đầu từ những gì các stack nhiều mẫu
+  đã học. Giới hạn trọng số áp lên tổng sau khi gộp.
+- **Tốc độ học riêng cho lớp đầu ra:** mặc định bằng 1/10 tốc độ chung.
+- **Cân bằng layer stack (`--stack-balance CAP`):** mỗi mẫu được nhân trọng số
+  `min(CAP, tổng số mẫu / số mẫu của stack đó)`, chuẩn hóa để trung bình mỗi
+  stack bằng 1. Với `CAP=8` (giá trị AB dùng) và 16 stack, chỉ các stack chiếm
+  hơn 1/8 dữ liệu bị giảm trọng số; muốn nâng các stack hiếm mạnh hơn thì dùng
+  CAP lớn hơn (16–32). Khi bật, lệnh in số mẫu và trọng số của từng stack. Val
+  loss luôn tính không trọng số (phân bố thật). Đáng thử khi dữ liệu nhiều và
+  tàn cuộc quá ít; quyết định bằng `match.py`, không bằng loss.
+
+Hai cái cuối gần như trung tính ở quy mô thử nhỏ; tác dụng của chúng chỉ thấy
+được khi dữ liệu lớn. Checkpoint ghi lại cấu hình factorization: `--resume` tự
+dùng đúng cấu hình của lần train đó, `--init-net` từ một file `.nnue` thì bắt đầu
+với phần ảo bằng 0. Checkpoint cũ (trước khi có các kỹ thuật này) vẫn đọc và
+tiếp tục train được; khi đó trạng thái optimizer được tạo mới.
 
 **Theo dõi:** mỗi 100 bước in loss trung bình; cuối mỗi epoch in train loss,
 val loss, tốc độ học và thời gian. Val loss nên giảm dần rồi chững lại. Chỉ so
@@ -584,7 +619,8 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 | `incompatible network for arch ...` | Truyền mạng sai kiến trúc cho `--init-net` / `serialize.py`; thông báo cho biết kiến trúc thật của file |
 | `prepare_data.py` hết RAM | Giảm `--shard-size` (ví dụ 500000) |
 | `train.py` hết bộ nhớ GPU | Giảm `--batch-size` (ví dụ 8192); kiến trúc `att` cần nhiều hơn |
-| Loss thành `nan` hoặc tăng vọt | Giảm `--lr` (ví dụ 5e-4), kiểm tra dữ liệu có điểm bất thường (giảm `--max-score`) |
+| Loss thành `nan` hoặc tăng vọt | Giảm `--lr` (ví dụ 5e-4), kiểm tra dữ liệu có điểm bất thường (giảm `--max-score`); thử `--no-factorize` để xem factorization có phải nguyên nhân |
+| `warning: optimizer state not restored` khi `--resume` | Checkpoint tạo bởi phiên bản trainer cũ (một nhóm tham số): mô hình vẫn được nạp, chỉ trạng thái optimizer được tạo mới |
 | Train chậm, GPU không bận | Dữ liệu nằm trên ổ chậm: chuyển sang SSD; tăng `--batch-size` |
 | `gen_data.py` bị ngắt | Dùng các file `.partN` còn lại như dữ liệu bình thường |
 | AB-JChess / nhánh old in `No such option: RawScore` | Bình thường: các engine này không có tùy chọn đó; điểm của chúng phải đổi thang bằng `--score-scale` ([mục 6.3](#63-đổi-thang-điểm-và-train)) |
