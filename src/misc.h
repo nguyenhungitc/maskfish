@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <exception>  // IWYU pragma: keep
 // IWYU pragma: no_include <__exception/terminate.h>
+#include <cstddef>
 #include <functional>
 #include <iosfwd>
 #include <optional>
@@ -40,6 +41,20 @@
 #define stringify(x) stringify2(x)
 
 namespace Stockfish {
+
+// Short integer type aliases, as used by upstream Pikafish/Stockfish code
+using u64 = std::uint64_t;
+using u32 = std::uint32_t;
+using u16 = std::uint16_t;
+using u8  = std::uint8_t;
+
+using i64 = std::int64_t;
+using i32 = std::int32_t;
+using i16 = std::int16_t;
+using i8  = std::int8_t;
+
+using usize = std::size_t;
+using isize = std::ptrdiff_t;
 
 std::string engine_version_info();
 std::string engine_info(bool to_uci = false);
