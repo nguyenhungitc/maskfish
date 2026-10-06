@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <new>
 #include <type_traits>
@@ -30,6 +32,11 @@
 #include "types.h"
 
 namespace Stockfish {
+
+[[noreturn]] inline void report_failed_allocation(size_t bytes) {
+    std::cerr << "Failed to allocate " << bytes << " bytes." << std::endl;
+    std::exit(EXIT_FAILURE);
+}
 
 void* std_aligned_alloc(size_t alignment, size_t size);
 void  std_aligned_free(void* ptr);
@@ -83,6 +90,8 @@ template<typename T, typename ALLOC_FUNC, typename... Args>
 inline std::enable_if_t<!std::is_array_v<T>, T*> memory_allocator(ALLOC_FUNC alloc_func,
                                                                   Args&&... args) {
     void* raw_memory = alloc_func(sizeof(T));
+    if (raw_memory == nullptr)
+        report_failed_allocation(sizeof(T));
     ASSERT_ALIGNED(raw_memory, alignof(T));
     return new (raw_memory) T(std::forward<Args>(args)...);
 }
@@ -96,8 +105,10 @@ memory_allocator(ALLOC_FUNC alloc_func, size_t num) {
     const size_t array_offset = std::max(sizeof(size_t), alignof(ElementType));
 
     // Save the array size in the memory location
-    char* raw_memory =
-      reinterpret_cast<char*>(alloc_func(array_offset + num * sizeof(ElementType)));
+    const size_t bytes      = array_offset + num * sizeof(ElementType);
+    char*        raw_memory = reinterpret_cast<char*>(alloc_func(bytes));
+    if (raw_memory == nullptr)
+        report_failed_allocation(bytes);
     ASSERT_ALIGNED(raw_memory, alignof(T));
 
     new (raw_memory) size_t(num);
