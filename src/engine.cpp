@@ -146,6 +146,9 @@ Engine::Engine(std::optional<std::string> path) :
     // Counter-Move History Continuity: larger continuation history updates
     // when the previous continuation histories already agree.
     options.add("CMHC", Option(false));
+    // When the root score suggests a forced mate, futility-prune only at low
+    // depth and skip singular extensions, to find the mate faster.
+    options.add("SeekMate", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

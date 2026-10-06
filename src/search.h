@@ -386,6 +386,7 @@ class Worker {
     bool   probCutDarkCapture = false;
     bool   ttPenalize         = false;
     bool   chanceBranchDepth  = false;
+    bool   seekMateOption     = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

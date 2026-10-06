@@ -278,6 +278,7 @@ void Search::Worker::iterative_deepening() {
     contCorr4Ply       = bool(options["ContCorr4Ply"]);
     multiCutHistory    = bool(options["MultiCutHistory"]);
     cmhc               = bool(options["CMHC"]);
+    seekMateOption     = bool(options["SeekMate"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -588,6 +589,13 @@ Value Search::Worker::search(
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
 
+    // UCI option SeekMate: when the root score is high enough (relative to the
+    // root depth) to suggest a forced mate, prune and extend less to find it.
+    // Do not tune these values; they are not intended for playing strength.
+    const bool seekMate = seekMateOption && rootDepth > 0
+                       && std::abs(rootMoves[pvIdx].score)
+                            >= 750 + 220000 / (rootDepth * rootDepth);
+
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
     {
@@ -838,7 +846,8 @@ Value Search::Worker::search(
                  + std::abs(correctionValue) / 115091;
         };
 
-        if (!ss->ttPv && depth < 13 && eval - futility_margin(depth) >= beta && eval >= beta
+        if (!ss->ttPv && depth < (seekMate ? 6 : 13) && eval - futility_margin(depth) >= beta
+            && eval >= beta
             && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
             return beta + (eval - beta) / 3;
     }
@@ -1110,7 +1119,7 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && move == ttData.move && !excludedMove
             && depth >= 5 - (thisThread->completedDepth > 32) + ss->ttPv && is_valid(ttData.value)
             && !is_decisive(ttData.value) && (ttData.bound & BOUND_LOWER)
-            && ttData.depth >= depth - 3 && !is_shuffling(move, ss, pos))
+            && ttData.depth >= depth - 3 && !is_shuffling(move, ss, pos) && !seekMate)
         {
             Value singularBeta  = ttData.value - (48 + 72 * (ss->ttPv && !PvNode)) * depth / 59;
             Depth singularDepth = newDepth / 2;
