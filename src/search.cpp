@@ -1151,7 +1151,8 @@ moves_loop:  // When in check, search starts here
         const int revealBonus = Reveal::move_bonus(pos, move, revealQuiet);
 
         // Step 15. Make the move
-        ss->capturedDark = pos.is_dark(move.to_sq());
+        uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
+        ss->capturedDark   = pos.is_dark(move.to_sq());
         do_move(pos, move, st, givesCheck);
 
         // Add extension to new depth
@@ -1163,7 +1164,6 @@ moves_loop:  // When in check, search starts here
           &thisThread->continuationHistory[ss->inCheck][capture][movedPiece][move.to_sq()];
         ss->continuationCorrectionHistory =
           &thisThread->continuationCorrectionHistory[movedPiece][move.to_sq()];
-        uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
 
         // Decrease reduction for PvNodes (*Scaler)
         if (ss->ttPv)
