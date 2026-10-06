@@ -33,7 +33,8 @@ TimePoint TimeManagement::optimum() const { return optimumTime; }
 TimePoint TimeManagement::maximum() const { return maximumTime; }
 
 void TimeManagement::clear() {
-    availableNodes = -1;  // When in 'nodes as time' mode
+    availableNodes    = -1;  // When in 'nodes as time' mode
+    previousMovesToGo = 0;
 }
 
 void TimeManagement::advance_nodes_time(std::int64_t nodes) {
@@ -57,8 +58,15 @@ void TimeManagement::init(Search::LimitsType& limits,
     startTime    = limits.startTime;
     useNodesTime = npmsec != 0;
 
+    // elapsed() returns nodes in 'nodes as time' mode, so convert movetime too
+    if (useNodesTime)
+        limits.movetime *= npmsec;
+
     if (limits.time[us] == 0)
+    {
+        optimumTime = maximumTime = NoBound;
         return;
+    }
 
     TimePoint moveOverhead = TimePoint(options["Move Overhead"]);
 
@@ -72,8 +80,17 @@ void TimeManagement::init(Search::LimitsType& limits,
     // must be much lower than the real engine speed.
     if (useNodesTime)
     {
-        if (availableNodes == -1)                       // Only once at game start
-            availableNodes = npmsec * limits.time[us];  // Time is in msec
+        if (availableNodes == -1)  // Only once at game start
+        {
+            // First time limit includes increment (both are in milliseconds)
+            availableNodes = npmsec * limits.time[us];
+            cyclicBudget   = npmsec * (limits.time[us] - limits.inc[us]);
+        }
+        // Cyclic time controls (x moves in y seconds): add the new period
+        else if (limits.movestogo > 0 && limits.movestogo > previousMovesToGo && cyclicBudget > 0)
+            availableNodes += cyclicBudget;
+
+        previousMovesToGo = limits.movestogo;
 
         // Convert from milliseconds to nodes
         limits.time[us] = TimePoint(availableNodes);
@@ -85,7 +102,7 @@ void TimeManagement::init(Search::LimitsType& limits,
     // These numbers are used where multiplications, divisions or comparisons
     // with constants are involved.
     const int64_t   scaleFactor = useNodesTime ? npmsec : 1;
-    const TimePoint scaledTime  = limits.time[us] / scaleFactor;
+    const TimePoint scaledTime  = std::max(TimePoint(1), limits.time[us] / scaleFactor);
 
     // Maximum move horizon
     int centiMTG = limits.movestogo ? std::min(limits.movestogo * 100, 6000) : 6000;
@@ -130,9 +147,10 @@ void TimeManagement::init(Search::LimitsType& limits,
     }
 
     // Limit the maximum possible time for this move
-    optimumTime = TimePoint(optScale * timeLeft);
+    optimumTime = TimePoint(std::max(1.0, optScale * timeLeft));
     maximumTime =
-      TimePoint(std::min(0.810000 * limits.time[us] - moveOverhead, maxScale * optimumTime)) - 10;
+      TimePoint(std::max(double(optimumTime), std::min(0.810000 * limits.time[us] - moveOverhead,
+                                                       maxScale * optimumTime)));
 
     if (options["Ponder"])
         optimumTime += optimumTime / 4;
