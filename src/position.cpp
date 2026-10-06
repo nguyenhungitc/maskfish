@@ -228,7 +228,9 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 
     set_state();
 
-    assert(pos_is_ok());
+    // A board without exactly one king per side is reported as invalid by
+    // Engine::set_position() (see pool_is_consistent()) instead of asserting.
+    assert(count<KING>(WHITE) != 1 || count<KING>(BLACK) != 1 || pos_is_ok());
 
     return *this;
 }
@@ -1326,6 +1328,16 @@ void Position::flip() {
 bool Position::pool_is_consistent(std::string* reason) const {
 
     constexpr int MaxCount[PIECE_TYPE_NB] = {0, 2, 2, 2, 5, 2, 2, 0};
+
+    // The board must hold exactly one king of each color (FEN validation)
+    for (Color c : {WHITE, BLACK})
+        if (count<KING>(c) != 1)
+        {
+            if (reason)
+                *reason = std::string(c == WHITE ? "white" : "black")
+                        + " does not have exactly one king";
+            return false;
+        }
 
     for (Color c : {WHITE, BLACK})
     {
