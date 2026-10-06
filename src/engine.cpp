@@ -143,6 +143,9 @@ Engine::Engine(std::optional<std::string> path) :
     // On a multi-cut, penalize the ttMove in ttMoveHistory and use the cut
     // value to update the correction histories.
     options.add("MultiCutHistory", Option(false));
+    // Counter-Move History Continuity: larger continuation history updates
+    // when the previous continuation histories already agree.
+    options.add("CMHC", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

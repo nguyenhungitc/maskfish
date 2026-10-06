@@ -129,7 +129,8 @@ Value value_draw(size_t nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r40c);
 void  update_pv(Move* pv, Move move, const Move* childPv);
-void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
+void  update_continuation_histories(
+  const Search::Worker& w, Stack* ss, Piece pc, Square to, int bonus);
 void  update_quiet_histories(
    const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
 void update_all_stats(const Position& pos,
@@ -276,6 +277,7 @@ void Search::Worker::iterative_deepening() {
     chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
     contCorr4Ply       = bool(options["ContCorr4Ply"]);
     multiCutHistory    = bool(options["MultiCutHistory"]);
+    cmhc               = bool(options["CMHC"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -726,7 +728,7 @@ Value Search::Worker::search(
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount <= 2 && !priorCapture)
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2387);
+                update_continuation_histories(*this, ss - 1, pos.piece_on(prevSq), prevSq, -2387);
         }
 
         // Partial workaround for the graph history interaction problem
@@ -1269,7 +1271,7 @@ moves_loop:  // When in check, search starts here
                                                 revealBonus);
 
                 // Post LMR continuation history updates
-                update_continuation_histories(ss, movedPiece, move.to_sq(), 1533);
+                update_continuation_histories(*this, ss, movedPiece, move.to_sq(), 1533);
             }
             else if (value > alpha && value < bestValue + 9)
                 newDepth--;
@@ -1452,7 +1454,7 @@ moves_loop:  // When in check, search starts here
         // are close to the int range: compute the largest one in 64 bits.
         const int scaledBonus = std::min(153 * depth - 93, 2290) * bonusScale;
 
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
+        update_continuation_histories(*thisThread, ss - 1, pos.piece_on(prevSq), prevSq,
                                       scaledBonus * 384 / 32768);
 
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()]
@@ -2098,7 +2100,8 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 681 / 1024);
+        update_continuation_histories(workerThread, ss - 1, pos.piece_on(prevSq), prevSq,
+                                      -malus * 681 / 1024);
 
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
@@ -2112,9 +2115,16 @@ void update_all_stats(const Position& pos,
 
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
-void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+void update_continuation_histories(
+  const Search::Worker& w, Stack* ss, Piece pc, Square to, int bonus) {
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1028}, {2, 583}, {3, 282}, {4, 529}, {5, 130}, {6, 501}}};
+
+    // Counter-Move History Continuity (UCI option CMHC): scale the update
+    // up when the continuation histories updated so far already agree
+    // (are positive), in 1/128 units.
+    static constexpr int CMHCMultipliers[] = {96, 100, 100, 100, 115, 118, 129};
+    int                  positiveCount     = 0;
 
     for (const auto [i, weight] : conthist_bonuses)
     {
@@ -2122,7 +2132,17 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
         if (ss->inCheck && i > 2)
             break;
         if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << bonus * weight / 1024;
+        {
+            auto& entry = (*(ss - i)->continuationHistory)[pc][to];
+            if (w.cmhc)
+            {
+                positiveCount += entry > 0;
+                entry << int(std::int64_t(bonus) * weight * CMHCMultipliers[positiveCount]
+                             / (1024 * 128));
+            }
+            else
+                entry << bonus * weight / 1024;
+        }
     }
 }
 
@@ -2137,7 +2157,7 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.from_to()] << bonus * 839 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(),
+    update_continuation_histories(workerThread, ss, pos.moved_piece(move), move.to_sq(),
                                   bonus * (bonus > 0 ? 1064 : 824) / 1024);
 
     int pIndex = pawn_structure_index(pos);

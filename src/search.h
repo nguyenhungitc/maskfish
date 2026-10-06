@@ -302,6 +302,7 @@ class Worker {
     // default. Public because the free history update functions read them.
     bool contCorr4Ply    = false;
     bool multiCutHistory = false;
+    bool cmhc            = false;
 
    private:
     void iterative_deepening();
