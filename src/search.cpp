@@ -227,7 +227,7 @@ void Search::Worker::start_searching() {
 
     // Send again PV info if we have a new best thread
     if (bestThread != this)
-        main_manager()->pv(*bestThread, threads, tt, bestThread->completedDepth);
+        main_manager()->pv(*bestThread, threads, tt, bestThread->rootDepth);
 
     std::string ponder;
 
@@ -308,9 +308,12 @@ void Search::Worker::iterative_deepening() {
     lowPlyHistory.fill(102);
 
     // Iterative deepening loop until requested to stop or the target depth is reached
-    while (++rootDepth < MAX_PLY && !threads.stop
-           && !(limits.depth && mainThread && rootDepth > limits.depth))
+    // (rootDepth always holds the last depth for which a search was started)
+    while (rootDepth + 1 < MAX_PLY && !threads.stop
+           && !(limits.depth && mainThread && rootDepth >= limits.depth))
     {
+        rootDepth++;
+
         // Age out PV variability metric
         if (mainThread)
             totBestMoveChanges /= 2;
