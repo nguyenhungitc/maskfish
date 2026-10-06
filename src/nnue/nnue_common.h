@@ -175,47 +175,77 @@ inline void write_little_endian(std::ostream& stream, const IntType* values, std
 template<typename IntType>
 inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) {
 
-    // Check the presence of our LEB128 magic string
+    static_assert(std::is_signed_v<IntType>, "Not implemented for unsigned types");
+    static_assert(sizeof(IntType) <= 4, "Not implemented for types larger than 32 bit");
+
+    // Check the presence of our LEB128 magic string. A short or corrupted
+    // file fails the stream instead of triggering an assert.
     char leb128MagicString[Leb128MagicStringSize];
     stream.read(leb128MagicString, Leb128MagicStringSize);
-    assert(strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) == 0);
-
-    static_assert(std::is_signed_v<IntType>, "Not implemented for unsigned types");
+    if (stream.gcount() != std::streamsize(Leb128MagicStringSize)
+        || strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
+    {
+        stream.setstate(std::ios::failbit);
+        return;
+    }
 
     const std::uint32_t BUF_SIZE = 4096;
     std::uint8_t        buf[BUF_SIZE];
 
     auto bytes_left = read_little_endian<std::uint32_t>(stream);
 
-    std::uint32_t buf_pos = BUF_SIZE;
+    std::uint32_t buf_pos = 0, buf_end = 0;
     for (std::size_t i = 0; i < count; ++i)
     {
-        IntType result = 0;
-        size_t  shift  = 0;
-        do
+        // Accumulate into an unsigned type: for int32 values a 5-byte
+        // encoding reaches shift 28, which overflows a signed int.
+        std::uint32_t result = 0;
+        size_t        shift  = 0;
+        while (true)
         {
-            if (buf_pos == BUF_SIZE)
+            if (buf_pos == buf_end)
             {
+                if (bytes_left == 0)
+                {
+                    stream.setstate(std::ios::failbit);
+                    return;
+                }
                 stream.read(reinterpret_cast<char*>(buf), std::min(bytes_left, BUF_SIZE));
                 buf_pos = 0;
+                buf_end = std::uint32_t(stream.gcount());
+
+                // Short read: the file is truncated
+                if (buf_end == 0)
+                {
+                    stream.setstate(std::ios::failbit);
+                    return;
+                }
             }
 
             std::uint8_t byte = buf[buf_pos++];
             --bytes_left;
-            result |= (byte & 0x7f) << shift;
+            result |= std::uint32_t(byte & 0x7f) << (shift % 32);
             shift += 7;
 
             if ((byte & 0x80) == 0)
             {
-                out[i] = (sizeof(IntType) * 8 <= shift || (byte & 0x40) == 0)
-                         ? result
-                         : result | ~((1 << shift) - 1);
+                out[i] = IntType((sizeof(IntType) * 8 <= shift || (byte & 0x40) == 0)
+                                   ? result
+                                   : result | ~((std::uint32_t(1) << shift) - 1));
                 break;
             }
-        } while (shift < sizeof(IntType) * 8);
+
+            // Too many continuation bytes for this type: corrupted data
+            if (shift >= sizeof(IntType) * 8)
+            {
+                stream.setstate(std::ios::failbit);
+                return;
+            }
+        }
     }
 
-    assert(bytes_left == 0);
+    if (bytes_left != 0)
+        stream.setstate(std::ios::failbit);
 }
 
 

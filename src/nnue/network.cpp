@@ -18,6 +18,7 @@
 
 #include "network.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -294,8 +295,23 @@ bool Network<Arch, Transformer>::read_header(std::istream&  stream,
     size       = read_little_endian<std::uint32_t>(stream);
     if (!stream || version != Version)
         return false;
-    desc->resize(size);
-    stream.read(&(*desc)[0], size);
+
+    // Bound the description by what the stream actually holds rather than by
+    // the declared size, which may be corrupted
+    constexpr std::uint32_t Chunk = 4096;
+    char                    buf[Chunk];
+
+    desc->clear();
+    for (std::uint32_t remaining = size; remaining > 0;)
+    {
+        const std::uint32_t want = std::min(remaining, Chunk);
+        stream.read(buf, want);
+        const std::uint32_t got = std::uint32_t(stream.gcount());
+        desc->append(buf, got);
+        if (got != want)
+            return false;
+        remaining -= want;
+    }
     return !stream.fail();
 }
 
