@@ -135,6 +135,11 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("TTPenalize", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
     options.add("ChanceBranchDepth", Option(false));
+
+    // Experimental search ideas ported from Pikafish, off by default: test
+    // with SPRT (trainer/match.py --opt-a Name=true).
+    // Continuation correction history also from the move 4 plies back.
+    options.add("ContCorr4Ply", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

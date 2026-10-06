@@ -80,8 +80,12 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const auto  wnpcv = w.nonPawnCorrectionHistory[non_pawn_index<WHITE>(pos)][WHITE][us];
     const auto  bnpcv = w.nonPawnCorrectionHistory[non_pawn_index<BLACK>(pos)][BLACK][us];
     const auto  cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                 : 0;
+      m.is_ok()
+        ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+            + (w.contCorr4Ply
+                 ? (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+                 : 0)
+        : 0;
 
     return 4897 * pcv + 4190 * micv + 8120 * (wnpcv + bnpcv) + 8324 * cntcv;
 }
@@ -110,8 +114,14 @@ void update_correction_history(const Position& pos,
       << bonus * nonPawnWeight / 128;
 
     if (m.is_ok())
-        (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-          << bonus * 114 / 128;
+    {
+        const Square to = m.to_sq();
+        const Piece  pc = pos.piece_on(to);
+        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 114 / 128;
+
+        if (workerThread.contCorr4Ply)
+            (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 64 / 128;
+    }
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -264,6 +274,7 @@ void Search::Worker::iterative_deepening() {
     probCutDarkCapture = bool(options["ProbCutDarkCapture"]);
     ttPenalize         = bool(options["TTPenalize"]);
     chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
+    contCorr4Ply       = bool(options["ContCorr4Ply"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
