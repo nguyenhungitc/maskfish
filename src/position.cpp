@@ -908,6 +908,8 @@ bool Position::see_ge(Move m, int threshold) const {
 
     Square from = m.from_sq(), to = m.to_sq();
 
+    assert(piece_on(from) != NO_PIECE);
+
     int swap = PieceValue[piece_on(to)] - threshold;
     if (swap < 0)
         return false;
@@ -922,10 +924,9 @@ bool Position::see_ge(Move m, int threshold) const {
     Bitboard attackers = attackers_to(to, occupied);
 
     // Flying general
-    if (attackers & pieces(stm, KING))
-        attackers |= attacks_bb<ROOK>(to, occupied & ~pieces(ROOK)) & pieces(~stm, KING);
-    if (attackers & pieces(~stm, KING))
-        attackers |= attacks_bb<ROOK>(to, occupied & ~pieces(ROOK)) & pieces(stm, KING);
+    bool kingAttacks = attackers & pieces(KING);
+    if (kingAttacks)
+        attackers |= attacks_bb<ROOK>(to, occupied) & pieces(KING);
 
     Bitboard nonCannons = attackers & ~pieces(CANNON);
     Bitboard cannons    = attackers & pieces(CANNON);
@@ -961,7 +962,8 @@ bool Position::see_ge(Move m, int threshold) const {
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            nonCannons |= attacks_bb<ROOK>(to, occupied) & pieces(ROOK);
+            nonCannons |=
+              attacks_bb<ROOK>(to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
             cannons   = attacks_bb<CANNON>(to, occupied) & pieces(CANNON);
             attackers = nonCannons | cannons;
         }
@@ -1005,7 +1007,8 @@ bool Position::see_ge(Move m, int threshold) const {
             swap = RookValue - swap;
             occupied ^= least_significant_square_bb(bb);
 
-            nonCannons |= attacks_bb<ROOK>(to, occupied) & pieces(ROOK);
+            nonCannons |=
+              attacks_bb<ROOK>(to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
             cannons   = attacks_bb<CANNON>(to, occupied) & pieces(CANNON);
             attackers = nonCannons | cannons;
         }
