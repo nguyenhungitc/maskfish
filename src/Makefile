@@ -460,7 +460,7 @@ endif
 ifeq ($(COMP),gcc)
 	comp=gcc
 	CXX=g++
-	CXXFLAGS += -pedantic -Wextra -Wshadow -Wmissing-declarations -fno-ipa-cp-clone
+	CXXFLAGS += -pedantic -Wextra -Wshadow -Wmissing-declarations
 
 	ifeq ($(arch),$(filter $(arch),armv7 armv8 riscv64))
 		ifeq ($(OS),Android)
@@ -628,7 +628,8 @@ ifeq ($(COMP),gcc)
 		profile_make = clang-profile-make
 		profile_use = clang-profile-use
 	else
-		CXXFLAGS += -Wstack-usage=128000
+		gccmajorv := $(shell $(CXX) -dumpversion 2>/dev/null)
+		CXXFLAGS += -Wstack-usage=128000 -fno-ipa-cp-clone
 	endif
 else ifeq ($(COMP),mingw)
 	CXXFLAGS += -fno-ipa-cp-clone
@@ -904,7 +905,13 @@ ifeq ($(debug),no)
 # GCC on some systems.
 	else ifeq ($(comp),gcc)
 		ifeq ($(gccisclang),)
-			CXXFLAGS += -flto -flto-partition=one
+			# lto-partition=balanced is much faster on multi-core systems and
+			# has not been observed to reduce performance for gcc > 13.
+			ifeq ($(shell test "$(gccmajorv)" -le 13 2>/dev/null && echo true),true)
+				CXXFLAGS += -flto -flto-partition=one
+			else
+				CXXFLAGS += -flto -flto-partition=balanced
+			endif
 			LDFLAGS += $(CXXFLAGS) -flto=jobserver
 		else
 			CXXFLAGS += -flto=full
