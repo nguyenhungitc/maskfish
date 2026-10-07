@@ -80,7 +80,10 @@ struct MoveSorter {
 
         // Mask of all elements except the insertion point
         assert(m.value != std::numeric_limits<int>::min());
-        const uint16_t expand = _kadd_mask16(_mm512_cmplt_epi32_mask(sortedValues, value), -1);
+        // (minus one: plain arithmetic rather than _kadd_mask16, which needs
+        // AVX512DQ, not enabled by the x86-64-avx512 / -avx512bw targets)
+        const uint16_t expand =
+          uint16_t(_mm512_cmplt_epi32_mask(sortedValues, value) - 1);
 
         sortedValues = _mm512_mask_expand_epi32(value, expand, sortedValues);
         sortedMoves  = _mm512_mask_expand_epi32(move, expand, sortedMoves);
