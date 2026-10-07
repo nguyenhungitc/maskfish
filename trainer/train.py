@@ -8,7 +8,9 @@ Each data argument is a prefix written by prepare_data.py (all its shards are
 used); several prefixes can be given, e.g. the data of several generations.
 
 After every epoch: runs/exp1/epoch_N.pt, runs/exp1/last.pt and
-runs/exp1/epoch_N.nnue (ready for the engine's EvalFile option).
+runs/exp1/epoch_N.nnue (ready for the engine's EvalFile option). With
+--checkpoint-every K, epoch_N.pt is kept only every K epochs (and for the last
+one): checkpoints of the threat architectures take about 1.3 GB each.
 
 Loss (as in nnue-pytorch): the network score s (internal units) and the data
 score are both mapped to a win probability with sigmoid(x / scaling); the
@@ -69,17 +71,37 @@ class Data:
         if len(archs) != 1:
             raise SystemExit(f"data prefixes have different architectures: {sorted(archs)}")
         self.arch = archs.pop()
+        self.has_threats = F.ARCHS[self.arch][3]
         self.shards = []
+        self.threats = []   # per shard: (flat indices, counts (N, 2), position starts) or None
         for prefix in prefixes:
             for sp in shard_prefixes(prefix):
                 f = np.load(sp + ".features.npy", mmap_mode="r")
                 m = np.load(sp + ".meta.npy", mmap_mode="r")
+                thr = self._load_threats(sp, len(m))
                 if len(m):
                     self.shards.append((f, m))
+                    self.threats.append(thr)
         self.sizes = np.array([len(m) for _, m in self.shards], dtype=np.int64)
         self.n = int(self.sizes.sum())
         if self.n == 0:
             raise SystemExit("empty data set")
+
+    def _load_threats(self, sp: str, n: int):
+        if not self.has_threats:
+            return None
+        try:
+            flat = np.load(sp + ".threats.npy", mmap_mode="r")
+            counts = np.load(sp + ".thrcount.npy")
+        except FileNotFoundError:
+            raise SystemExit(f"{sp}: no threat data (prepare the data again with --arch {self.arch})")
+        if len(counts) != n:
+            raise SystemExit(f"{sp}: threat data does not match the positions")
+        starts = np.zeros(n + 1, dtype=np.int64)
+        np.cumsum(counts.astype(np.int64).sum(axis=1), out=starts[1:])
+        if starts[-1] != len(flat):
+            raise SystemExit(f"{sp}: threat data does not match the positions")
+        return flat, counts, starts
 
     def batches(self, batch_size: int, count: int, rng: np.random.Generator, device):
         """'count' batches. Each one is a contiguous chunk at a random offset of
@@ -107,15 +129,24 @@ class Data:
         feats, meta = self.shards[k]
         f = torch.from_numpy(np.ascontiguousarray(feats[a:b]).astype(np.int64))
         m = meta[a:b]
+        threats = None
+        if self.threats[k] is not None:
+            # EmbeddingBag input: bags stm, nstm of each position
+            flat, counts, starts = self.threats[k]
+            idx = np.asarray(flat[starts[a]:starts[b]], dtype=np.int64)
+            off = np.zeros(2 * (b - a), dtype=np.int64)
+            np.cumsum(counts[a:b].reshape(-1)[:-1], out=off[1:])
+            threats = (torch.from_numpy(idx).to(device, non_blocking=True),
+                       torch.from_numpy(off).to(device, non_blocking=True))
         return (f[:, 0].to(device, non_blocking=True), f[:, 1].to(device, non_blocking=True),
                 torch.from_numpy(m["bucket"].astype(np.int64)).to(device),
                 torch.from_numpy(m["score"].astype(np.float32)).to(device),
-                torch.from_numpy(m["result"].astype(np.float32)).to(device))
+                torch.from_numpy(m["result"].astype(np.float32)).to(device), threats)
 
 
 def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None):
-    stm, nstm, bucket, score, result = batch
-    out = model(stm, nstm, bucket).squeeze(1) * NNUE2SCORE
+    stm, nstm, bucket, score, result, threats = batch
+    out = model(stm, nstm, bucket, threats).squeeze(1) * NNUE2SCORE
     q = torch.sigmoid(out / scaling)
     p = torch.sigmoid(score / scaling)
     target = lam * p + (1.0 - lam) * (result + 1.0) * 0.5
@@ -163,6 +194,9 @@ def main():
                     help="train without the fc0 part shared by the layer stacks")
     ap.add_argument("--output-lr-scale", type=float, default=0.1,
                     help="learning rate of the output layer relative to --lr")
+    ap.add_argument("--checkpoint-every", type=int, default=1, metavar="K",
+                    help="write epoch_N.pt every K epochs only (last.pt and the .nnue "
+                         "files are always written)")
     ap.add_argument("--stack-balance", type=float, default=0.0, metavar="CAP",
                     help="weight samples by inverse layer stack frequency, capped at CAP "
                          "(e.g. 8); 0 = off")
@@ -255,7 +289,8 @@ def main():
         ck = {"model": model.state_dict(), "optimizer": opt.state_dict(),
               "scheduler": sched.state_dict(), "epoch": epoch, "args": vars(args),
               "arch": F.ARCH}
-        torch.save(ck, os.path.join(args.out, f"epoch_{epoch}.pt"))
+        if epoch % max(1, args.checkpoint_every) == 0 or epoch == args.epochs:
+            torch.save(ck, os.path.join(args.out, f"epoch_{epoch}.pt"))
         torch.save(ck, os.path.join(args.out, "last.pt"))
         S.write_nnue(S.quantize(model), os.path.join(args.out, f"epoch_{epoch}.nnue"),
                      f"Jieqi NNUE ({F.ARCH}) epoch {epoch}")

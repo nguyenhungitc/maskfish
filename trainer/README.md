@@ -55,7 +55,8 @@ theo đơn vị nội bộ) và lệnh `evalraw` (in đầu ra thô của mạng
   thể chạy trên nhiều máy cùng lúc.
 - **Train:** GPU NVIDIA có CUDA. CPU vẫn chạy được nhưng chỉ hợp để thử.
   Kiến trúc mặc định cần khoảng 300 MB bộ nhớ GPU cho tham số và optimizer
-  (cộng thêm phần cho batch), kiến trúc `att` khoảng 1 GB.
+  (cộng thêm phần cho batch), kiến trúc `att` khoảng 1 GB, kiến trúc
+  `threats` khoảng 2 GB.
 - **RAM:** khoảng 2 GB cho `prepare_data.py` với shard mặc định; `train.py`
   đọc dữ liệu kiểu memory-map nên không cần nạp hết vào RAM.
 - **Ổ đĩa:** nên dùng SSD cho dữ liệu đã chuẩn bị. Xem
@@ -258,6 +259,7 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--no-l1-fact` | | Tắt phần fc0 dùng chung cho các layer stack (mặc định bật) |
 | `--output-lr-scale` | 0.1 | Tốc độ học của lớp đầu ra, tính theo tỉ lệ với `--lr` |
 | `--stack-balance` | 0 (tắt) | Cân bằng loss giữa các layer stack, giá trị là mức trần (ví dụ 8) |
+| `--checkpoint-every` | 1 | Chỉ ghi `epoch_K.pt` mỗi K epoch (và ở epoch cuối); `last.pt` và các `.nnue` luôn được ghi |
 
 Hàm mất mát giống nnue-pytorch: điểm của mạng và điểm trong dữ liệu đều được
 đổi sang xác suất thắng bằng `sigmoid(điểm / scaling)`, mục tiêu là
@@ -300,7 +302,7 @@ val loss giữa các lần train dùng **cùng một tập val**; loss thấp h�
 nghĩa là mạng mạnh hơn, phải đấu mới biết (bước 6).
 
 **Kết quả** trong `runs/gen1/`: mỗi epoch có `epoch_K.pt` (checkpoint, khoảng
-190 MB, kiến trúc `att` khoảng 750 MB) và `epoch_K.nnue` (dùng được ngay
+190 MB, kiến trúc `att` khoảng 750 MB, `threats` khoảng 1,3 GB) và `epoch_K.nnue` (dùng được ngay
 trong engine), cùng `last.pt`. Xóa bớt checkpoint cũ nếu thiếu chỗ, giữ lại
 `last.pt` và các file `.nnue`.
 
@@ -574,6 +576,69 @@ python match.py --engine-a ../src/pikafish-att --net-a runs/att1/epoch_40.nnue \
 Mạng `att` có thể chậm hơn (accumulator phải tính lại nhiều hơn), nên so
 bằng `--movetime` sẽ công bằng hơn `--nodes`.
 
+### 7.3. Kiến trúc `threats` (đặc trưng đe dọa)
+
+Ý tưởng "full threats" của Stockfish / Pikafish, chuyển sang Jieqi: ngoài các
+đặc trưng HalfKA, mạng có thêm một đặc trưng cho mỗi cặp (quân tấn công, ô đi,
+ô đến, quân bị tấn công) đang có trên bàn cờ, kể cả bảo vệ quân mình:
+
+- quân chia làm 16 lớp: mỗi loại quân đã lật của mỗi bên, cộng "quân úp" của
+  mỗi bên; quân úp tấn công như loại quân của ô xuất phát của nó (sĩ úp chỉ
+  trong cung);
+- tổng cộng 94 037 đặc trưng, thường 10–40 đặc trưng bật cùng lúc mỗi bên;
+- feature transformer còn 1024 đầu ra (thay vì 2048) để bù chi phí.
+
+Mạng `threats` (và `att-threats` = `att` + đe dọa) **không tương thích** với
+các bản build khác. Build riêng (nhớ `make clean`):
+
+```
+cd src
+make clean && make -j build ARCH=x86-64-avx2 threats=yes && mv pikafish pikafish-thr
+make clean && make -j build ARCH=x86-64-avx2 threats=yes nnue=att && mv pikafish pikafish-att-thr
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/pikafish-thr --arch threats
+python verify.py --engine ../src/pikafish-att-thr --arch att-threats
+```
+
+**Train** giống `att`: cùng dữ liệu văn bản, chuẩn bị lại với `--arch threats`
+(dữ liệu đã chuẩn bị của các kiến trúc khác không dùng được):
+
+```
+python init_net.py nets/thr0.nnue --arch threats      # chỉ khi cần sinh dữ liệu từ đầu
+python prepare_data.py data/gen0.txt data/gen1.txt --out data/train_thr --arch threats
+python prepare_data.py data/val1.txt --out data/val_thr --arch threats
+python train.py data/train_thr --val data/val_thr --out runs/thr1 \
+    --epochs 40 --epoch-size 10000000 --checkpoint-every 10
+python verify.py --engine ../src/pikafish-thr --net runs/thr1/epoch_40.nnue \
+    --checkpoint runs/thr1/epoch_40.pt
+```
+
+Trọng số đe dọa bắt đầu từ 0 (mạng mới tính giống hệt khi không có đe dọa) và
+được giữ trong khoảng của int8 khi train. `--init-net` chỉ nhận mạng cùng kiến
+trúc; không chuyển được mạng `default` (2048 đầu ra) sang `threats`.
+
+**Chi phí**, cần cân nhắc khi so sánh:
+
+| | `default` | `threats` |
+| --- | --- | --- |
+| Tốc độ engine (bench, 1 luồng, AVX2) | 100 % | khoảng 65–70 % |
+| Bộ nhớ engine cho mạng | khoảng 32 MB | khoảng 120 MB (trọng số đe dọa int8 ≈ 96 MB) |
+| File `.nnue` (nén zstd) | khoảng 8 MB | tới khoảng 60 MB khi trọng số đã train |
+| Dữ liệu đã chuẩn bị | khoảng 260 byte/thế cờ | khoảng 350 byte/thế cờ |
+| `prepare_data.py` | khoảng 15 000 dòng/giây mỗi nhân | khoảng 6 000 dòng/giây mỗi nhân |
+| Checkpoint | khoảng 190 MB | khoảng 1,3 GB |
+
+Vì engine chậm hơn khoảng một phần ba, hãy so với mạng thường train trên cùng
+dữ liệu bằng `--movetime` (hoặc ít nhất kiểm tra lại bằng `--movetime` sau khi
+thắng với `--nodes`):
+
+```
+python match.py --engine-a ../src/pikafish-thr --net-a runs/thr1/epoch_40.nnue \
+    --engine-b ../src/pikafish --net-b nets/genN.nnue \
+    --movetime 100 --workers 15 --sprt 0 5
+```
+
 ## 8. Định dạng dữ liệu
 
 **Văn bản** (`gen_data.py` ghi ra, `prepare_data.py` và `fit_scaling.py` đọc):
@@ -593,6 +658,14 @@ và điểm theo đơn vị nội bộ (`RawScore`).
 - `PREFIX-NNNNN.meta.npy`: bản ghi `bucket` (layer stack), `result`, `score`;
 - `PREFIX.arch`: tên kiến trúc.
 
+Với kiến trúc `threats` / `att-threats`, mỗi shard có thêm (khoảng 90 byte một
+thế cờ):
+
+- `PREFIX-NNNNN.threats.npy`: `uint32 (T,)`, chỉ số đặc trưng đe dọa của mọi
+  thế cờ nối liền nhau, mỗi thế cờ gồm phần của bên đi rồi của bên kia;
+- `PREFIX-NNNNN.thrcount.npy`: `uint8 (N, 2)`, số đặc trưng đe dọa của bên đi
+  và của bên kia.
+
 ## 9. Dung lượng và thời gian
 
 Các con số đo trên máy thử, chỉ để ước lượng; hãy đo lại trên máy của bạn.
@@ -604,8 +677,8 @@ Các con số đo trên máy thử, chỉ để ước lượng; hãy đo lại 
 | File văn bản | khoảng 100 byte/thế cờ (10 triệu ≈ 1 GB) |
 | Dữ liệu đã chuẩn bị | khoảng 260 byte/thế cờ (10 triệu ≈ 2,6 GB) |
 | `prepare_data.py` | khoảng 15 000 dòng/giây mỗi nhân CPU |
-| Checkpoint | khoảng 190 MB (`att`: 750 MB) mỗi epoch |
-| File `.nnue` | khoảng 8 MB (`att`: lớn hơn), nén zstd |
+| Checkpoint | khoảng 190 MB (`att`: 750 MB, `threats`: 1,3 GB) mỗi epoch |
+| File `.nnue` | khoảng 8 MB (`att`: lớn hơn, `threats`: tới khoảng 60 MB), nén zstd |
 
 Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epoch-size
 1000000`) để đo trước khi đặt lịch.
@@ -614,8 +687,9 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 
 | Hiện tượng | Nguyên nhân / cách xử lý |
 | --- | --- |
-| `verify.py` báo `MISMATCH` | Engine và trainer không cùng kiến trúc. Build lại engine từ cùng commit với trainer; với `att` nhớ `make clean` và `--arch att` |
-| Engine báo `network file ... was not loaded` | Sai kiến trúc (mạng `att` trên engine thường hoặc ngược lại), hoặc file không phải `.nnue` nén zstd do trainer xuất |
+| `verify.py` báo `MISMATCH` | Engine và trainer không cùng kiến trúc. Build lại engine từ cùng commit với trainer; với `att` / `threats` nhớ `make clean` và `--arch` tương ứng |
+| Engine báo `network file ... was not loaded` | Sai kiến trúc (mạng `att` / `threats` trên engine thường hoặc ngược lại; `threats=yes` và `nnue=att` phải khớp với kiến trúc của mạng), hoặc file không phải `.nnue` nén zstd do trainer xuất |
+| `no threat data (prepare the data again ...)` | Dữ liệu được chuẩn bị bằng phiên bản cũ của `prepare_data.py`; chạy lại với `--arch threats` |
 | `incompatible network for arch ...` | Truyền mạng sai kiến trúc cho `--init-net` / `serialize.py`; thông báo cho biết kiến trúc thật của file |
 | `prepare_data.py` hết RAM | Giảm `--shard-size` (ví dụ 500000) |
 | `train.py` hết bộ nhớ GPU | Giảm `--batch-size` (ví dụ 8192); kiến trúc `att` cần nhiều hơn |
@@ -634,3 +708,7 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 mọi thay đổi trong `src/nnue`, cập nhật các file này và chạy `verify.py` cho
 từng kiến trúc cho đến khi khớp từng bit. Dữ liệu đã chuẩn bị phải được tạo
 lại; dữ liệu văn bản vẫn dùng được.
+
+Với các kiến trúc có đe dọa, phần "Threat features" của `jieqi_features.py`
+phải liệt kê đặc trưng theo đúng thứ tự của `src/nnue/features/jieqi_threats.cpp`
+(engine kiểm tra số đặc trưng lúc khởi động và dừng nếu khác 94 037).

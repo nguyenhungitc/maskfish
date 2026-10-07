@@ -56,7 +56,7 @@ def main():
     print(f"arch {F.ARCH}")
 
     import torch
-    from model import NNUE, NNUE2SCORE
+    from model import NNUE, NNUE2SCORE, threat_inputs
 
     model = None
     tmp = None
@@ -74,8 +74,12 @@ def main():
             for p in model.stacks.parameters():
                 p.uniform_(-0.5, 0.5)
             model.stacks.l1_fact.weight.uniform_(-0.2, 0.2)
-            model.ft.weight[:, :2048].uniform_(-0.1, 0.1)
-            model.ft.weight[:, 2048:].uniform_(-0.2, 0.2)   # also test every PSQT row
+            L1 = F.L1
+            model.ft.weight[:, :L1].uniform_(-0.1, 0.1)
+            model.ft.weight[:, L1:].uniform_(-0.2, 0.2)   # also test every PSQT row
+            if model.ft_thr is not None:
+                model.ft_thr.weight[:, :L1].uniform_(-0.1, 0.1)
+                model.ft_thr.weight[:, L1:].uniform_(-0.2, 0.2)
             model.ft.weight[F.PAD_INDEX].zero_()
             model.ft_ps.weight.uniform_(-0.03, 0.03)
             model.ft_kb.weight.uniform_(-0.03, 0.03)
@@ -102,9 +106,10 @@ def main():
         if model is not None:
             s, n, b, _ = F.fen_to_features(fen)
             pad = lambda l: l + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(l))
+            thr = threat_inputs(list(F.fen_to_threats(fen))) if F.THREATS else None
             with torch.no_grad():
                 v = model(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
-                          torch.tensor([b])).item() * NNUE2SCORE
+                          torch.tensor([b]), thr).item() * NNUE2SCORE
             worst = max(worst, abs(v - (e_psqt + e_pos)))
     engine.quit()
     if tmp:

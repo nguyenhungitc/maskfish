@@ -11,7 +11,7 @@ src/nnue/nnue_accumulator.cpp:
   (own / opponent), activated once per piece in the pool, i.e. its weight is
   multiplied by the count.
 
-Two architectures exist (select with set_arch() before building a model):
+Four architectures exist (select with set_arch() before building a model):
 
 * "default": the engine built normally.
 * "att": the engine built with `make nnue=att`. The feature transformer is
@@ -19,6 +19,11 @@ Two architectures exist (select with set_arch() before building a model):
   (4 attack buckets: has a rook? has a knight or a cannon?) and, when both
   kings are on the middle file, the board is mirrored according to its
   left/right balance ("mid mirror"). Both ideas come from Pikafish.
+* "threats" / "att-threats": the engine built with `make threats=yes`
+  (optionally with `nnue=att`). Threat features are added to the inputs above
+  and the feature transformer has 1024 outputs instead of 2048 (see the
+  "Threat features" section below). Idea and design from Pikafish/Stockfish
+  ("full threats"), adapted to dark pieces.
 
 If you change the feature set in the engine, change it here too and re-run
 verify.py.
@@ -40,26 +45,30 @@ NUM_PSQT_BUCKETS = 16
 NUM_LAYER_STACKS = 16
 
 ARCHS = {
-    # name: (attack buckets, feature hash, mid mirror)
-    "default": (1, 0x0D17B100, False),
-    "att": (4, 0x7A17B104, True),
+    # name: (attack buckets, feature hash, mid mirror, threat features)
+    "default": (1, 0x0D17B100, False, False),
+    "att": (4, 0x7A17B104, True, False),
+    "threats": (1, 0x0D17B100, False, True),
+    "att-threats": (4, 0x7A17B104, True, True),
 }
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
+L1 = 2048                           # feature transformer outputs (1024 with threats)
 
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, NUM_FEATURES, PAD_INDEX
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, NUM_FEATURES, PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS = ARCHS[name]
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
+    L1 = 1024 if THREATS else 2048
 
 # Engine piece codes (src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)
@@ -345,6 +354,216 @@ def fen_to_features(fen: str):
     return (active_features(pos, stm), active_features(pos, 1 - stm),
             layer_stack_bucket(pos), stm)
 
+
+
+# ---------------------------------------------------------------- threat features
+#
+# Mirrors src/nnue/features/jieqi_threats.{h,cpp} (engine built with
+# `make threats=yes`). One feature per (attacker, from, to, attacked) where
+# the piece on `to` is attacked (or defended) by the piece on `from`:
+#
+# * pieces are grouped in 16 classes: class = piece code for a revealed piece
+#   (1..7 white, 9..15 black) and color * 8 for a dark piece (0 white, 8 black);
+# * a dark piece attacks like the kind of piece that starts on its square; a
+#   dark advisor only inside the palace (it must stay there when it moves);
+# * attacks are those of the engine (src/bitboard.cpp): rook slides, cannon
+#   captures over exactly one screen, knight and bishop can be blocked, revealed
+#   advisors and bishops go anywhere (Jieqi rules), king steps in the palace,
+#   pawns forward and also sideways once across the river;
+# * squares are seen from the perspective (rotated for black, mirrored like the
+#   HalfKA features) and the colors of both classes are swapped for black;
+# * a threat between two pieces of the same kind that always attack each other
+#   (not knights; pawns facing each other or side by side) is counted once:
+#   only the direction with from > to (after the square mapping) is a feature.
+#
+# The feature index is BASE[a][from][to] + rank of the attacked class among the
+# classes allowed on (a, from, to), enumerated in the same order as the engine:
+# attacker class, from square, to square (ascending), attacked class.
+
+NUM_CLASSES = 16
+MAX_THREATS = 144                    # engine: JieqiThreats::MaxActiveDimensions
+THREAT_HASH = 0x5B1E7A39             # engine: JieqiThreats::HashValue
+
+_ORTH = ((0, 1), (0, -1), (1, 0), (-1, 0))
+_DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+_KNIGHT = ((1, 2), (-1, 2), (1, -2), (-1, -2), (2, 1), (2, -1), (-2, 1), (-2, -1))
+_BISHOP = ((2, 2), (2, -2), (-2, 2), (-2, -2))
+PALACE = frozenset(make_square(f, r) for f in (3, 4, 5) for r in (0, 1, 2, 7, 8, 9))
+
+
+def _on_board(f: int, r: int) -> bool:
+    return 0 <= f < FILE_NB and 0 <= r < RANK_NB
+
+
+def _dark_kind(s: int) -> int:
+    """Piece type that starts on square s (0 if none or the king)."""
+    ch = DARK_PIECES[s]
+    return 0 if ch in ".kK" else type_of(PIECE_TO_CHAR.index(ch))
+
+
+def piece_attacks(pt: int, c: int, s: int, occupied, dark: bool = False) -> list:
+    """Squares attacked by a piece of type pt and color c on s (engine rules).
+    `occupied` supports `in`; for sliders the first blocker is included."""
+    f, r = file_of(s), rank_of(s)
+    out = []
+    if pt == ROOK or pt == CANNON:
+        for df, dr in _ORTH:
+            x, y, hurdle = f + df, r + dr, False
+            while _on_board(x, y):
+                t = make_square(x, y)
+                if pt == ROOK or hurdle:
+                    out.append(t)
+                if t in occupied:
+                    if pt == CANNON and not hurdle:
+                        hurdle = True
+                    else:
+                        break
+                x, y = x + df, y + dr
+    elif pt == KNIGHT:
+        for df, dr in _KNIGHT:
+            if _on_board(f + df, r + dr):
+                leg = make_square(f + df // 2, r) if abs(df) == 2 else make_square(f, r + dr // 2)
+                if leg not in occupied:
+                    out.append(make_square(f + df, r + dr))
+    elif pt == BISHOP:
+        for df, dr in _BISHOP:
+            if _on_board(f + df, r + dr) and make_square(f + df // 2, r + dr // 2) not in occupied:
+                out.append(make_square(f + df, r + dr))
+    elif pt == ADVISOR:
+        for df, dr in _DIAG:
+            if _on_board(f + df, r + dr):
+                t = make_square(f + df, r + dr)
+                if not dark or t in PALACE:
+                    out.append(t)
+    elif pt == KING:
+        for df, dr in _ORTH:
+            if _on_board(f + df, r + dr) and make_square(f + df, r + dr) in PALACE:
+                out.append(make_square(f + df, r + dr))
+    elif pt == PAWN:
+        fwd = 1 if c == WHITE else -1
+        if _on_board(f, r + fwd):
+            out.append(make_square(f, r + fwd))
+        if (r > 4) if c == WHITE else (r < 5):
+            for df in (1, -1):
+                if _on_board(f + df, r):
+                    out.append(make_square(f + df, r))
+    return out
+
+
+def threat_class(pc: int, dark: bool) -> int:
+    return (pc >> 3) << 3 if dark else pc
+
+
+def _class_movement(cls: int, s: int) -> tuple[int, bool]:
+    """(piece type it moves like, dark) for a class on square s."""
+    if cls & 7:
+        return cls & 7, False
+    return _dark_kind(s), True
+
+
+def _class_squares(cls: int) -> frozenset:
+    c, pt = cls >> 3, cls & 7
+    if pt == 0:
+        return frozenset(s for s in range(SQUARE_NB) if _dark_kind(s)
+                         and DARK_PIECES[s].isupper() == (c == WHITE))
+    if pt == KING:
+        return frozenset(s for s in PALACE if (rank_of(s) < 5) == (c == WHITE))
+    return frozenset(range(SQUARE_NB))
+
+
+def _empty_targets(cls: int, s: int) -> list:
+    """Every square the class could attack from s on some board (a superset:
+    sliders on an empty board, cannons with a screen next to them)."""
+    pt, dark = _class_movement(cls, s)
+    occupied = ()
+    if pt == CANNON:
+        f, r = file_of(s), rank_of(s)
+        occupied = {make_square(f + df, r + dr) for df, dr in _ORTH if _on_board(f + df, r + dr)}
+    return piece_attacks(pt, cls >> 3, s, occupied, dark)
+
+
+def _semi_excluded(a: int, b: int, frm: int, to: int) -> bool:
+    """Threats that always come in pairs (both pieces attack each other):
+    only the one with frm > to is kept."""
+    pa, pb = a & 7, b & 7
+    if pa == 0 or pa != pb or pa == KNIGHT:
+        return False
+    if pa == PAWN:
+        enemy = (a >> 3) != (b >> 3)
+        if not ((enemy and file_of(frm) == file_of(to))
+                or (not enemy and rank_of(frm) == rank_of(to))):
+            return False
+    return not frm > to
+
+
+def _build_threat_tables():
+    squares = [_class_squares(cl) for cl in range(NUM_CLASSES)]
+    base = [0] * (NUM_CLASSES * SQUARE_NB * SQUARE_NB)
+    mask = [0] * (NUM_CLASSES * SQUARE_NB * SQUARE_NB)
+    n = 0
+    for a in range(NUM_CLASSES):
+        for frm in range(SQUARE_NB):
+            if frm not in squares[a]:
+                continue
+            for to in sorted(set(_empty_targets(a, frm))):
+                m = 0
+                for b in range(NUM_CLASSES):
+                    if to in squares[b] and not _semi_excluded(a, b, frm, to):
+                        m |= 1 << b
+                k = (a * SQUARE_NB + frm) * SQUARE_NB + to
+                base[k], mask[k] = n, m
+                n += bin(m).count("1")
+    return base, mask, n
+
+
+THREAT_BASE, THREAT_MASK, THREAT_DIMS = _build_threat_tables()   # 94037 features
+
+
+def make_threat_index(a: int, frm: int, to: int, b: int) -> int:
+    """Index of a threat whose squares are already mapped to the perspective and
+    whose classes are already color-swapped for black; -1 if not a feature."""
+    k = (a * SQUARE_NB + frm) * SQUARE_NB + to
+    m = THREAT_MASK[k]
+    if not (m >> b) & 1:
+        return -1
+    return THREAT_BASE[k] + bin(m & ((1 << b) - 1)).count("1")
+
+
+def physical_threats(pos: JieqiPosition) -> list:
+    """All (attacker class, from, to, attacked class) of a position."""
+    occupied = {s for s in range(SQUARE_NB) if pos.board[s]}
+    out = []
+    for frm in sorted(occupied):
+        pc, dark = pos.board[frm], pos.dark[frm]
+        a = threat_class(pc, dark)
+        for to in piece_attacks(pc & 7, pc >> 3, frm, occupied, dark):
+            if to in occupied:
+                out.append((a, frm, to, threat_class(pos.board[to], pos.dark[to])))
+    return out
+
+
+def active_threats(pos: JieqiPosition, perspective: int, physical=None) -> list:
+    """Active threat feature indices for one perspective, in ascending order."""
+    if physical is None:
+        physical = physical_threats(pos)
+    _, mirror = feature_bucket(pos, perspective)
+    imap = INDEX_MAP[int(mirror)][int(perspective == BLACK)]
+    flip = 8 if perspective == BLACK else 0
+    out = []
+    for a, frm, to, b in physical:
+        i = make_threat_index(a ^ flip, imap[frm], imap[to], b ^ flip)
+        if i >= 0:
+            out.append(i)
+    out.sort()
+    return out
+
+
+def fen_to_threats(fen: str):
+    """Returns (stm_threats, nstm_threats) for the threat architectures."""
+    pos = parse_fen(fen)
+    phys = physical_threats(pos)
+    stm = pos.side_to_move
+    return active_threats(pos, stm, phys), active_threats(pos, 1 - stm, phys)
 
 # Piece values (src/types.h), in engine internal units, for the PSQT init
 PIECE_VALUE = {ROOK: 1080, ADVISOR: 243, CANNON: 769, PAWN: 149, KNIGHT: 616, BISHOP: 218,

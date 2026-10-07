@@ -7,10 +7,16 @@ train.py reads directly (memory-mapped, no parsing during training).
        data/train-00001.* ...         one pair of files per shard
        data/train.arch                architecture of the features
 
+The threat architectures (--arch threats / att-threats) also write, per shard:
+       data/train-00000.threats.npy   uint32 (T,): threat feature indices of all
+                                      positions, stm then nstm, position by position
+       data/train-00000.thrcount.npy  uint8 (N, 2): number of stm / nstm threats
+
 The input is read as a stream and every shard (--shard-size positions) is
 shuffled before it is written, so the memory needed is about
-2 x 260 bytes x shard size whatever the amount of data. train.py draws its
-batches from random shards, which mixes the data across shards.
+2 x 260 bytes x shard size (2 x 500 bytes with threats) whatever the amount of
+data. train.py draws its batches from random shards, which mixes the data
+across shards.
 Lines that do not parse are skipped.
 
 Data scored by another engine (AB-JChess, see rescore.py) uses that engine's
@@ -44,6 +50,8 @@ def parse_chunk(lines: list[str]):
     """Parses lines into compact arrays (done in the worker processes)."""
     feats = np.full((len(lines), 2, F.MAX_ACTIVE), F.PAD_INDEX, dtype=np.int16)
     meta = np.zeros(len(lines), dtype=META_DTYPE)
+    counts = np.zeros((len(lines), 2), dtype=np.uint8)
+    threats = []
     n = 0
     for line in lines:
         try:
@@ -54,13 +62,22 @@ def parse_chunk(lines: list[str]):
             s, o, b, _ = F.fen_to_features(fen)
             if len(s) > F.MAX_ACTIVE or len(o) > F.MAX_ACTIVE:
                 continue
+            if F.THREATS:
+                ts, to = F.fen_to_threats(fen)
         except Exception:
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
         meta[n] = (b, result, max(-32000, min(32000, score)))
+        if F.THREATS:
+            counts[n] = (len(ts), len(to))
+            threats.append(ts)
+            threats.append(to)
         n += 1
-    return feats[:n], meta[:n], len(lines)
+    thr = None
+    if F.THREATS:
+        thr = (np.fromiter((i for t in threats for i in t), dtype=np.uint32), counts[:n])
+    return feats[:n], meta[:n], thr, len(lines)
 
 
 def read_chunks(paths: list[str]):
@@ -73,12 +90,29 @@ def read_chunks(paths: list[str]):
                 yield lines
 
 
-def write_shard(out: str, index: int, feats: list, metas: list, rng) -> int:
+def shuffle_threats(flat: np.ndarray, counts: np.ndarray, order: np.ndarray):
+    """Reorders ragged per-position threat lists (see the module docstring)."""
+    per_pos = counts.astype(np.int64).sum(axis=1)
+    starts = np.concatenate(([0], np.cumsum(per_pos)))[:-1]
+    new_len = per_pos[order]
+    # index into flat for every element of the shuffled array
+    new_starts = np.concatenate(([0], np.cumsum(new_len)))[:-1]
+    src = np.repeat(starts[order] - new_starts, new_len) + np.arange(new_len.sum())
+    return flat[src], counts[order]
+
+
+def write_shard(out: str, index: int, feats: list, metas: list, threats: list, rng) -> int:
     f = np.concatenate(feats)
     m = np.concatenate(metas)
     order = rng.permutation(len(m))
     np.save(f"{out}-{index:05d}.features.npy", f[order])
     np.save(f"{out}-{index:05d}.meta.npy", m[order])
+    if F.THREATS:
+        flat = np.concatenate([t[0] for t in threats])
+        counts = np.concatenate([t[1] for t in threats])
+        flat, counts = shuffle_threats(flat, counts, order)
+        np.save(f"{out}-{index:05d}.threats.npy", flat)
+        np.save(f"{out}-{index:05d}.thrcount.npy", counts)
     return len(m)
 
 
@@ -100,21 +134,22 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    shard, buf_f, buf_m, buffered = 0, [], [], 0
+    shard, buf_f, buf_m, buf_t, buffered = 0, [], [], [], 0
     total_in = total_out = 0
     with mp.Pool(args.workers, initializer=_init_worker,
                  initargs=(args.arch, args.max_score, args.score_scale)) as pool:
-        for feats, meta, n_in in pool.imap(parse_chunk, read_chunks(args.inputs)):
+        for feats, meta, thr, n_in in pool.imap(parse_chunk, read_chunks(args.inputs)):
             total_in += n_in
             buf_f.append(feats)
             buf_m.append(meta)
+            buf_t.append(thr)
             buffered += len(meta)
             if buffered >= args.shard_size:
-                total_out += write_shard(args.out, shard, buf_f, buf_m, rng)
+                total_out += write_shard(args.out, shard, buf_f, buf_m, buf_t, rng)
                 print(f"shard {shard}: {buffered} positions ({total_in} lines read)", flush=True)
-                shard, buf_f, buf_m, buffered = shard + 1, [], [], 0
+                shard, buf_f, buf_m, buf_t, buffered = shard + 1, [], [], [], 0
         if buffered:
-            total_out += write_shard(args.out, shard, buf_f, buf_m, rng)
+            total_out += write_shard(args.out, shard, buf_f, buf_m, buf_t, rng)
             shard += 1
 
     with open(args.out + ".arch", "w") as f:

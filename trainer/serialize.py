@@ -4,14 +4,19 @@ File layout (src/nnue/network.cpp, nnue_feature_transformer.h, layers/):
 
     u32 version, u32 network hash, u32 len, description
     u32 feature transformer hash
-      LEB128 int16 biases[2048]           (scale 127, the engine doubles them)
-      LEB128 int16 weights[7560][2048]
+      LEB128 int16 biases[L1]             (scale 127, the engine doubles them)
+      LEB128 int16 weights[7560][L1]
       LEB128 int32 psqt[7560][16]         (scale 600 * 16)
+      threat architectures only:
+      LEB128 int8  threat weights[94037][L1] (scale 127, added twice by the engine)
+      LEB128 int32 threat psqt[94037][16]    (scale 600 * 16)
     16 x layer stack:
       u32 architecture hash
-      fc0: int32 bias[16]  (scale 64*127), int8 weight[16][2048] (scale 64)
+      fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
       fc1: int32 bias[32]  (scale 64*127), int8 weight[32][32]   (30 used)
       fc2: int32 bias[1]   (scale 600*16), int8 weight[1][32]    (scale 600*16/127)
+
+L1 = 2048, or 1024 for the threat architectures. (7560 is 30240 for "att".)
 
 The whole file is then compressed with zstd, which the engine requires.
 
@@ -31,19 +36,41 @@ import numpy as np
 import jieqi_features as F
 
 VERSION = 0x7AF32F20
-ARCH_HASH = 0x63336B4A      # layer stacks (same for every feature set)
 LEB128_MAGIC = b"COMPRESSED_LEB128"
+
+L2, L3 = 15, 32
+
+
+def arch_hash(l1: int | None = None) -> int:
+    """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
+    (0x63336B4A for L1 = 2048, 0x63336A4A for 1024)."""
+    m = 0xFFFFFFFF
+    l1 = F.L1 if l1 is None else l1
+
+    def affine(prev, outputs):
+        h = (0xCC03DAE4 + outputs) & m
+        return h ^ (prev >> 1) ^ ((prev << 31) & m)
+
+    def crelu(prev):
+        return (0x538D24C7 + prev) & m
+
+    h = 0xEC42E90D ^ (l1 * 2)
+    h = crelu(affine(h, L2 + 1))
+    h = crelu(affine(h, L3))
+    return affine(h, 1)
 
 
 def ft_hash() -> int:
-    """Feature transformer hash: feature set hash ^ (2048 * 2)."""
-    return F.FEATURE_HASH ^ (2048 * 2)
+    """Feature transformer hash: feature set hash(es) ^ (L1 * 2)."""
+    h = F.FEATURE_HASH ^ (F.THREAT_HASH if F.THREATS else 0)
+    return h ^ (F.L1 * 2)
 
 
 def network_hash() -> int:
-    return ft_hash() ^ ARCH_HASH
+    return ft_hash() ^ arch_hash()
 
-L1, L2, L3 = 2048, 15, 32
+
+ARCH_HASH = arch_hash(2048)   # kept for compatibility (default architecture)
 PSQT = F.NUM_PSQT_BUCKETS
 STACKS = F.NUM_LAYER_STACKS
 FC1_PADDED_IN = 32
@@ -126,6 +153,7 @@ def quantize(model) -> dict:
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE, MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT)
 
+    L1 = F.L1
     model = model.coalesced()
     with torch.no_grad():
         # Feature transformer: done with torch in float32 to keep memory low
@@ -142,6 +170,15 @@ def quantize(model) -> dict:
         q["ft_weight"] = ftw.to(torch.int16).cpu().numpy()
         del ftw
         q["psqt"] = np.round(w[:, L1:].cpu().double().numpy() * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+        if F.THREATS:
+            tw = model.ft_thr.weight.detach()
+            tq = torch.round(tw[:, :L1].float() * FT_SCALE)
+            if tq.abs().max().item() > 127:
+                raise ValueError("threat weights out of the int8 range")
+            q["thr_weight"] = tq.to(torch.int8).cpu().numpy()
+            del tq
+            q["thr_psqt"] = np.round(tw[:, L1:].cpu().double().numpy()
+                                     * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
 
         st = model.stacks
         l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, L2 + 1, L1)
@@ -178,9 +215,13 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
     _write_leb(buf, q["ft_bias"].astype(np.int16))
     _write_leb(buf, q["ft_weight"].astype(np.int16))
     _write_leb(buf, q["psqt"].astype(np.int32))
+    if F.THREATS:
+        _write_leb(buf, q["thr_weight"].astype(np.int8))
+        _write_leb(buf, q["thr_psqt"].astype(np.int32))
 
+    ahash = arch_hash()
     for k in range(STACKS):
-        buf.write(struct.pack("<I", ARCH_HASH))
+        buf.write(struct.pack("<I", ahash))
         buf.write(q["fc0_bias"][k].astype("<i4").tobytes())
         buf.write(q["fc0_weight"][k].astype(np.int8).tobytes())
         buf.write(q["fc1_bias"][k].astype("<i4").tobytes())
@@ -211,10 +252,14 @@ def read_nnue(path: str) -> dict:
     (fth,) = struct.unpack("<I", f.read(4))
     if fth != ft_hash():
         raise ValueError("feature transformer hash mismatch")
+    L1 = F.L1
     q = {"description": description}
     q["ft_bias"] = _read_leb(f, L1)
     q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
     q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
+    if F.THREATS:
+        q["thr_weight"] = _read_leb(f, F.THREAT_DIMS * L1, np.int8).reshape(F.THREAT_DIMS, L1)
+        q["thr_psqt"] = _read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT)
 
     def arr(dtype, n):
         return np.frombuffer(f.read(np.dtype(dtype).itemsize * n), dtype=dtype).astype(np.int64)
@@ -223,7 +268,7 @@ def read_nnue(path: str) -> dict:
     parts = {k: [] for k in keys}
     for _ in range(STACKS):
         (ah,) = struct.unpack("<I", f.read(4))
-        if ah != ARCH_HASH:
+        if ah != arch_hash():
             raise ValueError("architecture hash mismatch")
         parts["fc0_bias"].append(arr("<i4", L2 + 1))
         parts["fc0_weight"].append(arr(np.int8, (L2 + 1) * L1).reshape(L2 + 1, L1))
@@ -237,7 +282,11 @@ def read_nnue(path: str) -> dict:
 
 
 def _arch_network_hashes() -> dict:
-    return {name: (h ^ (2048 * 2)) ^ ARCH_HASH for name, (_, h, _) in F.ARCHS.items()}
+    out = {}
+    for name, (_, h, _, threats) in F.ARCHS.items():
+        l1 = 1024 if threats else 2048
+        out[name] = (h ^ (F.THREAT_HASH if threats else 0) ^ (l1 * 2)) ^ arch_hash(l1)
+    return out
 
 
 def detect_arch(path: str) -> str:
@@ -262,12 +311,16 @@ def load_into_model(q: dict, model):
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE)
     hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
+    L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
         model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
+        if F.THREATS:
+            model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
+            model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
         st = model.stacks
         st.l1.weight[:] = torch.tensor(q["fc0_weight"].reshape(-1, L1) / HIDDEN_WEIGHT_SCALE)
         st.l1.bias[:] = torch.tensor(q["fc0_bias"].reshape(-1) / hb)
@@ -294,15 +347,20 @@ def _tdiv(a: int, b: int) -> int:
 def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
     """Bit-exact integer evaluation, like Network::evaluate() in the engine.
     Returns (psqt, positional, bucket) in internal units."""
+    L1 = F.L1
     stm_f, nstm_f, bucket, _ = F.fen_to_features(fen)
+    thr = F.fen_to_threats(fen) if F.THREATS else ([], [])
     transformed = []
     psqt_acc = []
-    for feats in (stm_f, nstm_f):
+    for feats, thr_feats in zip((stm_f, nstm_f), thr):
         acc = 2 * q["ft_bias"].copy()               # the engine doubles the FT on load
         ps = np.zeros(PSQT, dtype=np.int64)
         for i in feats:
             acc += 2 * q["ft_weight"][i].astype(np.int64)
             ps += q["psqt"][i]
+        for i in thr_feats:                          # threat weights: added twice
+            acc += 2 * q["thr_weight"][i].astype(np.int64)
+            ps += q["thr_psqt"][i]
         a = np.clip(acc[:L1 // 2], 0, 254)
         b = np.clip(acc[L1 // 2:], 0, 254)
         transformed.append((a * b) // 512)

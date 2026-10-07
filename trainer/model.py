@@ -1,10 +1,16 @@
 """PyTorch model of the engine's NNUE (src/nnue/nnue_architecture.h).
 
-    feature transformer: 7560 -> 2048 (+16 PSQT buckets), per perspective
-    pairwise product:     2 x (1024 x 1024) -> 2048
+    feature transformer: 7560 -> L1 (+16 PSQT buckets), per perspective
+    pairwise product:     2 x (L1/2 x L1/2) -> L1
     layer stack (one of 16, chosen by piece count):
-        fc0: 2048 -> 16   (output 15 is added directly to the result)
+        fc0: L1 -> 16   (output 15 is added directly to the result)
         [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
+
+L1 = 2048, or 1024 for the threat architectures, which also have a second
+feature transformer for the 94037 threat features (ft_thr, same outputs and
+PSQT buckets, summed with the first one). Threat features are passed as a
+flat index tensor with offsets (torch EmbeddingBag format), two bags per
+position: side to move, then the other side.
 
 The float model works in "network units": 1.0 == 600 internal units. The
 quantization that serialize.py applies is the one the engine expects (see
@@ -34,7 +40,7 @@ from torch import nn
 
 import jieqi_features as F
 
-L1 = 2048            # feature transformer outputs per perspective
+L1 = 2048            # feature transformer outputs per perspective (F.L1 for the current arch)
 L2 = 15
 L3 = 32
 NNUE2SCORE = 600.0   # network unit -> internal score units
@@ -55,7 +61,8 @@ class LayerStacks(nn.Module):
     def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
         super().__init__()
         self.count = count
-        self.l1 = nn.Linear(L1, (L2 + 1) * count)
+        self.in_dim = F.L1
+        self.l1 = nn.Linear(self.in_dim, (L2 + 1) * count)
         self.l2 = nn.Linear(L2 * 2, L3 * count)
         self.output = nn.Linear(L3, count)
         with torch.no_grad():
@@ -68,7 +75,7 @@ class LayerStacks(nn.Module):
     def add_l1_fact(self):
         """Shared fc0 component (outputs 0..14 only: output 15 is the direct
         term added to the result, kept per stack like in AB-JChess), zeroed."""
-        self.l1_fact = nn.Linear(L1, L2, bias=False)
+        self.l1_fact = nn.Linear(self.in_dim, L2, bias=False)
         with torch.no_grad():
             self.l1_fact.weight.zero_()
 
@@ -97,7 +104,7 @@ class LayerStacks(nn.Module):
                 self.l1.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             else:
                 # Clip the coalesced weights (stack + shared part), as exported
-                w = self.l1.weight.view(self.count, L2 + 1, L1)
+                w = self.l1.weight.view(self.count, L2 + 1, self.in_dim)
                 f = self.l1_fact.weight.unsqueeze(0)
                 w[:, :L2] = torch.clamp(w[:, :L2] + f, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT) - f
                 w[:, L2].clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
@@ -105,10 +112,22 @@ class LayerStacks(nn.Module):
             self.output.weight.clamp_(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
 
 
+def threat_inputs(bags: list) -> tuple:
+    """(indices, offsets) for NNUE.forward from a list of threat index lists
+    (stm, nstm, stm, nstm, ... as returned by F.fen_to_threats)."""
+    off, n = [], 0
+    for bag in bags:
+        off.append(n)
+        n += len(bag)
+    idx = [i for bag in bags for i in bag]
+    return torch.tensor(idx, dtype=torch.long), torch.tensor(off, dtype=torch.long)
+
+
 class NNUE(nn.Module):
     def __init__(self, init_psqt: bool = True, factorized: bool = False, l1_fact: bool = False,
                  kb_factor: bool = False):
         super().__init__()
+        L1 = self.l1_size = F.L1
         width = L1 + F.NUM_PSQT_BUCKETS
         self.ft_buckets = F.NUM_FEATURES // F.PS_NB      # king (x attack) buckets
         # Feature transformer: one row per feature (+1 padding row, never exported)
@@ -126,6 +145,14 @@ class NNUE(nn.Module):
             if init_psqt:
                 values = torch.tensor(F.feature_material_values()) / NNUE2SCORE
                 self.ft.weight[:F.NUM_FEATURES, L1:] = values.unsqueeze(1)
+
+        # Threat features (threat architectures): start at zero, so that a new
+        # model computes the same function as without them
+        self.ft_thr = None
+        if F.THREATS:
+            self.ft_thr = nn.EmbeddingBag(F.THREAT_DIMS, width, mode="sum")
+            with torch.no_grad():
+                self.ft_thr.weight.zero_()
 
         # Training-only parts are created last (and zeroed), so that the real
         # weights drawn from a given seed do not depend on them
@@ -186,10 +213,12 @@ class NNUE(nn.Module):
             plain.ft.weight.copy_(w)
             del w
             plain.ft_bias.copy_(self.ft_bias.detach().cpu())
+            if self.ft_thr is not None:
+                plain.ft_thr.weight.copy_(self.ft_thr.weight.detach().cpu())
             src, dst = self.stacks, plain.stacks
             l1w = src.l1.weight.detach().cpu().clone()
             if src.l1_fact is not None:
-                v = l1w.view(src.count, L2 + 1, L1)
+                v = l1w.view(src.count, L2 + 1, src.in_dim)
                 v[:, :L2] += src.l1_fact.weight.detach().cpu().unsqueeze(0)
             dst.l1.weight.copy_(l1w)
             dst.l1.bias.copy_(src.l1.bias.detach().cpu())
@@ -199,11 +228,21 @@ class NNUE(nn.Module):
         return plain
 
     def forward(self, stm_idx: torch.Tensor, nstm_idx: torch.Tensor,
-                buckets: torch.Tensor) -> torch.Tensor:
+                buckets: torch.Tensor, threats=None) -> torch.Tensor:
         """stm_idx / nstm_idx: (n, MAX_ACTIVE) feature indices padded with
-        PAD_INDEX. Returns the evaluation for the side to move, network units."""
+        PAD_INDEX. threats (threat architectures): (indices, offsets) of the 2n
+        bags of threat features (stm, nstm, stm, nstm, ...). Returns the
+        evaluation for the side to move, network units."""
+        L1 = self.l1_size
         stm = self.transform(stm_idx) + self.ft_bias
         nstm = self.transform(nstm_idx) + self.ft_bias
+        if self.ft_thr is not None:
+            if threats is None:
+                raise ValueError("this architecture needs the threat features")
+            idx, off = threats
+            t = self.ft_thr(idx.long(), off.long()).view(stm.shape[0], 2, -1)
+            stm = stm + t[:, 0]
+            nstm = nstm + t[:, 1]
 
         b = buckets.long().unsqueeze(1)
         psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
@@ -220,7 +259,10 @@ class NNUE(nn.Module):
         with torch.no_grad():
             # Keep the FT weights inside the int16 range of the file
             lim = 32767.0 / FT_SCALE / 2.0
+            L1 = self.l1_size
             self.ft.weight[:, :L1].clamp_(-lim, lim)
+            if self.ft_thr is not None:   # int8 in the file
+                self.ft_thr.weight[:, :L1].clamp_(-127.0 / FT_SCALE, 127.0 / FT_SCALE)
             self.ft.weight[F.PAD_INDEX].zero_()
             if self.ft_ps is not None:
                 self.ft_ps.weight[F.PS_NB].zero_()
