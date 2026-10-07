@@ -90,6 +90,9 @@ class FeatureTransformer {
     // Number of input/output dimensions
     static constexpr IndexType InputDimensions  = FeatureSet::Dimensions;
     static constexpr IndexType OutputDimensions = HalfDimensions;
+#ifdef JIEQI_NNUE_THREATS
+    static constexpr IndexType ThreatInputDimensions = ThreatFeatureSet::Dimensions;
+#endif
 
     // Size of forward propagation buffer
     static constexpr std::size_t BufferSize = OutputDimensions * sizeof(OutputType);
@@ -119,17 +122,30 @@ class FeatureTransformer {
 
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
+#ifdef JIEQI_NNUE_THREATS
+        return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2);
+#else
         return FeatureSet::HashValue ^ (OutputDimensions * 2);
+#endif
     }
 
+    // The 8-bit threat weights are permuted element for element like the
+    // 16-bit ones (blocks of 8 elements), so that they line up with the
+    // accumulator.
     void permute_weights() {
         permute<16>(biases, PackusEpi16Order);
         permute<16>(weights, PackusEpi16Order);
+#ifdef JIEQI_NNUE_THREATS
+        permute<8>(threatWeights, PackusEpi16Order);
+#endif
     }
 
     void unpermute_weights() {
         permute<16>(biases, InversePackusEpi16Order);
         permute<16>(weights, InversePackusEpi16Order);
+#ifdef JIEQI_NNUE_THREATS
+        permute<8>(threatWeights, InversePackusEpi16Order);
+#endif
     }
 
     inline void scale_weights(bool read) {
@@ -150,6 +166,14 @@ class FeatureTransformer {
         read_leb_128<BiasType>(stream, biases, HalfDimensions);
         read_leb_128<WeightType>(stream, weights, HalfDimensions * InputDimensions);
         read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
+#ifdef JIEQI_NNUE_THREATS
+        // Threat weights are not doubled: the threat accumulator is doubled
+        // when it is added in transform()
+        read_leb_128<ThreatWeightType>(stream, threatWeights,
+                                       HalfDimensions * ThreatInputDimensions);
+        read_leb_128<PSQTWeightType>(stream, threatPsqtWeights,
+                                     PSQTBuckets * ThreatInputDimensions);
+#endif
 
         permute_weights();
         scale_weights(true);
@@ -166,6 +190,12 @@ class FeatureTransformer {
         write_leb_128<BiasType>(stream, copy->biases, HalfDimensions);
         write_leb_128<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
         write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
+#ifdef JIEQI_NNUE_THREATS
+        write_leb_128<ThreatWeightType>(stream, copy->threatWeights,
+                                        HalfDimensions * ThreatInputDimensions);
+        write_leb_128<PSQTWeightType>(stream, copy->threatPsqtWeights,
+                                      PSQTBuckets * ThreatInputDimensions);
+#endif
 
         return !stream.fail();
     }
@@ -175,6 +205,10 @@ class FeatureTransformer {
         hash_combine(h, get_raw_data_hash(biases));
         hash_combine(h, get_raw_data_hash(weights));
         hash_combine(h, get_raw_data_hash(psqtWeights));
+#ifdef JIEQI_NNUE_THREATS
+        hash_combine(h, get_raw_data_hash(threatWeights));
+        hash_combine(h, get_raw_data_hash(threatPsqtWeights));
+#endif
         hash_combine(h, get_hash_value());
         return h;
     }
@@ -193,11 +227,34 @@ class FeatureTransformer {
 
         const Color perspectives[2]  = {pos.side_to_move(), ~pos.side_to_move()};
         const auto& psqtAccumulation = (accumulatorState.acc<HalfDimensions>()).psqtAccumulation;
+        const auto& accumulation     = (accumulatorState.acc<HalfDimensions>()).accumulation;
+
+#ifdef JIEQI_NNUE_THREATS
+        // Add the threat accumulators (in half units: the threat weights are
+        // not doubled on load) to the HalfKA ones. The sums are computed in 32
+        // bits and saturated, which does not change the clipped result.
+        const auto& threats = accumulatorState.threats;
         const auto  psqt =
-          (psqtAccumulation[perspectives[0]][bucket] - psqtAccumulation[perspectives[1]][bucket])
+          (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
+           - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
           / 2;
 
-        const auto& accumulation = (accumulatorState.acc<HalfDimensions>()).accumulation;
+        alignas(CacheLineSize) BiasType combined[2][HalfDimensions];
+        for (IndexType p = 0; p < 2; ++p)
+        {
+            const BiasType* a = accumulation[perspectives[p]];
+            const BiasType* t = threats.acc[perspectives[p]];
+            for (IndexType j = 0; j < HalfDimensions; ++j)
+                combined[p][j] = BiasType(std::clamp(int(a[j]) + 2 * int(t[j]), -32768, 32767));
+        }
+        const BiasType* accumulations[2] = {combined[0], combined[1]};
+#else
+        const auto psqt =
+          (psqtAccumulation[perspectives[0]][bucket] - psqtAccumulation[perspectives[1]][bucket])
+          / 2;
+        const BiasType* accumulations[2] = {accumulation[perspectives[0]],
+                                            accumulation[perspectives[1]]};
+#endif
 
         for (IndexType p = 0; p < 2; ++p)
         {
@@ -212,9 +269,9 @@ class FeatureTransformer {
             const vec_t Zero = vec_zero();
             const vec_t One  = vec_set_16(127 * 2);
 
-            const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][0]));
+            const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulations[p][0]));
             const vec_t* in1 =
-              reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][HalfDimensions / 2]));
+              reinterpret_cast<const vec_t*>(&(accumulations[p][HalfDimensions / 2]));
             vec_t* out = reinterpret_cast<vec_t*>(output + offset);
 
             // Per the NNUE architecture, here we want to multiply pairs of
@@ -296,9 +353,8 @@ class FeatureTransformer {
 
             for (IndexType j = 0; j < HalfDimensions / 2; ++j)
             {
-                BiasType sum0 = accumulation[static_cast<int>(perspectives[p])][j + 0];
-                BiasType sum1 =
-                  accumulation[static_cast<int>(perspectives[p])][j + HalfDimensions / 2];
+                BiasType sum0 = accumulations[p][j + 0];
+                BiasType sum1 = accumulations[p][j + HalfDimensions / 2];
                 sum0               = std::clamp<BiasType>(sum0, 0, 127 * 2);
                 sum1               = std::clamp<BiasType>(sum1, 0, 127 * 2);
                 output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);
@@ -313,6 +369,10 @@ class FeatureTransformer {
     alignas(CacheLineSize) BiasType biases[HalfDimensions];
     alignas(CacheLineSize) WeightType weights[HalfDimensions * InputDimensions];
     alignas(CacheLineSize) PSQTWeightType psqtWeights[InputDimensions * PSQTBuckets];
+#ifdef JIEQI_NNUE_THREATS
+    alignas(CacheLineSize) ThreatWeightType threatWeights[HalfDimensions * ThreatInputDimensions];
+    alignas(CacheLineSize) PSQTWeightType threatPsqtWeights[ThreatInputDimensions * PSQTBuckets];
+#endif
 };
 
 }  // namespace Stockfish::Eval::NNUE

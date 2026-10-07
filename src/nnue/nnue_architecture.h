@@ -26,6 +26,7 @@
 #include <iosfwd>
 
 #include "features/half_ka_v2_hm.h"
+#include "features/jieqi_threats.h"
 #include "layers/affine_transform.h"
 #include "layers/affine_transform_sparse_input.h"
 #include "layers/clipped_relu.h"
@@ -37,8 +38,17 @@ namespace Stockfish::Eval::NNUE {
 // Input features used in evaluation function
 using FeatureSet = Features::HalfKAv2_hm;
 
+#ifdef JIEQI_NNUE_THREATS
+// Threat input features (make threats=yes), added to the HalfKA ones. As in
+// Pikafish, the feature transformer then has 1024 outputs instead of 2048.
+using ThreatFeatureSet = Features::JieqiThreats;
+
+// Number of input feature dimensions after conversion
+constexpr IndexType TransformedFeatureDimensionsBig = 1024;
+#else
 // Number of input feature dimensions after conversion
 constexpr IndexType TransformedFeatureDimensionsBig = 2048;
+#endif
 constexpr int       L2Big                           = 15;
 constexpr int       L3Big                           = 32;
 

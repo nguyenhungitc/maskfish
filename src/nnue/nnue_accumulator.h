@@ -52,6 +52,25 @@ struct alignas(CacheLineSize) Accumulator {
 };
 
 
+#ifdef JIEQI_NNUE_THREATS
+// Accumulator of the threat features (make threats=yes), in half units (the
+// threat weights are not doubled on load), with the sorted list of the threats
+// of the position. It is updated lazily, from the nearest earlier state of the
+// stack that has one, by the difference between the two lists of threats: this
+// needs no per-move bookkeeping and is right whatever happened in between
+// (reveals, chance nodes); a change of mirroring means a refresh.
+template<IndexType Size>
+struct alignas(CacheLineSize) ThreatAccumulator {
+    std::int16_t               acc[COLOR_NB][Size];
+    std::int32_t               psqt[COLOR_NB][PSQTBuckets];
+    std::array<bool, COLOR_NB> computed;
+    std::array<bool, COLOR_NB> mirror;      // mirroring acc was computed with
+    bool                       listValid;   // list / count hold the threats
+    std::uint16_t              count;
+    ThreatFeatureSet::Threat   list[ThreatFeatureSet::MaxActiveDimensions];
+};
+#endif
+
 // AccumulatorCaches struct provides per-thread accumulator caches, where each
 // cache contains multiple entries for each of the possible king squares.
 // When the accumulator needs to be refreshed, the cached entry is used to more
@@ -111,6 +130,9 @@ struct AccumulatorCaches {
 struct AccumulatorState {
     Accumulator<TransformedFeatureDimensionsBig> accumulatorBig;
     DirtyPiece                                   dirtyPiece;
+#ifdef JIEQI_NNUE_THREATS
+    ThreatAccumulator<TransformedFeatureDimensionsBig> threats;
+#endif
 
     template<IndexType Size>
     auto& acc() noexcept {
@@ -159,6 +181,16 @@ class AccumulatorStack {
 
     template<Color Perspective, IndexType Dimensions>
     [[nodiscard]] std::size_t find_last_usable_accumulator() const noexcept;
+
+#ifdef JIEQI_NNUE_THREATS
+    template<IndexType Dimensions>
+    void evaluate_threats(const Position&                       pos,
+                          const FeatureTransformer<Dimensions>& featureTransformer) noexcept;
+
+    template<Color Perspective, IndexType Dimensions>
+    void evaluate_threats_side(const Position&                       pos,
+                               const FeatureTransformer<Dimensions>& featureTransformer) noexcept;
+#endif
 
     template<Color Perspective, IndexType Dimensions>
     void forward_update_incremental(const Position&                       pos,

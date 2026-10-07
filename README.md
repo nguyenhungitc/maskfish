@@ -199,6 +199,15 @@ Both ideas come from Pikafish (xiangqi) and are also used by AB-JChess. Train
 such a network with `--arch att` in `trainer/`, and compare it with a default
 network trained on the same data before adopting it.
 
+`make -j build threats=yes` (possibly with `nnue=att`) adds **threat
+inputs**, after the "full threats" networks of Stockfish and Pikafish: one
+feature per (attacking piece, from square, to square, attacked piece) present
+on the board, 94037 features, where a dark piece attacks like the kind of
+piece of its starting square. The feature transformer has 1024 outputs
+instead of 2048. The engine is about a third slower and needs about 90 MB
+more memory for the network. Train such a network with `--arch threats` (or
+`att-threats`); see section 7.3 of `trainer/README.md`.
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

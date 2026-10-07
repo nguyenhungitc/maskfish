@@ -21,6 +21,7 @@
 #include <cassert>
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <type_traits>
 
 #include "../bitboard.h"
@@ -64,6 +65,10 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
 void AccumulatorState::reset(const DirtyPiece& dp) noexcept {
     dirtyPiece = dp;
     accumulatorBig.computed.fill(false);
+#ifdef JIEQI_NNUE_THREATS
+    threats.computed.fill(false);
+    threats.listValid = false;
+#endif
 }
 
 const AccumulatorState& AccumulatorStack::latest() const noexcept { return accumulators[size - 1]; }
@@ -93,7 +98,213 @@ void AccumulatorStack::evaluate(const Position&                       pos,
 
     evaluate_side<WHITE>(pos, featureTransformer, cache);
     evaluate_side<BLACK>(pos, featureTransformer, cache);
+#ifdef JIEQI_NNUE_THREATS
+    evaluate_threats(pos, featureTransformer);
+#endif
 }
+
+#ifdef JIEQI_NNUE_THREATS
+namespace {
+
+// dst = src - sum of the `removed` rows + sum of the `added` rows of the threat
+// weights (src == nullptr: zero), for the accumulator and the PSQT values. The
+// accumulator is processed by tiles kept in registers, so that it is read and
+// written once whatever the number of features.
+template<IndexType Dimensions>
+void apply_threats(std::int16_t* __restrict dst,
+                   std::int32_t* __restrict dstPsqt,
+                   const std::int16_t* __restrict src,
+                   const std::int32_t* __restrict srcPsqt,
+                   const FeatureTransformer<Dimensions>& featureTransformer,
+                   const IndexType*                      removed,
+                   int                                   nRemoved,
+                   const IndexType*                      added,
+                   int                                   nAdded) {
+
+    const ThreatWeightType* weights = featureTransformer.threatWeights;
+
+#if defined(__GNUC__)
+    // GCC / clang vector extensions: 16 x int16 per vector (two registers on
+    // 128-bit targets), sign extension of the 8-bit weights
+    using I16 = std::int16_t __attribute__((vector_size(32)));
+    using I8  = std::int8_t __attribute__((vector_size(16)));
+    constexpr IndexType Lanes = 16, Regs = 8, Tile = Lanes * Regs;
+    static_assert(Dimensions % Tile == 0);
+
+    for (IndexType j = 0; j < Dimensions; j += Tile)
+    {
+        I16 r[Regs];
+        for (IndexType i = 0; i < Regs; ++i)
+            if (src)
+                std::memcpy(&r[i], src + j + i * Lanes, sizeof(I16));
+            else
+                r[i] = I16{};
+
+        for (int k = 0; k < nRemoved; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+            {
+                I8 v;
+                std::memcpy(&v, w + i * Lanes, sizeof(I8));
+                r[i] -= __builtin_convertvector(v, I16);
+            }
+        }
+        for (int k = 0; k < nAdded; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+            {
+                I8 v;
+                std::memcpy(&v, w + i * Lanes, sizeof(I8));
+                r[i] += __builtin_convertvector(v, I16);
+            }
+        }
+
+        for (IndexType i = 0; i < Regs; ++i)
+            std::memcpy(dst + j + i * Lanes, &r[i], sizeof(I16));
+    }
+#else
+    for (IndexType j = 0; j < Dimensions; ++j)
+        dst[j] = src ? src[j] : 0;
+    for (int k = 0; k < nRemoved; ++k)
+    {
+        const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions;
+        for (IndexType j = 0; j < Dimensions; ++j)
+            dst[j] = std::int16_t(dst[j] - w[j]);
+    }
+    for (int k = 0; k < nAdded; ++k)
+    {
+        const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions;
+        for (IndexType j = 0; j < Dimensions; ++j)
+            dst[j] = std::int16_t(dst[j] + w[j]);
+    }
+#endif
+
+    for (IndexType b = 0; b < PSQTBuckets; ++b)
+        dstPsqt[b] = srcPsqt ? srcPsqt[b] : 0;
+    for (int k = 0; k < nRemoved; ++k)
+        for (IndexType b = 0; b < PSQTBuckets; ++b)
+            dstPsqt[b] -= featureTransformer.threatPsqtWeights[removed[k] * PSQTBuckets + b];
+    for (int k = 0; k < nAdded; ++k)
+        for (IndexType b = 0; b < PSQTBuckets; ++b)
+            dstPsqt[b] += featureTransformer.threatPsqtWeights[added[k] * PSQTBuckets + b];
+}
+
+// Feature indices of a list of threats (those that are features)
+template<Color Perspective>
+int threat_indices(const ThreatFeatureSet::Threat* threats, int n, bool mirror, IndexType* out) {
+    int m = 0;
+    for (int k = 0; k < n; ++k)
+    {
+        const IndexType index = ThreatFeatureSet::index<Perspective>(threats[k], mirror);
+        if (index < ThreatFeatureSet::Dimensions)
+            out[m++] = index;
+    }
+    return m;
+}
+
+}  // namespace
+
+template<IndexType Dimensions>
+void AccumulatorStack::evaluate_threats(
+  const Position& pos, const FeatureTransformer<Dimensions>& featureTransformer) noexcept {
+
+    auto& target = mut_latest().threats;
+    if (target.computed[WHITE] && target.computed[BLACK])
+        return;
+
+    if (!target.listValid)
+    {
+        target.count     = std::uint16_t(ThreatFeatureSet::physical_threats(pos, target.list));
+        target.listValid = true;
+    }
+
+    if (!target.computed[WHITE])
+        evaluate_threats_side<WHITE>(pos, featureTransformer);
+    if (!target.computed[BLACK])
+        evaluate_threats_side<BLACK>(pos, featureTransformer);
+}
+
+template<Color Perspective, IndexType Dimensions>
+void AccumulatorStack::evaluate_threats_side(
+  const Position& pos, const FeatureTransformer<Dimensions>& featureTransformer) noexcept {
+
+    constexpr int MaxActive = ThreatFeatureSet::MaxActiveDimensions;
+
+    auto&      target = mut_latest().threats;
+    const bool mirror = FeatureSet::make_feature_bucket(pos, Perspective).second;
+    const int  count  = target.count;
+
+    // Nearest earlier state of the stack with a computed threat accumulator
+    // (with the same mirroring, otherwise every feature changes)
+    const ThreatAccumulator<Dimensions>* source = nullptr;
+    for (std::size_t i = size - 1; i-- > 0;)
+        if (accumulators[i].threats.computed[Perspective])
+        {
+            if (accumulators[i].threats.mirror[Perspective] == mirror)
+                source = &accumulators[i].threats;
+            break;
+        }
+
+    // Difference between the two sorted lists of threats
+    ThreatFeatureSet::Threat removed[MaxActive], added[MaxActive];
+    int                      nRemoved = 0, nAdded = 0;
+    if (source)
+    {
+        const auto* old  = source->list;
+        const auto* list = target.list;
+        const int   nOld = source->count;
+        int         i = 0, j = 0;
+        while (i < nOld || j < count)
+        {
+            if (j == count || (i < nOld && old[i] < list[j]))
+                removed[nRemoved++] = old[i++];
+            else if (i == nOld || list[j] < old[i])
+                added[nAdded++] = list[j++];
+            else
+                ++i, ++j;
+        }
+        if (nRemoved + nAdded > count)
+            source = nullptr;  // a refresh is cheaper
+    }
+
+    IndexType removedIdx[MaxActive], addedIdx[MaxActive];
+    if (source)
+    {
+        nRemoved = threat_indices<Perspective>(removed, nRemoved, mirror, removedIdx);
+        nAdded   = threat_indices<Perspective>(added, nAdded, mirror, addedIdx);
+        apply_threats(target.acc[Perspective], target.psqt[Perspective],
+                      source->acc[Perspective], source->psqt[Perspective], featureTransformer,
+                      removedIdx, nRemoved, addedIdx, nAdded);
+    }
+    else
+    {
+        nAdded = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
+        apply_threats(target.acc[Perspective], target.psqt[Perspective], nullptr, nullptr,
+                      featureTransformer, removedIdx, 0, addedIdx, nAdded);
+    }
+
+    target.computed[Perspective] = true;
+    target.mirror[Perspective]   = mirror;
+
+#ifndef NDEBUG
+    // Debug builds: the incremental update must give the same accumulator as
+    // a computation from scratch
+    if (source)
+    {
+        auto      fresh = std::make_unique<ThreatAccumulator<Dimensions>>();
+        const int n     = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
+        apply_threats(fresh->acc[Perspective], fresh->psqt[Perspective], nullptr, nullptr,
+                      featureTransformer, removedIdx, 0, addedIdx, n);
+        assert(!std::memcmp(fresh->acc[Perspective], target.acc[Perspective],
+                            sizeof(target.acc[Perspective])));
+        assert(!std::memcmp(fresh->psqt[Perspective], target.psqt[Perspective],
+                            sizeof(target.psqt[Perspective])));
+    }
+#endif
+}
+#endif
 
 template<Color Perspective, IndexType Dimensions>
 void AccumulatorStack::evaluate_side(const Position&                       pos,

@@ -21,6 +21,7 @@
 
 #include "bitboard.h"
 #include "misc.h"
+#include "nnue/features/jieqi_threats.h"
 #include "position.h"
 #include "tune.h"
 #include "types.h"
@@ -33,6 +34,9 @@ int main(int argc, char* argv[]) {
 
     Bitboards::init();
     Position::init();
+#ifdef JIEQI_NNUE_THREATS
+    Eval::NNUE::Features::JieqiThreats::init();
+#endif
 
     auto uci = std::make_unique<UCIEngine>(argc, argv);
 
