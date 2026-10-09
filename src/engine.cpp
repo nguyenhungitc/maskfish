@@ -198,6 +198,8 @@ Engine::Engine(std::optional<std::string> path) :
     // Under time management, stop as soon as no better move can be found: a single
     // legal move, mate in 1 or 2 in all lines, or mated in 1
     options.add("StopEarly", Option(false));
+    // Average the scores of a root move with a weight depending on the effort
+    options.add("RootScoreEMA", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

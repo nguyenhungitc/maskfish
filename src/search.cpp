@@ -337,6 +337,7 @@ bool Search::Worker::iterative_deepening() {
     nmpFailHighCount = bool(options["NMPFailHighCount"]);
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
+    rootScoreEMA = bool(options["RootScoreEMA"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1607,14 +1608,41 @@ moves_loop:  // When in check, search starts here
             RootMove& rm =
               *std::find(thisThread->rootMoves.begin(), thisThread->rootMoves.end(), move);
 
-            rm.effort += nodes - nodeCount;
+            const uint64_t moveNodes = nodes - nodeCount;
+            rm.effort += moveNodes;
 
-            rm.averageScore =
-              rm.averageScore != -VALUE_INFINITE ? (value + rm.averageScore) / 2 : value;
+            if (rootScoreEMA)
+            {
+                // Weight of the new score (of 32): larger when the new search took
+                // more nodes compared with the earlier ones, from 37.5% to 75% (50%
+                // at most for the mean squared score).
+                const uint64_t prevEffort = std::max(uint64_t(1), rm.effort - moveNodes);
+                const int64_t  w          = int64_t(
+                  std::clamp(32 * moveNodes * 2 / (moveNodes * 2 + 3 * prevEffort), uint64_t(12),
+                                       uint64_t(24)));
+                const int64_t wSquared = std::min(w, int64_t(16));
 
-            rm.meanSquaredScore = rm.meanSquaredScore != -VALUE_INFINITE * VALUE_INFINITE
-                                  ? (value * std::abs(value) + rm.meanSquaredScore) / 2
-                                  : value * std::abs(value);
+                rm.averageScore =
+                  rm.averageScore != -VALUE_INFINITE
+                    ? Value((int64_t(value) * w + int64_t(rm.averageScore) * (32 - w)) / 32)
+                    : value;
+
+                rm.meanSquaredScore =
+                  rm.meanSquaredScore != -VALUE_INFINITE * VALUE_INFINITE
+                    ? Value((int64_t(value) * std::abs(value) * wSquared
+                             + int64_t(rm.meanSquaredScore) * (32 - wSquared))
+                            / 32)
+                    : value * std::abs(value);
+            }
+            else
+            {
+                rm.averageScore =
+                  rm.averageScore != -VALUE_INFINITE ? (value + rm.averageScore) / 2 : value;
+
+                rm.meanSquaredScore = rm.meanSquaredScore != -VALUE_INFINITE * VALUE_INFINITE
+                                        ? (value * std::abs(value) + rm.meanSquaredScore) / 2
+                                        : value * std::abs(value);
+            }
 
             // PV move or new best move?
             if (moveCount == 1 || value > alpha)
