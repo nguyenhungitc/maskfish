@@ -73,7 +73,8 @@ struct TTWriter {
    private:
     friend class TranspositionTable;
     TTEntry* entry;
-    TTWriter(TTEntry* tte);
+    bool     decisiveAging;
+    TTWriter(TTEntry* tte, bool decisiveAging);
 };
 
 
@@ -95,6 +96,10 @@ class TranspositionTable {
     TTEntry* first_entry(const Key key)
       const;  // This is the hash function; its only external use is memory prefetching.
 
+    // Restrict the secondary aging of entries to decisive values (UCI option
+    // DecisiveTTAging)
+    void set_decisive_aging(bool b) { decisiveAging = b; }
+
    private:
     friend struct TTEntry;
 
@@ -102,6 +107,8 @@ class TranspositionTable {
     Cluster* table = nullptr;
 
     uint8_t generation8 = 0;  // Size must be not bigger than TTEntry::genBound8
+
+    bool decisiveAging = false;
 };
 
 }  // namespace Stockfish

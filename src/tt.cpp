@@ -59,7 +59,15 @@ struct TTEntry {
     }
 
     bool is_occupied() const;
-    void save(Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8);
+    void save(Key     k,
+              Value   v,
+              bool    pv,
+              Bound   b,
+              Depth   d,
+              Move    m,
+              Value   ev,
+              uint8_t generation8,
+              bool    decisiveAging);
     // The returned age is a multiple of TranspositionTable::GENERATION_DELTA
     uint8_t relative_age(const uint8_t generation8) const;
 
@@ -94,8 +102,15 @@ bool TTEntry::is_occupied() const { return bool(depth8); }
 
 // Populates the TTEntry with a new node's data, possibly
 // overwriting an old position. The update is not atomic and can be racy.
-void TTEntry::save(
-  Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8) {
+void TTEntry::save(Key     k,
+                   Value   v,
+                   bool    pv,
+                   Bound   b,
+                   Depth   d,
+                   Move    m,
+                   Value   ev,
+                   uint8_t generation8,
+                   bool    decisiveAging) {
 
     // Preserve the old ttmove if we don't have a new one
     if (m || uint16_t(k) != key16)
@@ -114,8 +129,14 @@ void TTEntry::save(
         value16   = int16_t(v);
         eval16    = int16_t(ev);
     }
+    // Secondary aging. With DecisiveTTAging only for decisive values, which
+    // matters for mate finding. The value may be corrupted by a racy write.
     else if (depth8 + DEPTH_ENTRY_OFFSET >= 5 && Bound(genBound8 & 0x3) != BOUND_EXACT)
-        depth8--;
+    {
+        const Value v16 = value16;
+        if (!decisiveAging || (std::abs(v16) < VALUE_INFINITE && is_decisive(v16)))
+            depth8--;
+    }
 }
 
 
@@ -130,12 +151,13 @@ uint8_t TTEntry::relative_age(const uint8_t generation8) const {
 
 
 // TTWriter is but a very thin wrapper around the pointer
-TTWriter::TTWriter(TTEntry* tte) :
-    entry(tte) {}
+TTWriter::TTWriter(TTEntry* tte, bool decisiveAging_) :
+    entry(tte),
+    decisiveAging(decisiveAging_) {}
 
 void TTWriter::write(
   Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8) {
-    entry->save(k, v, pv, b, d, m, ev, generation8);
+    entry->save(k, v, pv, b, d, m, ev, generation8, decisiveAging);
 }
 
 void TTWriter::penalize(int penalty) {
@@ -260,7 +282,7 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
         if (tte[i].key16 == key16)
             // This gap is the main place for read races.
             // After `read()` completes that copy is final, but may be self-inconsistent.
-            return {tte[i].is_occupied(), tte[i].read(), TTWriter(&tte[i])};
+            return {tte[i].is_occupied(), tte[i].read(), TTWriter(&tte[i], decisiveAging)};
 
     // Find an entry to be replaced according to the replacement strategy
     TTEntry* replace = tte;
@@ -271,7 +293,7 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
 
     return {false,
             TTData{Move::none(), VALUE_NONE, VALUE_NONE, DEPTH_ENTRY_OFFSET, BOUND_NONE, false},
-            TTWriter(replace)};
+            TTWriter(replace, decisiveAging)};
 }
 
 

@@ -202,6 +202,11 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("RootScoreEMA", Option(false));
     // In qsearch, do not store the stand pat value in the TT (only the static evaluation)
     options.add("StandPatNoTT", Option(false));
+    // Restrict the secondary aging of TT entries to decisive values
+    options.add("DecisiveTTAging", Option(false, [this](const Option& o) {
+                    tt.set_decisive_aging(bool(o));
+                    return std::nullopt;
+                }));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
