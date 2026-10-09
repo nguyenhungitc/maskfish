@@ -585,7 +585,9 @@ bằng `--movetime` sẽ công bằng hơn `--nodes`.
 - quân chia làm 16 lớp: mỗi loại quân đã lật của mỗi bên, cộng "quân úp" của
   mỗi bên; quân úp tấn công như loại quân của ô xuất phát của nó (sĩ úp chỉ
   trong cung);
-- tổng cộng 94 037 đặc trưng, thường 10–40 đặc trưng bật cùng lúc mỗi bên;
+- không dùng các đe dọa của tướng, của sĩ tới tướng mình, và các nước chiếu
+  của xe, pháo, mã (như Pikafish);
+- tổng cộng 92 711 đặc trưng, thường 10–40 đặc trưng bật cùng lúc mỗi bên;
 - feature transformer còn 1024 đầu ra (thay vì 2048) để bù chi phí.
 
 Mạng `threats` (và `att-threats` = `att` + đe dọa) **không tương thích** với
@@ -711,4 +713,4 @@ lại; dữ liệu văn bản vẫn dùng được.
 
 Với các kiến trúc có đe dọa, phần "Threat features" của `jieqi_features.py`
 phải liệt kê đặc trưng theo đúng thứ tự của `src/nnue/features/jieqi_threats.cpp`
-(engine kiểm tra số đặc trưng lúc khởi động và dừng nếu khác 94 037).
+(engine kiểm tra số đặc trưng lúc khởi động và dừng nếu khác 92 711).

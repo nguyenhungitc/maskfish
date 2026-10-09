@@ -202,7 +202,7 @@ network trained on the same data before adopting it.
 `make -j build threats=yes` (possibly with `nnue=att`) adds **threat
 inputs**, after the "full threats" networks of Stockfish and Pikafish: one
 feature per (attacking piece, from square, to square, attacked piece) present
-on the board, 94037 features, where a dark piece attacks like the kind of
+on the board, 92711 features (not those of the kings), where a dark piece attacks like the kind of
 piece of its starting square. The feature transformer has 1024 outputs
 instead of 2048. The engine is about a third slower and needs about 90 MB
 more memory for the network. Train such a network with `--arch threats` (or

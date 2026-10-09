@@ -53,7 +53,7 @@ using WeightType     = std::int16_t;
 using PSQTWeightType = std::int32_t;
 
 // Weights of the threat features (make threats=yes): 8 bits like upstream, to
-// keep the large table (94037 x 1024) small
+// keep the large table (92711 x 1024) small
 using ThreatWeightType = std::int8_t;
 using IndexType      = std::uint32_t;
 

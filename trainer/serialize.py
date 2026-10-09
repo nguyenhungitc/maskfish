@@ -8,8 +8,8 @@ File layout (src/nnue/network.cpp, nnue_feature_transformer.h, layers/):
       LEB128 int16 weights[7560][L1]
       LEB128 int32 psqt[7560][16]         (scale 600 * 16)
       threat architectures only:
-      raw    int8  threat weights[94037][L1] (scale 127, added twice by the engine)
-      LEB128 int32 threat psqt[94037][16]    (scale 600 * 16)
+      raw    int8  threat weights[92711][L1] (scale 127, added twice by the engine)
+      LEB128 int32 threat psqt[92711][16]    (scale 600 * 16)
     16 x layer stack:
       u32 architecture hash
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)

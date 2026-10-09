@@ -28,7 +28,9 @@
 //   dark advisor only inside the palace;
 // * squares are seen from the perspective (rotated for black, mirrored like
 //   the HalfKA features) and the colors of the classes are swapped for black;
-// * threats between two pieces that always attack each other are counted once.
+// * threats between two pieces that always attack each other are counted once;
+// * threats of a king, of an advisor to its own king, and checks of rooks,
+//   cannons and knights are not features (Pikafish does the same).
 //
 // trainer/jieqi_features.py implements exactly the same features ("Threat
 // features" section); verify.py checks that both agree.
@@ -53,15 +55,16 @@ class JieqiThreats {
     static constexpr const char* Name = "JieqiThreats";
 
     // Hash value embedded in the evaluation file (xored with the HalfKA one)
-    // (0x5B1E7A39 with LEB128 threat weights in the file, before they were raw)
-    static constexpr std::uint32_t HashValue = 0x5B1E7A3B;
+    // (earlier layouts: 0x5B1E7A39 with LEB128 threat weights, 0x5B1E7A3B
+    // with the king features)
+    static constexpr std::uint32_t HashValue = 0x5B1E7A3D;
 
     // Number of feature dimensions (checked when the tables are built)
-    static constexpr IndexType Dimensions = 94037;
+    static constexpr IndexType Dimensions = 92711;
 
-    // Maximum number of simultaneously active features: at most 67 threats per
-    // side (2 rooks, 2 cannons x 4, 2 knights x 8, 2 bishops, 2 advisors x 4,
-    // king x 4, 5 pawns x 3)
+    // Maximum number of simultaneously active threats (of which the features
+    // are a subset): at most 67 per side (2 rooks, 2 cannons x 4, 2 knights x 8,
+    // 2 bishops, 2 advisors x 4, king x 4, 5 pawns x 3)
     static constexpr IndexType MaxActiveDimensions = 144;
 
     static constexpr int ClassNb = 16;

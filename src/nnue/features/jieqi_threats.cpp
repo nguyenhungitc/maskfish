@@ -169,6 +169,21 @@ bool semi_excluded(int a, int b, int from, int to) {
     return !(from > to);
 }
 
+// Threats involving the kings that are not features: the king as an attacker
+// (its position and its neighbours are known from the other features), an
+// advisor next to its own king, and the checks of rooks, cannons and knights
+// (the network does not evaluate positions in check). A dark piece counts as
+// the kind of piece of its starting square.
+bool king_excluded(int a, int b, int from) {
+    const int pa = (a & 7) ? (a & 7) : dark_kind(from);
+    if (pa == KING)
+        return true;
+    if ((b & 7) != KING)
+        return false;
+    const bool own = (a >> 3) == (b >> 3);
+    return own ? pa == ADVISOR : (pa == ROOK || pa == CANNON || pa == KNIGHT);
+}
+
 int class_of(const Position& pos, Square s) {
     const Piece pc = pos.piece_on(s);
     return pos.is_dark(s) ? (color_of(pc) << 3) : int(pc);
@@ -196,7 +211,8 @@ void JieqiThreats::init() {
                     continue;
                 std::uint16_t m = 0;
                 for (int b = 0; b < Classes; ++b)
-                    if (class_square(b, to) && !semi_excluded(a, b, from, to))
+                    if (class_square(b, to) && !semi_excluded(a, b, from, to)
+                        && !king_excluded(a, b, from))
                         m |= std::uint16_t(1 << b);
                 ThreatBase[a][from][to] = n;
                 ThreatMask[a][from][to] = m;

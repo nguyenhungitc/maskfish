@@ -382,7 +382,7 @@ def fen_to_features(fen: str):
 
 NUM_CLASSES = 16
 MAX_THREATS = 144                    # engine: JieqiThreats::MaxActiveDimensions
-THREAT_HASH = 0x5B1E7A3B             # engine: JieqiThreats::HashValue
+THREAT_HASH = 0x5B1E7A3D             # engine: JieqiThreats::HashValue
 
 _ORTH = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))
@@ -496,6 +496,20 @@ def _semi_excluded(a: int, b: int, frm: int, to: int) -> bool:
     return not frm > to
 
 
+def _king_excluded(a: int, b: int, frm: int) -> bool:
+    """Threats involving the kings that are not features: the king as an
+    attacker, an advisor next to its own king, and the checks of rooks,
+    cannons and knights. A dark piece counts as the kind of its square."""
+    pa = (a & 7) or _dark_kind(frm)
+    if pa == KING:
+        return True
+    if (b & 7) != KING:
+        return False
+    if (a >> 3) == (b >> 3):
+        return pa == ADVISOR
+    return pa in (ROOK, CANNON, KNIGHT)
+
+
 def _build_threat_tables():
     squares = [_class_squares(cl) for cl in range(NUM_CLASSES)]
     base = [0] * (NUM_CLASSES * SQUARE_NB * SQUARE_NB)
@@ -508,7 +522,8 @@ def _build_threat_tables():
             for to in sorted(set(_empty_targets(a, frm))):
                 m = 0
                 for b in range(NUM_CLASSES):
-                    if to in squares[b] and not _semi_excluded(a, b, frm, to):
+                    if (to in squares[b] and not _semi_excluded(a, b, frm, to)
+                            and not _king_excluded(a, b, frm)):
                         m |= 1 << b
                 k = (a * SQUARE_NB + frm) * SQUARE_NB + to
                 base[k], mask[k] = n, m
@@ -516,7 +531,7 @@ def _build_threat_tables():
     return base, mask, n
 
 
-THREAT_BASE, THREAT_MASK, THREAT_DIMS = _build_threat_tables()   # 94037 features
+THREAT_BASE, THREAT_MASK, THREAT_DIMS = _build_threat_tables()   # 92711 features
 
 
 def make_threat_index(a: int, frm: int, to: int, b: int) -> int:

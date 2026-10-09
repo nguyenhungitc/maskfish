@@ -7,7 +7,7 @@
         [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
 
 L1 = 2048, or 1024 for the threat architectures, which also have a second
-feature transformer for the 94037 threat features (ft_thr, same outputs and
+feature transformer for the 92711 threat features (ft_thr, same outputs and
 PSQT buckets, summed with the first one). Threat features are passed as a
 flat index tensor with offsets (torch EmbeddingBag format), two bags per
 position: side to move, then the other side.
