@@ -310,6 +310,7 @@ bool Search::Worker::iterative_deepening() {
     failHighRecoveryOption = bool(options["FailHighRecovery"]);
     aspirationTweaks = bool(options["AspirationTweaks"]);
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
+    malusDecay = bool(options["MalusDecay"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -2266,15 +2267,21 @@ void update_all_stats(const Position& pos,
     PieceType              capturedPiece;
 
     int bonus = std::min(144 * depth - 106, 1803) + 273 * (bestMove == ttMove);
-    int malus = std::min(1012 * depth - 213, 2437) - 31 * moveCount;
+    int malus = std::min(1012 * depth - 213, 2437) - (workerThread.malusDecay ? 0 : 31 * moveCount);
 
     if (!pos.capture(bestMove))
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 1077 / 1024);
 
-        // Decrease stats for all non-best quiet moves
+        // Decrease stats for all non-best quiet moves (with MalusDecay, less and
+        // less for the later ones)
+        int quietMalus = malus * 1555 / 1024;
         for (Move move : quietsSearched)
-            update_quiet_histories(pos, ss, workerThread, move, -malus * 1555 / 1024);
+        {
+            if (workerThread.malusDecay)
+                quietMalus = quietMalus * 950 / 1024;
+            update_quiet_histories(pos, ss, workerThread, move, -quietMalus);
+        }
     }
     else
     {

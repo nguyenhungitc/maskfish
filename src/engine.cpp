@@ -165,6 +165,9 @@ Engine::Engine(std::optional<std::string> path) :
     // At each new search, move the main history 1/4 of the way back to its
     // initial value.
     options.add("MainHistoryDecay", Option(false));
+    // History malus of the quiet moves searched before the best move decreasing
+    // geometrically with their number (instead of the move count term).
+    options.add("MalusDecay", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

@@ -331,6 +331,7 @@ class Worker {
     bool contCorr4Ply    = false;
     bool multiCutHistory = false;
     bool cmhc            = false;
+    bool malusDecay      = false;
 
    private:
     // Returns whether the last PV sent to the GUI is up to date
