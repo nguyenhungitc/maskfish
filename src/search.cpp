@@ -333,6 +333,7 @@ bool Search::Worker::iterative_deepening() {
     contCorr6Ply = bool(options["ContCorr6Ply"]);
     hindsightFirst = bool(options["HindsightFirst"]);
     followPVOption = bool(options["FollowPV"]);
+    cutoffCntTweak = bool(options["CutoffCntTweak"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1459,7 +1460,12 @@ moves_loop:  // When in check, search starts here
             r += 1333 + (depth < 8) * 1130;
 
         // Increase reduction if next ply has a lot of fail high
-        if ((ss + 1)->cutoffCnt > 2)
+        if (cutoffCntTweak)
+        {
+            if ((ss + 1)->cutoffCnt > 1)
+                r += ((ss + 1)->cutoffCnt > 2 ? 1449 : 295) + allNode * 968;
+        }
+        else if ((ss + 1)->cutoffCnt > 2)
             r += 1449 + allNode * 968;
 
         r += (ss + 1)->quietMoveStreak * 49;

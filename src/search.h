@@ -433,6 +433,7 @@ class Worker {
     bool   followPVOption = false;
     // PV of the previous iteration for the current PV line (UCI option FollowPV)
     std::vector<Move> followPVLine;
+    bool   cutoffCntTweak = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

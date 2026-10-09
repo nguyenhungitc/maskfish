@@ -188,6 +188,8 @@ Engine::Engine(std::optional<std::string> path) :
     // On the PV of the previous iteration, no internal iterative reduction and
     // no shallow pruning of quiet moves at PV nodes.
     options.add("FollowPV", Option(false));
+    // Increase the reduction already when the next ply has two fail highs
+    options.add("CutoffCntTweak", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
