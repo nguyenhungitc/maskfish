@@ -382,7 +382,7 @@ def fen_to_features(fen: str):
 
 NUM_CLASSES = 16
 MAX_THREATS = 144                    # engine: JieqiThreats::MaxActiveDimensions
-THREAT_HASH = 0x5B1E7A39             # engine: JieqiThreats::HashValue
+THREAT_HASH = 0x5B1E7A3B             # engine: JieqiThreats::HashValue
 
 _ORTH = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))

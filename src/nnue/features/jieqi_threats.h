@@ -53,7 +53,8 @@ class JieqiThreats {
     static constexpr const char* Name = "JieqiThreats";
 
     // Hash value embedded in the evaluation file (xored with the HalfKA one)
-    static constexpr std::uint32_t HashValue = 0x5B1E7A39;
+    // (0x5B1E7A39 with LEB128 threat weights in the file, before they were raw)
+    static constexpr std::uint32_t HashValue = 0x5B1E7A3B;
 
     // Number of feature dimensions (checked when the tables are built)
     static constexpr IndexType Dimensions = 94037;

@@ -8,7 +8,7 @@ File layout (src/nnue/network.cpp, nnue_feature_transformer.h, layers/):
       LEB128 int16 weights[7560][L1]
       LEB128 int32 psqt[7560][16]         (scale 600 * 16)
       threat architectures only:
-      LEB128 int8  threat weights[94037][L1] (scale 127, added twice by the engine)
+      raw    int8  threat weights[94037][L1] (scale 127, added twice by the engine)
       LEB128 int32 threat psqt[94037][16]    (scale 600 * 16)
     16 x layer stack:
       u32 architecture hash
@@ -216,7 +216,7 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
     _write_leb(buf, q["ft_weight"].astype(np.int16))
     _write_leb(buf, q["psqt"].astype(np.int32))
     if F.THREATS:
-        _write_leb(buf, q["thr_weight"].astype(np.int8))
+        buf.write(q["thr_weight"].astype(np.int8).tobytes())
         _write_leb(buf, q["thr_psqt"].astype(np.int32))
 
     ahash = arch_hash()
@@ -258,7 +258,8 @@ def read_nnue(path: str) -> dict:
     q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
     q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
     if F.THREATS:
-        q["thr_weight"] = _read_leb(f, F.THREAT_DIMS * L1, np.int8).reshape(F.THREAT_DIMS, L1)
+        n = F.THREAT_DIMS * L1
+        q["thr_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.THREAT_DIMS, L1).copy()
         q["thr_psqt"] = _read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT)
 
     def arr(dtype, n):

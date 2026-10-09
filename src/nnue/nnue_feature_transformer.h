@@ -168,9 +168,10 @@ class FeatureTransformer {
         read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
 #ifdef JIEQI_NNUE_THREATS
         // Threat weights are not doubled: the threat accumulator is doubled
-        // when it is added in transform()
-        read_leb_128<ThreatWeightType>(stream, threatWeights,
-                                       HalfDimensions * ThreatInputDimensions);
+        // when it is added in transform(). Stored as raw int8 (LEB128 would
+        // not make them smaller, the file is compressed anyway).
+        read_little_endian<ThreatWeightType>(stream, threatWeights,
+                                             HalfDimensions * ThreatInputDimensions);
         read_leb_128<PSQTWeightType>(stream, threatPsqtWeights,
                                      PSQTBuckets * ThreatInputDimensions);
 #endif
@@ -191,8 +192,8 @@ class FeatureTransformer {
         write_leb_128<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
         write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
 #ifdef JIEQI_NNUE_THREATS
-        write_leb_128<ThreatWeightType>(stream, copy->threatWeights,
-                                        HalfDimensions * ThreatInputDimensions);
+        write_little_endian<ThreatWeightType>(stream, copy->threatWeights,
+                                              HalfDimensions * ThreatInputDimensions);
         write_leb_128<PSQTWeightType>(stream, copy->threatPsqtWeights,
                                       PSQTBuckets * ThreatInputDimensions);
 #endif
