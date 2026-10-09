@@ -200,6 +200,8 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("StopEarly", Option(false));
     // Average the scores of a root move with a weight depending on the effort
     options.add("RootScoreEMA", Option(false));
+    // In qsearch, do not store the stand pat value in the TT (only the static evaluation)
+    options.add("StandPatNoTT", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

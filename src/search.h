@@ -439,6 +439,7 @@ class Worker {
     bool   mateTTExtension = false;
     bool   stopEarly = false;
     bool   rootScoreEMA = false;
+    bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

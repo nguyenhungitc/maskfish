@@ -338,6 +338,7 @@ bool Search::Worker::iterative_deepening() {
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
+    standPatNoTT = bool(options["StandPatNoTT"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1952,9 +1953,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!is_decisive(bestValue))
                 bestValue = (bestValue + beta) / 2;
             if (!ss->ttHit)
-                ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), false, BOUND_LOWER,
-                               DEPTH_UNSEARCHED, Move::none(), unadjustedStaticEval,
-                               tt.generation());
+                ttWriter.write(posKey, standPatNoTT ? VALUE_NONE : value_to_tt(bestValue, ss->ply),
+                               false, BOUND_LOWER, DEPTH_UNSEARCHED, Move::none(),
+                               unadjustedStaticEval, tt.generation());
             return bestValue;
         }
 
