@@ -332,6 +332,7 @@ bool Search::Worker::iterative_deepening() {
     corrHistAsym = bool(options["CorrHistAsym"]);
     contCorr6Ply = bool(options["ContCorr6Ply"]);
     hindsightFirst = bool(options["HindsightFirst"]);
+    followPVOption = bool(options["FollowPV"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -417,6 +418,9 @@ bool Search::Worker::iterative_deepening() {
         {
             // Reset UCI info selDepth for each depth and each PV line
             selDepth = 0;
+
+            if (followPVOption)
+                followPVLine = rootMoves[pvIdx].previousPV;
 
             // Reset aspiration window starting size
             delta     = 10 + (aspirationTweaks ? int(threadIdx % 8) : 0)
@@ -833,6 +837,13 @@ Value Search::Worker::search(
     bestValue          = -VALUE_INFINITE;
     maxValue           = VALUE_INFINITE;
 
+    // Is this node on the PV of the previous iteration? (UCI option FollowPV.
+    // The outcomes of a chance node all follow it if the dark move does.)
+    ss->followPV = followPVOption
+                && (rootNode
+                    || ((ss - 1)->followPV && size_t(ss->ply - 1) < followPVLine.size()
+                        && (ss - 1)->currentMove == followPVLine[ss->ply - 1]));
+
     // Check for the available remaining time
     if (is_mainthread())
         main_manager()->check_time(*thisThread);
@@ -1116,7 +1127,7 @@ Value Search::Worker::search(
     // Step 9. Internal iterative reductions
     // For PV nodes without a ttMove as well as for deep enough cutNodes, we decrease depth.
     // (*Scaler) Especially if they make IIR less aggressive.
-    if (!allNode && depth >= 5 && !ttData.move)
+    if (!ss->followPV && !allNode && depth >= 5 && !ttData.move)
         depth--;
 
     // Step 10. ProbCut
@@ -1285,7 +1296,7 @@ moves_loop:  // When in check, search starts here
                 if (!pos.see_ge(move, -225 * depth - seeHist))
                     continue;
             }
-            else
+            else if (!ss->followPV || !PvNode)
             {
                 int history =
                   (*contHist[0])[movedPiece][move.to_sq()]

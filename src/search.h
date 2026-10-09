@@ -77,6 +77,7 @@ struct Stack {
     bool                        isPvNode;
     int                         quietMoveStreak;
     bool                        capturedDark;  // currentMove captured a dark piece
+    bool                        followPV;      // on the PV of the previous iteration
 };
 
 
@@ -429,6 +430,9 @@ class Worker {
     bool   lmrHistoryDivisor = false;
     bool   corrHistAsym = false;
     bool   hindsightFirst = false;
+    bool   followPVOption = false;
+    // PV of the previous iteration for the current PV line (UCI option FollowPV)
+    std::vector<Move> followPVLine;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

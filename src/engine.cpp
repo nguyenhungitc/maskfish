@@ -185,6 +185,9 @@ Engine::Engine(std::optional<std::string> path) :
     // Compute the static eval and the hindsight depth adjustments before the
     // TT cutoff (which then uses the adjusted depth).
     options.add("HindsightFirst", Option(false));
+    // On the PV of the previous iteration, no internal iterative reduction and
+    // no shallow pruning of quiet moves at PV nodes.
+    options.add("FollowPV", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
