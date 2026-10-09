@@ -426,15 +426,16 @@ void Engine::trace_eval() const {
 // the network (before evaluate() scaling): used to check that a network
 // exported by the trainer is read exactly like the trainer computes it.
 void Engine::eval_raw() const {
-    StateListPtr states(new std::deque<StateInfo>(1));
+    StateListPtr evalStates(new std::deque<StateInfo>(1));
     Position     p;
-    p.set(pos.fen(), &states->back());
+    p.set(pos.fen(), &evalStates->back());
 
     verify_networks();
 
-    Eval::NNUE::AccumulatorStack accumulators;
-    auto caches = std::make_unique<Eval::NNUE::AccumulatorCaches>(*networks);
-    auto [psqt, positional] = networks->big.evaluate(p, accumulators, &caches->big);
+    // Heap-allocated: the accumulator stack is large
+    auto accumulators = std::make_unique<Eval::NNUE::AccumulatorStack>();
+    auto caches       = std::make_unique<Eval::NNUE::AccumulatorCaches>(*networks);
+    auto [psqt, positional] = networks->big.evaluate(p, *accumulators, &caches->big);
 
     sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
               << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " fen " << p.fen()

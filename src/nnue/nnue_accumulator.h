@@ -25,7 +25,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 #include "../types.h"
 #include "nnue_architecture.h"
@@ -48,7 +47,7 @@ template<IndexType Size>
 struct alignas(CacheLineSize) Accumulator {
     std::int16_t               accumulation[COLOR_NB][Size];
     std::int32_t               psqtAccumulation[COLOR_NB][PSQTBuckets];
-    std::array<bool, COLOR_NB> computed;
+    std::array<bool, COLOR_NB> computed = {};
 };
 
 
@@ -63,9 +62,9 @@ template<IndexType Size>
 struct alignas(CacheLineSize) ThreatAccumulator {
     std::int16_t               acc[COLOR_NB][Size];
     std::int32_t               psqt[COLOR_NB][PSQTBuckets];
-    std::array<bool, COLOR_NB> computed;
-    std::array<bool, COLOR_NB> mirror;      // mirroring acc was computed with
-    bool                       listValid;   // list / count hold the threats
+    std::array<bool, COLOR_NB> computed  = {};
+    std::array<bool, COLOR_NB> mirror    = {};     // mirroring acc was computed with
+    bool                       listValid = false;  // list / count hold the threats
     std::uint16_t              count;
     ThreatFeatureSet::Threat   list[ThreatFeatureSet::MaxActiveDimensions];
 };
@@ -156,10 +155,6 @@ struct AccumulatorState {
 
 class AccumulatorStack {
    public:
-    AccumulatorStack() :
-        accumulators(MAX_PLY + 1),
-        size{1} {}
-
     [[nodiscard]] const AccumulatorState& latest() const noexcept;
 
     void reset() noexcept;
@@ -202,8 +197,8 @@ class AccumulatorStack {
                                      const FeatureTransformer<Dimensions>& featureTransformer,
                                      const std::size_t                     end) noexcept;
 
-    std::vector<AccumulatorState> accumulators;
-    std::size_t                   size;
+    std::array<AccumulatorState, MAX_PLY + 1> accumulators;
+    std::size_t                               size = 1;
 };
 
 }  // namespace Stockfish::Eval::NNUE
