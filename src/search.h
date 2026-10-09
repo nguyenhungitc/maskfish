@@ -420,6 +420,7 @@ class Worker {
     bool   pruningTweaks      = false;
     bool   lmrTweaks          = false;
     bool   failHighRecoveryOption = false;
+    bool   aspirationTweaks = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

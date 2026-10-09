@@ -307,6 +307,7 @@ bool Search::Worker::iterative_deepening() {
     pruningTweaks      = bool(options["PruningTweaks"]);
     lmrTweaks          = bool(options["LMRTweaks"]);
     failHighRecoveryOption = bool(options["FailHighRecovery"]);
+    aspirationTweaks = bool(options["AspirationTweaks"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -387,7 +388,8 @@ bool Search::Worker::iterative_deepening() {
             selDepth = 0;
 
             // Reset aspiration window starting size
-            delta     = 10 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 41924;
+            delta     = 10 + (aspirationTweaks ? int(threadIdx % 8) : 0)
+                  + std::abs(rootMoves[pvIdx].meanSquaredScore) / 41924;
             Value avg = rootMoves[pvIdx].averageScore;
             alpha     = std::max(avg - delta, -VALUE_INFINITE);
             beta      = std::min(avg + delta, VALUE_INFINITE);
@@ -436,7 +438,7 @@ bool Search::Worker::iterative_deepening() {
                 // otherwise exit the loop.
                 if (bestValue <= alpha)
                 {
-                    beta  = (alpha + beta) / 2;
+                    beta  = aspirationTweaks ? alpha : (alpha + beta) / 2;
                     alpha = std::max(bestValue - delta, -VALUE_INFINITE);
 
                     failedHighCnt = 0;
@@ -445,6 +447,8 @@ bool Search::Worker::iterative_deepening() {
                 }
                 else if (bestValue >= beta)
                 {
+                    if (aspirationTweaks)
+                        alpha = std::max(beta - delta, alpha);
                     beta = std::min(bestValue + delta, VALUE_INFINITE);
                     ++failedHighCnt;
                 }

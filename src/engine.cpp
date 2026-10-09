@@ -158,6 +158,10 @@ Engine::Engine(std::optional<std::string> path) :
     // After the root search failed high (and was re-searched at a reduced
     // depth), increase the depth back gradually in the next iterations.
     options.add("FailHighRecovery", Option(false));
+    // Aspiration windows: after a fail low the new beta is alpha, after a fail
+    // high the new alpha is beta - delta, and helper threads start with
+    // slightly different windows.
+    options.add("AspirationTweaks", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
