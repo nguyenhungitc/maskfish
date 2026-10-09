@@ -337,6 +337,7 @@ class Worker {
     bool iterative_deepening();
 
     void do_move(Position& pos, const Move move, StateInfo& st);
+    void prefetch_correction_histories(const Stack* ss, const Position& pos, Move move) const;
     void do_move(Position& pos, const Move move, StateInfo& st, const bool givesCheck);
     void do_null_move(Position& pos, StateInfo& st);
     void undo_move(Position& pos, const Move move);

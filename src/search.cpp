@@ -649,6 +649,23 @@ bool Search::Worker::iterative_deepening() {
 }
 
 
+// Prefetches the continuation correction history entries that the child node
+// will read in correction_value() (not for a move of a dark piece: the entries
+// depend on the revealed piece).
+void Search::Worker::prefetch_correction_histories(const Stack* ss,
+                                                   const Position& pos,
+                                                   Move            move) const {
+    if (pos.move_dark(move))
+        return;
+
+    const Piece  pc = pos.moved_piece(move);
+    const Square to = move.to_sq();
+
+    prefetch(&(*(ss - 1)->continuationCorrectionHistory)[pc][to]);
+    if (contCorr4Ply)
+        prefetch(&(*(ss - 3)->continuationCorrectionHistory)[pc][to]);
+}
+
 void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st) {
     do_move(pos, move, st, pos.gives_check(move));
 }
@@ -1326,6 +1343,7 @@ moves_loop:  // When in check, search starts here
         // Step 15. Make the move
         uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
         ss->capturedDark   = pos.is_dark(move.to_sq());
+        prefetch_correction_histories(ss, pos, move);
         do_move(pos, move, st, givesCheck);
 
         // Add extension to new depth
@@ -1874,6 +1892,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         Piece movedPiece = pos.moved_piece(move);
 
         ss->capturedDark = pos.is_dark(move.to_sq());
+        prefetch_correction_histories(ss, pos, move);
         do_move(pos, move, st, givesCheck);
 
         // Update the current move
