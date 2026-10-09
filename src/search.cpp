@@ -336,6 +336,7 @@ bool Search::Worker::iterative_deepening() {
     cutoffCntTweak = bool(options["CutoffCntTweak"]);
     nmpFailHighCount = bool(options["NMPFailHighCount"]);
     mateTTExtension = bool(options["MateTTExtension"]);
+    stopEarly = bool(options["StopEarly"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -664,8 +665,14 @@ bool Search::Worker::iterative_deepening() {
                 && !mainThread->ponder)
                 threads.stop = true;
 
-            // Stop the search if we have exceeded the totalTime or maximum
-            if (elapsedTime > std::min(totalTime, double(mainThread->tm.maximum())))
+            // Stop the search if we have exceeded the totalTime or maximum, or with
+            // StopEarly if we know that there are no better moves in the analysed
+            // line(s): a single legal move, a mate in 1 or 2 in all the lines, or
+            // a mated in 1.
+            if (elapsedTime > std::min(totalTime, double(mainThread->tm.maximum()))
+                || (stopEarly
+                    && (rootMoves.size() == 1 || rootMoves[multiPV - 1].score >= mate_in(3)
+                        || rootMoves[0].score == mated_in(2))))
             {
                 // If we are allowed to ponder do not stop the search now but
                 // keep pondering until the GUI sends "ponderhit" or "stop".

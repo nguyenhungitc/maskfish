@@ -195,6 +195,9 @@ Engine::Engine(std::optional<std::string> path) :
     // Before qsearch, extend the TT move for a decisive TT value, otherwise
     // only for a TT depth above 1
     options.add("MateTTExtension", Option(false));
+    // Under time management, stop as soon as no better move can be found: a single
+    // legal move, mate in 1 or 2 in all lines, or mated in 1
+    options.add("StopEarly", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
