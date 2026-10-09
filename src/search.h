@@ -436,6 +436,7 @@ class Worker {
     std::vector<Move> followPVLine;
     bool   cutoffCntTweak = false;
     bool   nmpFailHighCount = false;
+    bool   mateTTExtension = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

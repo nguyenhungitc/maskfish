@@ -335,6 +335,7 @@ bool Search::Worker::iterative_deepening() {
     followPVOption = bool(options["FollowPV"]);
     cutoffCntTweak = bool(options["CutoffCntTweak"]);
     nmpFailHighCount = bool(options["NMPFailHighCount"]);
+    mateTTExtension = bool(options["MateTTExtension"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1570,7 +1571,13 @@ moves_loop:  // When in check, search starts here
             (ss + 1)->pv[0] = Move::none();
 
             // Extend move from transposition table if we are about to dive into qsearch.
-            if (move == ttData.move && thisThread->rootDepth > 8)
+            // With MateTTExtension, always for a decisive TT value (qsearch would
+            // ignore it), otherwise only for a deep enough TT entry.
+            if (move == ttData.move
+                && (mateTTExtension
+                      ? (is_valid(ttData.value) && is_decisive(ttData.value) && ttData.depth > 0)
+                          || (ttData.depth > 1 && thisThread->rootDepth > 8)
+                      : thisThread->rootDepth > 8))
                 newDepth = std::max(newDepth, 1);
 
             value = search_child<PV>(pos, ss + 1, alpha, beta, newDepth, false, revealBonus);

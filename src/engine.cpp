@@ -192,6 +192,9 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("CutoffCntTweak", Option(false));
     // Make null move pruning easier after null move fail highs of previous siblings
     options.add("NMPFailHighCount", Option(false));
+    // Before qsearch, extend the TT move for a decisive TT value, otherwise
+    // only for a TT depth above 1
+    options.add("MateTTExtension", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
