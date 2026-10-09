@@ -30,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -650,7 +651,7 @@ class NumaConfig {
     // ','-separated cpu indices
     // supports "first-last" range syntax for cpu indices
     // For example "0-15,128-143:16-31,144-159:32-47,160-175:48-63,176-191"
-    static NumaConfig from_string(const std::string& s) {
+    static std::optional<NumaConfig> from_string(const std::string& s) {
         NumaConfig cfg = empty();
 
         NumaIndex n = 0;
@@ -662,12 +663,15 @@ class NumaConfig {
                 for (auto idx : indices)
                 {
                     if (!cfg.add_cpu_to_node(n, CpuIndex(idx)))
-                        std::exit(EXIT_FAILURE);
+                        return std::nullopt;
                 }
 
                 n += 1;
             }
         }
+
+        if (n == 0)  // failed to parse any nodes
+            return std::nullopt;
 
         cfg.customAffinity = true;
 
@@ -1033,16 +1037,22 @@ class NumaConfig {
             auto parts = split(ss, "-");
             if (parts.size() == 1)
             {
-                const CpuIndex c = CpuIndex{str_to_size_t(std::string(parts[0]))};
-                indices.emplace_back(c);
+                auto c = str_to_size_t(std::string(parts[0]));
+                if (c.has_value())
+                    indices.emplace_back(*c);
             }
             else if (parts.size() == 2)
             {
-                const CpuIndex cfirst = CpuIndex{str_to_size_t(std::string(parts[0]))};
-                const CpuIndex clast  = CpuIndex{str_to_size_t(std::string(parts[1]))};
-                for (size_t c = cfirst; c <= clast; ++c)
+                constexpr size_t MaxIndices = 1 << 20;  // prevent oom
+
+                auto cfirst = str_to_size_t(std::string(parts[0]));
+                auto clast  = str_to_size_t(std::string(parts[1]));
+                if (cfirst.has_value() && clast.has_value() && *clast - *cfirst < MaxIndices)
                 {
-                    indices.emplace_back(c);
+                    for (size_t c = *cfirst; c <= *clast; ++c)
+                    {
+                        indices.emplace_back(c);
+                    }
                 }
             }
         }

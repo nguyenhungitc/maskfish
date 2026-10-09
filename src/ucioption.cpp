@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -145,6 +146,17 @@ bool Option::operator==(const char* s) const {
 bool Option::operator!=(const char* s) const { return !(*this == s); }
 
 
+static bool value_in_range(const std::string& v, int min, int max) {
+    if (v.empty())
+        return false;
+    errno                  = 0;
+    char*           end    = nullptr;
+    const long long result = std::strtoll(v.c_str(), &end, 10);
+    if (errno == ERANGE || *end != '\0')
+        return false;
+    return result >= min && result <= max;
+}
+
 // Updates currentValue and triggers on_change() action. It's up to
 // the GUI to check for option's limits, but we could receive the new value
 // from the user by console window, so let's check the bounds anyway.
@@ -154,7 +166,7 @@ Option& Option::operator=(const std::string& v) {
 
     if ((type != "button" && type != "string" && v.empty())
         || (type == "check" && v != "true" && v != "false")
-        || (type == "spin" && (std::stoi(v) < min || std::stoi(v) > max)))
+        || (type == "spin" && !value_in_range(v, min, max)))
         return *this;
 
     if (type == "combo")
