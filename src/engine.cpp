@@ -171,6 +171,9 @@ Engine::Engine(std::optional<std::string> path) :
     // At non-PV nodes, scale the history bonus of the best move with the
     // number of moves searched before it.
     options.add("BestMoveBonusScale", Option(false));
+    // Pruning at shallow depth: divide the history of quiet moves by a
+    // depth dependent value (instead of a constant) when reducing lmrDepth.
+    options.add("LMRHistoryDivisor", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

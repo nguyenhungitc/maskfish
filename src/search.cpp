@@ -65,6 +65,12 @@ Value flip_winrate_to_score(double winrate, double scaling) {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 constexpr int MainHistoryDefault    = 51;
+
+// History divisor of the lmrDepth adjustment by depth (UCI option
+// LMRHistoryDivisor): Pikafish's tuned table, scaled from its constant 3484
+// to this engine's 3626
+constexpr std::array<int, 16> LMRDivisor = {3442, 3049, 2991, 2933, 3346, 3356, 3355, 2895,
+                                            2974, 3038, 3214, 3408, 3310, 2985, 3129, 3746};
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // (*Scalers):
@@ -313,6 +319,7 @@ bool Search::Worker::iterative_deepening() {
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
     malusDecay = bool(options["MalusDecay"]);
     bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
+    lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1246,7 +1253,11 @@ moves_loop:  // When in check, search starts here
 
                 history += 60 * thisThread->mainHistory[us][move.from_to()] / 28;
 
-                lmrDepth += history / 3626;
+                lmrDepth +=
+                  history
+                  / (lmrHistoryDivisor
+                       ? LMRDivisor[std::clamp(int(depth), 1, int(LMRDivisor.size())) - 1]
+                       : 3626);
 
                 Value baseFutility = (bestMove ? 48 : 275);
                 Value futilityValue =
