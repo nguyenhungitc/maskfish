@@ -362,13 +362,15 @@ Thread* ThreadPool::get_best_thread() const {
         const auto bestThreadMoveVote = votes[bestThreadPV[0]];
         const auto newThreadMoveVote  = votes[newThreadPV[0]];
 
-        const bool bestThreadInProvenWin = is_win(bestThreadScore);
-        const bool newThreadInProvenWin  = is_win(newThreadScore);
+        // Aborted searches may lead to inexact win scores, and aborted depth 1
+        // searches to inexact loss scores: they are labelled as bounds.
+        const bool bestThreadInProvenWin =
+          is_win(bestThreadScore) && !bestThread->worker->rootMoves[0].score_is_bound();
+        const bool newThreadInProvenWin =
+          is_win(newThreadScore) && !th->worker->rootMoves[0].score_is_bound();
 
-        const bool bestThreadInProvenLoss =
-          bestThreadScore != -VALUE_INFINITE && is_loss(bestThreadScore);
-        const bool newThreadInProvenLoss =
-          newThreadScore != -VALUE_INFINITE && is_loss(newThreadScore);
+        const bool bestThreadInProvenLoss = bestThread->worker->rootMoves[0].score_is_exact_loss();
+        const bool newThreadInProvenLoss  = th->worker->rootMoves[0].score_is_exact_loss();
 
         // We make sure not to pick a thread with truncated principal variation
         const bool betterVotingValue =
@@ -378,7 +380,7 @@ Thread* ThreadPool::get_best_thread() const {
         if (bestThreadInProvenWin)
         {
             // Make sure we pick the shortest mate
-            if (newThreadScore > bestThreadScore)
+            if (newThreadInProvenWin && newThreadScore > bestThreadScore)
                 bestThread = th.get();
         }
         else if (bestThreadInProvenLoss)

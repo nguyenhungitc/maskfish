@@ -210,6 +210,9 @@ void Search::Worker::start_searching() {
                             main_manager()->originalTimeAdjust);
     tt.new_search();
 
+    // Whether the last PV sent to the GUI matches the final result
+    bool uciPvSent = true;
+
     if (rootMoves.empty())
     {
         rootMoves.emplace_back(Move::none());
@@ -217,8 +220,8 @@ void Search::Worker::start_searching() {
     }
     else
     {
-        threads.start_searching();  // start non-main threads
-        iterative_deepening();      // main thread start searching
+        threads.start_searching();               // start non-main threads
+        uciPvSent = iterative_deepening();       // main thread start searching
     }
 
     // When we reach the maximum depth, we can arrive here without a raise of
@@ -244,20 +247,25 @@ void Search::Worker::start_searching() {
 
     Worker* bestThread = this;
 
-    if (int(options["MultiPV"]) == 1 && !limits.depth && rootMoves[0].pv[0] != Move::none())
+    if (!limits.depth && rootMoves[0].pv[0] != Move::none())
         bestThread = threads.get_best_thread()->worker.get();
 
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
 
-    // Send again PV info if we have a new best thread
-    if (bestThread != this)
+    if (bestThread->rootMoves[0].pv.size() == 1
+        && bestThread->rootMoves[0].extract_ponder_from_tt(tt, rootPos, rootObserver))
+        uciPvSent = false;
+
+    // Send PV info if it has changed since the last output in iterative_deepening(),
+    // so that the last PV always matches bestmove and the ponder move
+    if (!uciPvSent || bestThread != this)
         main_manager()->pv(*bestThread, threads, tt, bestThread->rootDepth);
 
     std::string ponder;
 
-    if ((bestThread->rootMoves[0].pv.size() > 1
-        || bestThread->rootMoves[0].extract_ponder_from_tt(tt, rootPos, rootObserver))
+    // No ponder move after a move of a dark piece: the reply depends on the reveal
+    if (bestThread->rootMoves[0].pv.size() > 1
         && !rootPos.move_dark(bestThread->rootMoves[0].pv[0]))
         ponder = UCIEngine::move(bestThread->rootMoves[0].pv[1]);
 
@@ -268,15 +276,18 @@ void Search::Worker::start_searching() {
 // Main iterative deepening loop. It calls search()
 // repeatedly with increasing depth until the allocated thinking time has been
 // consumed, the user stops the search, or the maximum search depth is reached.
-void Search::Worker::iterative_deepening() {
+bool Search::Worker::iterative_deepening() {
 
     SearchManager* mainThread = (is_mainthread() ? main_manager() : nullptr);
 
     Move pv[MAX_PLY + 1];
 
-    Depth lastBestMoveDepth = 0;
-    Value lastBestScore     = -VALUE_INFINITE;
-    auto  lastBestPV        = std::vector{Move::none()};
+    // Best move, PV and score of the last completed iteration (except that a
+    // shorter mate found earlier is kept, see forgottenMate below)
+    std::vector<Move> lastBestMovePV;
+    Depth             lastBestMoveDepth = 0;
+    Value             lastBestMoveScore = -VALUE_INFINITE;
+    bool              uciPvSent         = false;
 
     Value  alpha, beta;
     Value  bestValue     = -VALUE_INFINITE;
@@ -347,14 +358,21 @@ void Search::Worker::iterative_deepening() {
     {
         rootDepth++;
 
-        // Age out PV variability metric
+        // Age out PV variability metric and signal the start of a new iteration
         if (mainThread)
+        {
             totBestMoveChanges /= 2;
+            uciPvSent = false;
+        }
 
         // Save the last iteration's scores before the first PV line is searched and
         // all the move scores except the (new) PV are set to -VALUE_INFINITE.
-        for (RootMove& rm : rootMoves)
-            rm.previousScore = rm.score;
+        for (size_t i = 0; i < rootMoves.size(); ++i)
+        {
+            rootMoves[i].previousScore      = rootMoves[i].score;
+            rootMoves[i].previousPV         = rootMoves[i].pv;
+            rootMoves[i].previousScoreExact = i < multiPV;
+        }
 
         size_t pvFirst = 0;
         pvLast         = rootMoves.size();
@@ -444,19 +462,66 @@ void Search::Worker::iterative_deepening() {
             if (failHighRecoveryOption && failedHighCnt > 0 && !pvIdx)
                 failHighRecovery = (failedHighCnt + 1) / 2 + 2;
 
-            // Sort the PV lines searched so far and update the GUI
+            if (threads.stop && pvIdx)
+            {
+                // In MultiPV analysis we do not let aborted searches spoil mated-in
+                // scores from a completed search in an earlier PV line. Hence we
+                // guard against an aborted pvIdx line overtaking pvIdx - 1 when
+                // pvIdx - 1 is a proven loss. Moreover, we do not trust an exact
+                // loss score from an aborted search.
+                if ((is_loss(rootMoves[pvIdx - 1].score) && rootMoves[pvIdx] < rootMoves[pvIdx - 1])
+                    || rootMoves[pvIdx].score_is_exact_loss())
+                {
+                    // If previousScore is exact and worse than pvIdx - 1, we can
+                    // safely use it. If it is equal, we make sure it cannot overtake
+                    // pvIdx - 1.
+                    if (rootMoves[pvIdx].previousScore != -VALUE_INFINITE
+                        && rootMoves[pvIdx].previousScoreExact
+                        && rootMoves[pvIdx].previousScore <= rootMoves[pvIdx - 1].score)
+                    {
+                        rootMoves[pvIdx].score = rootMoves[pvIdx].uciScore =
+                          rootMoves[pvIdx].previousScore;
+                        rootMoves[pvIdx].previousScore = -VALUE_INFINITE;
+                        rootMoves[pvIdx].pv            = rootMoves[pvIdx].previousPV;
+                        rootMoves[pvIdx].unset_bound_flags();
+                    }
+
+                    // Otherwise, if we can, we cap the score to the best possible,
+                    // and mark the score as a bound (also a valid excuse for the
+                    // incomplete PV).
+                    else
+                    {
+                        if (is_loss(rootMoves[pvIdx - 1].score))
+                        {
+                            rootMoves[pvIdx].score = rootMoves[pvIdx].uciScore =
+                              rootMoves[pvIdx - 1].score;
+                            rootMoves[pvIdx].previousScore = -VALUE_INFINITE;
+                            rootMoves[pvIdx].pv.resize(1);
+                            rootMoves[pvIdx].scoreUpperbound = true;
+                        }
+                        else
+                            rootMoves[pvIdx].scoreUpperbound = false;
+
+                        rootMoves[pvIdx].scoreLowerbound = !rootMoves[pvIdx].scoreUpperbound;
+                    }
+                }
+
+                // Finally, we mark all loss scores of partially searched moves as bounds
+                for (size_t i = pvIdx + 1; i < multiPV; ++i)
+                    if (rootMoves[i].score_is_exact_loss())
+                        rootMoves[i].scoreLowerbound = true;
+            }
+
+            // Sort the PV lines searched so far and update the GUI. The PV of a
+            // stopped search is sent by start_searching(), after the checks below
+            // and the best thread selection.
             std::stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1);
 
-            if (mainThread
-                && (threads.stop || pvIdx + 1 == multiPV || nodes > 10000000)
-                // A thread that aborted search can have a mated-in score and PV that
-                // cannot be trusted, i.e. it can be delayed or refuted if we would have
-                // had time to fully search other root-moves. Thus here we suppress any
-                // exact mated-in output and, if we do, below pick the score/PV from the
-                // previously completed iteration with the most recent bestmove change.
-                && !(threads.stop && is_loss(rootMoves[0].uciScore)
-                     && rootMoves[0].score == rootMoves[0].uciScore))
+            if (mainThread && !threads.stop && (pvIdx + 1 == multiPV || nodes > 10000000))
+            {
                 main_manager()->pv(*this, threads, tt, rootDepth);
+                uciPvSent = (pvIdx + 1 == multiPV);
+            }
 
             if (threads.stop)
                 break;
@@ -465,37 +530,61 @@ void Search::Worker::iterative_deepening() {
         if (!threads.stop)
             completedDepth = rootDepth;
 
-        // We make sure not to pick an unproven mated-in score,
-        // in case this thread prematurely stopped search (aborted-search).
-        // This needs a previously completed iteration to fall back on: the
-        // search can be stopped (stop, quit) before the first one finishes.
-        if (completedDepth != rootDepth && rootMoves[0].score != -VALUE_INFINITE
-            && is_loss(rootMoves[0].score) && lastBestPV[0] != Move::none())
+        // A mate found in an earlier iteration that this one did not find again
+        const bool forgottenMate = lastBestMoveScore != -VALUE_INFINITE
+                                && is_decisive(lastBestMoveScore)
+                                && (std::abs(rootMoves[0].score) < std::abs(lastBestMoveScore)
+                                    || rootMoves[0].score_is_bound());
+
+        if (!threads.stop)
         {
-            // Bring the last best move to the front for best thread selection.
-            Utility::move_to_front(rootMoves, [&lastBestPV = std::as_const(lastBestPV)](
-                                                const auto& rm) { return rm == lastBestPV[0]; });
-            rootMoves[0].pv    = lastBestPV;
-            rootMoves[0].score = rootMoves[0].uciScore = lastBestScore;
+            if (lastBestMovePV.empty() || lastBestMovePV[0] != rootMoves[0].pv[0])
+                lastBestMoveDepth = rootDepth;
+
+            // Do not replace (shorter) mate scores from a previous iteration
+            if (!forgottenMate)
+            {
+                lastBestMovePV    = rootMoves[0].pv;
+                lastBestMoveScore = rootMoves[0].score;
+            }
         }
-        else if (rootMoves[0].pv[0] != lastBestPV[0])
+
+        const bool abortedLossSearch = threads.stop && !pvIdx && rootMoves[0].score_is_exact_loss();
+
+        // An exact mated-in score from an aborted search cannot be trusted: the
+        // loss could be delayed or refuted upon exploring the remaining root moves.
+        // Thus here we roll back to the score from the previous iteration. We do
+        // the same if a search has failed to recover a mate score that was found
+        // in a previous iteration.
+        if (abortedLossSearch || (rootMoves[0].score != -VALUE_INFINITE && forgottenMate))
         {
-            lastBestPV        = rootMoves[0].pv;
-            lastBestScore     = rootMoves[0].score;
-            lastBestMoveDepth = rootDepth;
+            // Bring the last best move to the front for best thread selection
+            if (!lastBestMovePV.empty())
+            {
+                Utility::move_to_front(rootMoves, [&lastPV = std::as_const(lastBestMovePV)](
+                                                    const auto& rm) { return rm == lastPV[0]; });
+                rootMoves[0].score = rootMoves[0].uciScore = lastBestMoveScore;
+                rootMoves[0].pv                            = lastBestMovePV;
+                rootMoves[0].unset_bound_flags();
+
+                if (mainThread)
+                    uciPvSent = false;
+            }
+            // For an aborted depth 1 search we label the loss score as a lower bound
+            else if (abortedLossSearch)
+                rootMoves[0].scoreLowerbound = true;
         }
+
+        // Have we found a "mate in x" after a completed iteration? Any thread
+        // can stop the search.
+        if (limits.mate && !threads.stop
+            && ((is_win(rootMoves[0].score) && VALUE_MATE - rootMoves[0].score <= 2 * limits.mate)
+                || (is_loss(rootMoves[0].score)
+                    && VALUE_MATE + rootMoves[0].score <= 2 * limits.mate)))
+            threads.stop = true;
 
         if (!mainThread)
             continue;
-
-        // Have we found a "mate in x"?
-        if (limits.mate && rootMoves[0].score == rootMoves[0].uciScore
-            && ((rootMoves[0].score >= VALUE_MATE_IN_MAX_PLY
-                 && VALUE_MATE - rootMoves[0].score <= 2 * limits.mate)
-                || (rootMoves[0].score != -VALUE_INFINITE
-                    && rootMoves[0].score <= VALUE_MATED_IN_MAX_PLY
-                    && VALUE_MATE + rootMoves[0].score <= 2 * limits.mate)))
-            threads.stop = true;
 
         // Use part of the gained time from a previous stable move for the current move
         for (auto&& th : threads)
@@ -552,9 +641,11 @@ void Search::Worker::iterative_deepening() {
     }
 
     if (!mainThread)
-        return;
+        return false;
 
     mainThread->previousTimeReduction = timeReduction;
+
+    return uciPvSent;
 }
 
 
@@ -2286,7 +2377,7 @@ void SearchManager::pv(const Search::Worker&     worker,
         std::deque<StateInfo> pvStates;
         tempPos.set(pos, &st);
 
-        for (Move m : rootMoves[i].pv)
+        for (Move m : usePreviousScore ? rootMoves[i].previousPV : rootMoves[i].pv)
         {
             pv += UCIEngine::move(m);
 
@@ -2349,10 +2440,12 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
 
     pos.do_move(pv[0], st, &tt);
 
-    auto [ttHit, ttData, ttWriter] = tt.probe(observer_tt_key(pos.key(), observer));
-    if (ttHit)
+    // No ponder move if the best move ends the game (e.g. a draw by repetition)
+    Value result;
+    if (!pos.rule_judge(result, 1))
     {
-        if (MoveList<LEGAL>(pos).contains(ttData.move))
+        auto [ttHit, ttData, ttWriter] = tt.probe(observer_tt_key(pos.key(), observer));
+        if (ttHit && MoveList<LEGAL>(pos).contains(ttData.move))
             pv.push_back(ttData.move);
     }
 

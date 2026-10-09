@@ -114,6 +114,11 @@ struct RootMove {
     explicit RootMove(Move m) :
         pv(1, m) {}
     bool extract_ponder_from_tt(const TranspositionTable& tt, Position& pos, Color observer);
+    bool score_is_bound() const { return scoreLowerbound || scoreUpperbound; }
+    bool score_is_exact_loss() const {
+        return score != -VALUE_INFINITE && is_loss(score) && !score_is_bound();
+    }
+    void unset_bound_flags() { scoreLowerbound = scoreUpperbound = false; }
     bool operator==(const Move& m) const { return pv[0] == m; }
     // Sort in descending order
     bool operator<(const RootMove& m) const {
@@ -128,8 +133,11 @@ struct RootMove {
     Value             uciScore         = -VALUE_INFINITE;
     bool              scoreLowerbound  = false;
     bool              scoreUpperbound  = false;
-    int               selDepth         = 0;
-    std::vector<Move> pv;
+    // previousScore / previousPV come from a complete search of the move in the
+    // previous iteration (it was one of the MultiPV lines)
+    bool              previousScoreExact = false;
+    int               selDepth           = 0;
+    std::vector<Move> pv, previousPV;
 };
 
 using RootMoves = std::vector<RootMove>;
@@ -325,7 +333,8 @@ class Worker {
     bool cmhc            = false;
 
    private:
-    void iterative_deepening();
+    // Returns whether the last PV sent to the GUI is up to date
+    bool iterative_deepening();
 
     void do_move(Position& pos, const Move move, StateInfo& st);
     void do_move(Position& pos, const Move move, StateInfo& st, const bool givesCheck);
