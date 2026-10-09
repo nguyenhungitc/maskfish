@@ -174,6 +174,9 @@ Engine::Engine(std::optional<std::string> path) :
     // Pruning at shallow depth: divide the history of quiet moves by a
     // depth dependent value (instead of a constant) when reducing lmrDepth.
     options.add("LMRHistoryDivisor", Option(false));
+    // Add a constant offset to the continuation history updates of the move
+    // one ply back.
+    options.add("ContHistOffset", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

@@ -320,6 +320,7 @@ bool Search::Worker::iterative_deepening() {
     malusDecay = bool(options["MalusDecay"]);
     bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
     lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
+    contHistOffset = bool(options["ContHistOffset"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -2346,14 +2347,17 @@ void update_continuation_histories(
         if (((ss - i)->currentMove).is_ok())
         {
             auto& entry = (*(ss - i)->continuationHistory)[pc][to];
+            // UCI option ContHistOffset: offset for the move one ply back
+            const int offset = w.contHistOffset && i == 1 ? 88 : 0;
             if (w.cmhc)
             {
                 positiveCount += entry > 0;
                 entry << int(std::int64_t(bonus) * weight * CMHCMultipliers[positiveCount]
-                             / (1024 * 128));
+                             / (1024 * 128))
+                           + offset;
             }
             else
-                entry << bonus * weight / 1024;
+                entry << bonus * weight / 1024 + offset;
         }
     }
 }
