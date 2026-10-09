@@ -182,6 +182,9 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("CorrHistAsym", Option(false));
     // Continuation correction history also from the move 6 plies back.
     options.add("ContCorr6Ply", Option(false));
+    // Compute the static eval and the hindsight depth adjustments before the
+    // TT cutoff (which then uses the adjusted depth).
+    options.add("HindsightFirst", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

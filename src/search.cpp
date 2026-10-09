@@ -331,6 +331,7 @@ bool Search::Worker::iterative_deepening() {
     contHistOffset = bool(options["ContHistOffset"]);
     corrHistAsym = bool(options["CorrHistAsym"]);
     contCorr6Ply = bool(options["ContCorr6Ply"]);
+    hindsightFirst = bool(options["HindsightFirst"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -814,7 +815,8 @@ Value Search::Worker::search(
     Move  move, excludedMove, bestMove;
     Depth extension, newDepth;
     Value bestValue, value, eval, maxValue, probCutBeta;
-    bool  givesCheck, improving, priorCapture, opponentWorsening;
+    bool  givesCheck, priorCapture;
+    bool  improving = false, opponentWorsening = false;
     bool  capture, ttCapture;
     int   priorReduction;
     Piece movedPiece;
@@ -901,6 +903,67 @@ Value Search::Worker::search(
     ss->ttPv     = excludedMove ? ss->ttPv : PvNode || (ttHit && ttData.is_pv);
     ttCapture    = ttData.move && pos.capture(ttData.move);
 
+    // Step 5. Static evaluation of the position (a lambda, because it is done
+    // before the TT cutoff with HindsightFirst and after it otherwise)
+    Value unadjustedStaticEval = VALUE_NONE;
+    // (references, since a lambda cannot capture structured bindings in C++17)
+    const TTData& ttEntry           = ttData;
+    TTWriter&     ttEntryWriter     = ttWriter;
+    auto          static_evaluation = [&]() {
+        if (ss->inCheck)
+            ss->staticEval = eval = (ss - 2)->staticEval;
+        else if (excludedMove)
+            unadjustedStaticEval = eval = ss->staticEval;
+        else if (ss->ttHit)
+        {
+            // Never assume anything about values stored in TT
+            unadjustedStaticEval = ttEntry.eval;
+            if (!is_valid(unadjustedStaticEval))
+                unadjustedStaticEval = evaluate(pos);
+
+            ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+
+            // ttValue can be used as a better position evaluation
+            if (is_valid(ttEntry.value)
+                && (ttEntry.bound & (ttEntry.value > eval ? BOUND_LOWER : BOUND_UPPER)))
+                eval = ttEntry.value;
+        }
+        else
+        {
+            unadjustedStaticEval = evaluate(pos);
+            ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
+
+            // Static evaluation is saved as it was before adjustment by correction history
+            ttEntryWriter.write(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_UNSEARCHED,
+                           Move::none(), unadjustedStaticEval, tt.generation());
+        }
+    };
+
+    // Set up the improving flag, which is true if current static evaluation is
+    // bigger than the previous static evaluation at our turn (if we were in
+    // check at our previous move we go back until we weren't in check) and is
+    // false otherwise. The improving flag is used in various pruning heuristics.
+    // Then the hindsight adjustment of the depth, based on the reduction of the
+    // previous move and on the static evaluation difference.
+    auto hindsight_adjustments = [&](int minPriorReduction) {
+        improving         = ss->staticEval > (ss - 2)->staticEval;
+        opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
+
+        if (priorReduction >= 3 && !opponentWorsening)
+            depth++;
+        if (priorReduction >= minPriorReduction && depth >= 2
+            && ss->staticEval + (ss - 1)->staticEval > 181)
+            depth--;
+    };
+
+    // With HindsightFirst, both are done before the TT cutoff, which then uses
+    // the adjusted depth (also in check)
+    if (hindsightFirst)
+    {
+        static_evaluation();
+        hindsight_adjustments(2);
+    }
+
     // At this point, if excluded, skip straight to step 5, static eval. However,
     // to save indentation, we list the condition in all code between here and there.
 
@@ -952,40 +1015,19 @@ Value Search::Worker::search(
              && (ttData.bound & (ttData.value >= beta ? BOUND_UPPER : BOUND_LOWER)) && depth > 5)
         ttWriter.penalize(1);
 
-    // Step 5. Static evaluation of the position
-    Value unadjustedStaticEval = VALUE_NONE;
     if (ss->inCheck)
     {
         // Skip early pruning when in check
-        ss->staticEval = eval = (ss - 2)->staticEval;
-        improving             = false;
+        if (!hindsightFirst)
+        {
+            static_evaluation();
+            improving = false;
+        }
         goto moves_loop;
     }
-    else if (excludedMove)
-        unadjustedStaticEval = eval = ss->staticEval;
-    else if (ss->ttHit)
-    {
-        // Never assume anything about values stored in TT
-        unadjustedStaticEval = ttData.eval;
-        if (!is_valid(unadjustedStaticEval))
-            unadjustedStaticEval = evaluate(pos);
 
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
-
-        // ttValue can be used as a better position evaluation
-        if (is_valid(ttData.value)
-            && (ttData.bound & (ttData.value > eval ? BOUND_LOWER : BOUND_UPPER)))
-            eval = ttData.value;
-    }
-    else
-    {
-        unadjustedStaticEval = evaluate(pos);
-        ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
-
-        // Static evaluation is saved as it was before adjustment by correction history
-        ttWriter.write(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_UNSEARCHED, Move::none(),
-                       unadjustedStaticEval, tt.generation());
-    }
+    if (!hindsightFirst)
+        static_evaluation();
 
     // Use static evaluation difference to improve quiet move ordering
     if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture && !ttHit)
@@ -997,18 +1039,8 @@ Value Search::Worker::search(
               << bonus * 1267 / 1024;
     }
 
-    // Set up the improving flag, which is true if current static evaluation is
-    // bigger than the previous static evaluation at our turn (if we were in
-    // check at our previous move we go back until we weren't in check) and is
-    // false otherwise. The improving flag is used in various pruning heuristics.
-    improving = ss->staticEval > (ss - 2)->staticEval;
-
-    opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
-
-    if (priorReduction >= 3 && !opponentWorsening)
-        depth++;
-    if (priorReduction >= 1 && depth >= 2 && ss->staticEval + (ss - 1)->staticEval > 181)
-        depth--;
+    if (!hindsightFirst)
+        hindsight_adjustments(1);
 
     // Step 6. Razoring
     // If eval is really low, skip search entirely and return the qsearch value.
