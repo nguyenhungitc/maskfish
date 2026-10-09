@@ -220,6 +220,33 @@ static constexpr std::uint32_t Mask[4] = {1, 2, 4, 8};
 
 #endif
 
+#ifdef VECTOR
+// Loads sizeof(vec_t) / 2 feature transformer weights of 8 bits and
+// sign-extends them to 16-bit lanes
+inline vec_t vec_load_i8_16(const std::int8_t* p) {
+    #if defined(USE_AVX512)
+        #if defined(USE_AVX512BW)
+    return _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(p)));
+        #else
+    const __m256i lo =
+      _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
+    const __m256i hi =
+      _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p + 16)));
+    return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7);
+        #endif
+    #elif defined(USE_AVX2)
+    return _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
+    #elif defined(USE_SSE41)
+    return _mm_cvtepi8_epi16(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(p)));
+    #elif defined(USE_SSE2)
+    const __m128i x = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(p));
+    return _mm_srai_epi16(_mm_unpacklo_epi8(x, x), 8);
+    #elif defined(USE_NEON)
+    return vmovl_s8(vld1_s8(p));
+    #endif
+}
+#endif
+
 struct Vec16Wrapper {
 #ifdef VECTOR
     using type = vec_t;
@@ -424,7 +451,7 @@ class SIMDTiling {
 
    public:
     static constexpr int NumRegs =
-      BestRegisterCount<vec_t, WeightType, TransformedFeatureWidth, NumRegistersSIMD>();
+      BestRegisterCount<vec_t, BiasType, TransformedFeatureWidth, NumRegistersSIMD>();
     static constexpr int NumPsqtRegs =
       BestRegisterCount<psqt_vec_t, PSQTWeightType, PSQTBuckets, NumRegistersSIMD>();
 

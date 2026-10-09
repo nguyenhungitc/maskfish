@@ -46,13 +46,18 @@ L3 = 32
 NNUE2SCORE = 600.0   # network unit -> internal score units
 
 # Quantization constants (must match src/nnue)
-FT_SCALE = 127.0                         # file FT weight scale (engine doubles it)
+FT_SCALE = 127.0                         # file FT scale (the engine doubles the outputs)
 HIDDEN_WEIGHT_SCALE = 64.0               # 1 << WeightScaleBits
 QUANTIZED_ONE = 127.0
 OUTPUT_SCALE = 16.0                      # OutputScale
 OUTPUT_WEIGHT_SCALE = NNUE2SCORE * OUTPUT_SCALE / QUANTIZED_ONE
 MAX_HIDDEN_WEIGHT = QUANTIZED_ONE / HIDDEN_WEIGHT_SCALE
 MAX_OUTPUT_WEIGHT = QUANTIZED_ONE / OUTPUT_WEIGHT_SCALE
+# Feature transformer: int8 weights (HalfKA and threats) and int16 biases at
+# scale FT_SCALE. The bias bound keeps the engine's 16-bit accumulators from
+# wrapping around: |bias| + 62 x 127 <= 32767 (src/nnue/nnue_feature_transformer.h)
+MAX_FT_WEIGHT = 127.0 / FT_SCALE
+MAX_FT_BIAS = 16383.0 / FT_SCALE
 
 
 class LayerStacks(nn.Module):
@@ -257,12 +262,25 @@ class NNUE(nn.Module):
     def clip_weights(self):
         self.stacks.clip_weights()
         with torch.no_grad():
-            # Keep the FT weights inside the int16 range of the file
-            lim = 32767.0 / FT_SCALE / 2.0
+            # Keep the FT weights inside the int8 range of the file: the
+            # coalesced weights (with the virtual features), as exported
             L1 = self.l1_size
-            self.ft.weight[:, :L1].clamp_(-lim, lim)
-            if self.ft_thr is not None:   # int8 in the file
-                self.ft_thr.weight[:, :L1].clamp_(-127.0 / FT_SCALE, 127.0 / FT_SCALE)
+            lim = MAX_FT_WEIGHT
+            if self.ft_ps is None:
+                self.ft.weight[:, :L1].clamp_(-lim, lim)
+            else:
+                n, w = F.NUM_FEATURES, self.ft.weight[:F.NUM_FEATURES]
+                rows = torch.arange(n, device=w.device)
+                chunk = 4096                   # bounds the temporary memory
+                for i in range(0, n, chunk):
+                    r = rows[i:i + chunk]
+                    f = self.ft_ps.weight[r % F.PS_NB, :L1]
+                    if self.ft_kb is not None:
+                        f = f + self.ft_kb.weight[r // F.PS_NB, :L1]
+                    w[i:i + chunk, :L1] = torch.clamp(w[i:i + chunk, :L1] + f, -lim, lim) - f
+            self.ft_bias[:L1].clamp_(-MAX_FT_BIAS, MAX_FT_BIAS)
+            if self.ft_thr is not None:
+                self.ft_thr.weight[:, :L1].clamp_(-lim, lim)
             self.ft.weight[F.PAD_INDEX].zero_()
             if self.ft_ps is not None:
                 self.ft_ps.weight[F.PS_NB].zero_()

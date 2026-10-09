@@ -132,9 +132,11 @@ class FeatureTransformer {
     // The 8-bit threat weights are permuted element for element like the
     // 16-bit ones (blocks of 8 elements), so that they line up with the
     // accumulator.
+    // The 8-bit weights are permuted by blocks of 8, which become blocks of
+    // 16 bytes once sign-extended to the 16-bit accumulators
     void permute_weights() {
         permute<16>(biases, PackusEpi16Order);
-        permute<16>(weights, PackusEpi16Order);
+        permute<8>(weights, PackusEpi16Order);
 #ifdef JIEQI_NNUE_THREATS
         permute<8>(threatWeights, PackusEpi16Order);
 #endif
@@ -142,29 +144,17 @@ class FeatureTransformer {
 
     void unpermute_weights() {
         permute<16>(biases, InversePackusEpi16Order);
-        permute<16>(weights, InversePackusEpi16Order);
+        permute<8>(weights, InversePackusEpi16Order);
 #ifdef JIEQI_NNUE_THREATS
         permute<8>(threatWeights, InversePackusEpi16Order);
 #endif
-    }
-
-    inline void scale_weights(bool read) {
-        for (IndexType j = 0; j < InputDimensions; ++j)
-        {
-            WeightType* w = &weights[j * HalfDimensions];
-            for (IndexType i = 0; i < HalfDimensions; ++i)
-                w[i] = read ? w[i] * 2 : w[i] / 2;
-        }
-
-        for (IndexType i = 0; i < HalfDimensions; ++i)
-            biases[i] = read ? biases[i] * 2 : biases[i] / 2;
     }
 
     // Read network parameters
     bool read_parameters(std::istream& stream) {
 
         read_leb_128<BiasType>(stream, biases, HalfDimensions);
-        read_leb_128<WeightType>(stream, weights, HalfDimensions * InputDimensions);
+        read_little_endian<WeightType>(stream, weights, HalfDimensions * InputDimensions);
         read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
 #ifdef JIEQI_NNUE_THREATS
         // Threat weights are not doubled: the threat accumulator is doubled
@@ -177,7 +167,6 @@ class FeatureTransformer {
 #endif
 
         permute_weights();
-        scale_weights(true);
         return !stream.fail();
     }
 
@@ -186,10 +175,9 @@ class FeatureTransformer {
         std::unique_ptr<FeatureTransformer> copy = std::make_unique<FeatureTransformer>(*this);
 
         copy->unpermute_weights();
-        copy->scale_weights(false);
 
         write_leb_128<BiasType>(stream, copy->biases, HalfDimensions);
-        write_leb_128<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
+        write_little_endian<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
         write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
 #ifdef JIEQI_NNUE_THREATS
         write_little_endian<ThreatWeightType>(stream, copy->threatWeights,
@@ -230,13 +218,14 @@ class FeatureTransformer {
         const auto& psqtAccumulation = (accumulatorState.acc<HalfDimensions>()).psqtAccumulation;
         const auto& accumulation     = (accumulatorState.acc<HalfDimensions>()).accumulation;
 
+        // The accumulators are in half units (the weights are not doubled on
+        // load). The HalfKA one (and the threat one, added to it) is doubled
+        // with saturation, which gives the doubled value clamped to the int16
+        // range: this clamp does not change the clipped result. The HalfKA
+        // accumulator, bounded by |bias| + 62 x 127, and the threat one,
+        // bounded by 144 x 127, never wrap around if |bias| <= 24893 (checked
+        // by the trainer), so this is exact.
 #ifdef JIEQI_NNUE_THREATS
-        // The threat accumulators (in half units: the threat weights are not
-        // doubled on load) are added to the HalfKA ones twice, with saturation,
-        // which gives the HalfKA value + 2 x threats clamped to the int16 range
-        // (the threat accumulators are bounded by 144 x 127 in absolute value,
-        // so both additions saturate in the same direction), and this clamp
-        // does not change the clipped result.
         const auto& threats = accumulatorState.threats;
         const auto  psqt =
           (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
@@ -275,12 +264,16 @@ class FeatureTransformer {
             const vec_t* thr0 = reinterpret_cast<const vec_t*>(&(threatAccumulations[p][0]));
             const vec_t* thr1 =
               reinterpret_cast<const vec_t*>(&(threatAccumulations[p][HalfDimensions / 2]));
-            // HalfKA + 2 x threats, saturated (see above)
+            // 2 x (HalfKA + threats), saturated (see above)
             auto in = [](const vec_t* acc, const vec_t* thr, IndexType i) {
-                return vec_adds_16(vec_adds_16(acc[i], thr[i]), thr[i]);
+                const vec_t sum = vec_adds_16(acc[i], thr[i]);
+                return vec_adds_16(sum, sum);
             };
     #else
-            auto in = [](const vec_t* acc, const vec_t*, IndexType i) { return acc[i]; };
+            // 2 x HalfKA, saturated (see above)
+            auto in = [](const vec_t* acc, const vec_t*, IndexType i) {
+                return vec_adds_16(acc[i], acc[i]);
+            };
             const vec_t* thr0 = nullptr;
             const vec_t* thr1 = nullptr;
     #endif
@@ -321,9 +314,9 @@ class FeatureTransformer {
             // might occupy the signed bit, resulting in some positive
             // values being interpreted as negative after the shift.
 
-            // There is a way, however, to get around this limitation. When
-            // loading the network, scale accumulator weights and biases by
-            // 2. To get the same pairwise multiplication result as before,
+            // There is a way, however, to get around this limitation: scale
+            // the accumulators by 2 (here, when they are read: see above).
+            // To get the same pairwise multiplication result as before,
             // we need to divide the product by 128 * 2 * 2 = 512, which
             // amounts to a right shift of 9 bits. So now we only have to
             // shift left by 7 bits, perform mulhi (shifts right by 16 bits)
@@ -367,9 +360,11 @@ class FeatureTransformer {
                 int sum0 = accumulations[p][j + 0];
                 int sum1 = accumulations[p][j + HalfDimensions / 2];
     #ifdef JIEQI_NNUE_THREATS
-                sum0 += 2 * threatAccumulations[p][j + 0];
-                sum1 += 2 * threatAccumulations[p][j + HalfDimensions / 2];
+                sum0 += threatAccumulations[p][j + 0];
+                sum1 += threatAccumulations[p][j + HalfDimensions / 2];
     #endif
+                sum0 *= 2;
+                sum1 *= 2;
                 sum0               = std::clamp(sum0, 0, 127 * 2);
                 sum1               = std::clamp(sum1, 0, 127 * 2);
                 output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);

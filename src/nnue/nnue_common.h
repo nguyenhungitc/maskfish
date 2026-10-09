@@ -48,17 +48,20 @@
 
 namespace Stockfish::Eval::NNUE {
 
-using BiasType       = std::int16_t;
-using WeightType     = std::int16_t;
-using PSQTWeightType = std::int32_t;
-
-// Weights of the threat features (make threats=yes): 8 bits like upstream, to
-// keep the large table (92711 x 1024) small
+// The feature transformer weights (HalfKA and threat features) have 8 bits
+// like upstream, the accumulators 16 bits. Weights, biases and accumulators
+// are in half units (scale 127, as in the file); the accumulators are doubled
+// with saturation in FeatureTransformer::transform().
+using BiasType         = std::int16_t;
+using WeightType       = std::int8_t;
+using PSQTWeightType   = std::int32_t;
 using ThreatWeightType = std::int8_t;
-using IndexType      = std::uint32_t;
+using IndexType        = std::uint32_t;
 
-// Version of the evaluation file
-constexpr std::uint32_t Version = 0x7AF32F20u;
+// Version of the evaluation file (0x7AF32F20: 16-bit feature transformer
+// weights, which trainer/serialize.py --upgrade converts)
+constexpr std::uint32_t Version    = 0x7AF32F21u;
+constexpr std::uint32_t OldVersion = 0x7AF32F20u;
 
 // Constant used in evaluation value calculation
 constexpr int OutputScale     = 16;

@@ -102,6 +102,10 @@ class Network {
 
     bool initialized = false;
 
+    // A file that failed to load had the version before the 8-bit feature
+    // transformer weights (reported by verify())
+    bool oldVersionFile = false;
+
     // Hash value of evaluation function structure
     static constexpr std::uint32_t hash = Transformer::get_hash_value() ^ Arch::get_hash_value();
 

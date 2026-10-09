@@ -4,12 +4,14 @@ File layout (src/nnue/network.cpp, nnue_feature_transformer.h, layers/):
 
     u32 version, u32 network hash, u32 len, description
     u32 feature transformer hash
-      LEB128 int16 biases[L1]             (scale 127, the engine doubles them)
-      LEB128 int16 weights[7560][L1]
+      LEB128 int16 biases[L1]             (scale 127, |bias| <= 16383)
+      raw    int8  weights[7560][L1]      (scale 127)
       LEB128 int32 psqt[7560][16]         (scale 600 * 16)
       threat architectures only:
-      raw    int8  threat weights[92711][L1] (scale 127, added twice by the engine)
+      raw    int8  threat weights[92711][L1] (scale 127)
       LEB128 int32 threat psqt[92711][16]    (scale 600 * 16)
+    The engine doubles the feature transformer outputs (biases + weights),
+    so 1.0 is 254 before the clipped ReLU.
     16 x layer stack:
       u32 architecture hash
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
@@ -20,9 +22,14 @@ L1 = 2048, or 1024 for the threat architectures. (7560 is 30240 for "att".)
 
 The whole file is then compressed with zstd, which the engine requires.
 
+Files of version 0x7AF32F20 (before the engine had 8-bit HalfKA weights)
+have LEB128 int16 weights[7560][L1] instead; --upgrade converts them (the
+evaluation is unchanged if no weight is beyond +-127, which is reported).
+
 Usage:
     python serialize.py checkpoint.pt out.nnue [--description "..."]
     python serialize.py --to-checkpoint in.nnue out.pt     (start from a net)
+    python serialize.py --upgrade old.nnue new.nnue        (old file version)
 """
 
 from __future__ import annotations
@@ -35,7 +42,9 @@ import numpy as np
 
 import jieqi_features as F
 
-VERSION = 0x7AF32F20
+VERSION = 0x7AF32F21
+OLD_VERSION = 0x7AF32F20      # 16-bit HalfKA weights (LEB128)
+MAX_FT_BIAS = 16383           # keeps the engine accumulators from wrapping around
 LEB128_MAGIC = b"COMPRESSED_LEB128"
 
 L2, L3 = 15, 32
@@ -164,10 +173,12 @@ def quantize(model) -> dict:
         q = {}
         q["ft_bias"] = np.round(b[:L1] * FT_SCALE).astype(np.int64)
         ftw = torch.round(w[:, :L1].float() * FT_SCALE)
-        if ftw.abs().max().item() > 16383 or np.abs(q["ft_bias"]).max() > 16383:
-            raise ValueError("feature transformer weights out of range (doubled by the engine "
-                             "into int16)")
-        q["ft_weight"] = ftw.to(torch.int16).cpu().numpy()
+        if ftw.abs().max().item() > 127:
+            raise ValueError("feature transformer weights out of the int8 range "
+                             "(model.clip_weights() keeps them inside)")
+        if np.abs(q["ft_bias"]).max() > MAX_FT_BIAS:
+            raise ValueError("feature transformer biases out of range")
+        q["ft_weight"] = ftw.to(torch.int8).cpu().numpy()
         del ftw
         q["psqt"] = np.round(w[:, L1:].cpu().double().numpy() * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
         if F.THREATS:
@@ -212,8 +223,10 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
     buf.write(desc)
 
     buf.write(struct.pack("<I", ft_hash()))
+    if np.abs(q["ft_weight"]).max() > 127 or np.abs(q["ft_bias"]).max() > MAX_FT_BIAS:
+        raise ValueError("feature transformer parameters out of range")
     _write_leb(buf, q["ft_bias"].astype(np.int16))
-    _write_leb(buf, q["ft_weight"].astype(np.int16))
+    buf.write(q["ft_weight"].astype(np.int8).tobytes())
     _write_leb(buf, q["psqt"].astype(np.int32))
     if F.THREATS:
         buf.write(q["thr_weight"].astype(np.int8).tobytes())
@@ -243,7 +256,7 @@ def read_nnue(path: str) -> dict:
         pass  # not compressed
     f = io.BytesIO(raw)
     version, nhash, dlen = struct.unpack("<III", f.read(12))
-    if version != VERSION or nhash != network_hash():
+    if version not in (VERSION, OLD_VERSION) or nhash != network_hash():
         known = {S_hash: name for name, S_hash in _arch_network_hashes().items()}
         hint = f" (looks like arch '{known[nhash]}')" if nhash in known else ""
         raise ValueError(f"incompatible network for arch '{F.ARCH}' "
@@ -253,9 +266,13 @@ def read_nnue(path: str) -> dict:
     if fth != ft_hash():
         raise ValueError("feature transformer hash mismatch")
     L1 = F.L1
-    q = {"description": description}
+    q = {"description": description, "version": version}
     q["ft_bias"] = _read_leb(f, L1)
-    q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
+    if version == OLD_VERSION:
+        q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
+    else:
+        n = F.NUM_FEATURES * L1
+        q["ft_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.NUM_FEATURES, L1).copy()
     q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
     if F.THREATS:
         n = F.THREAT_DIMS * L1
@@ -303,6 +320,20 @@ def detect_arch(path: str) -> str:
         if h == nhash:
             return name
     raise ValueError(f"unknown network hash {nhash:#x}")
+
+
+def upgrade(q: dict) -> tuple[int, int]:
+    """Converts a network read from an old file (16-bit HalfKA weights) to
+    the current format, in place: weights beyond +-127 and biases beyond
+    +-MAX_FT_BIAS are clamped. Returns the numbers of clamped weights and
+    biases (0, 0: the engine evaluates the new file exactly like the old one)."""
+    w, b = q["ft_weight"].astype(np.int64), q["ft_bias"].astype(np.int64)
+    clamped = (int(np.count_nonzero(np.abs(w) > 127)),
+               int(np.count_nonzero(np.abs(b) > MAX_FT_BIAS)))
+    q["ft_weight"] = np.clip(w, -127, 127).astype(np.int8)
+    q["ft_bias"] = np.clip(b, -MAX_FT_BIAS, MAX_FT_BIAS)
+    q["version"] = VERSION
+    return clamped
 
 
 def load_into_model(q: dict, model):
@@ -354,14 +385,15 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
     transformed = []
     psqt_acc = []
     for feats, thr_feats in zip((stm_f, nstm_f), thr):
-        acc = 2 * q["ft_bias"].copy()               # the engine doubles the FT on load
+        acc = q["ft_bias"].astype(np.int64)         # half units, like the engine
         ps = np.zeros(PSQT, dtype=np.int64)
         for i in feats:
-            acc += 2 * q["ft_weight"][i].astype(np.int64)
+            acc += q["ft_weight"][i].astype(np.int64)
             ps += q["psqt"][i]
-        for i in thr_feats:                          # threat weights: added twice
-            acc += 2 * q["thr_weight"][i].astype(np.int64)
+        for i in thr_feats:
+            acc += q["thr_weight"][i].astype(np.int64)
             ps += q["thr_psqt"][i]
+        acc *= 2                                     # doubled in transform()
         a = np.clip(acc[:L1 // 2], 0, 254)
         b = np.clip(acc[L1 // 2:], 0, 254)
         transformed.append((a * b) // 512)
@@ -390,7 +422,22 @@ def main():
     ap.add_argument("--description", default="Jieqi NNUE trained with trainer/")
     ap.add_argument("--to-checkpoint", action="store_true",
                     help="convert a .nnue file into a checkpoint to continue training")
+    ap.add_argument("--upgrade", action="store_true",
+                    help="convert a .nnue file of the old version (16-bit HalfKA weights)")
     args = ap.parse_args()
+
+    if args.upgrade:
+        F.set_arch(detect_arch(args.source))
+        q = read_nnue(args.source)
+        if q["version"] == VERSION:
+            raise SystemExit(f"{args.source} already has the current version")
+        nw, nb = upgrade(q)
+        write_nnue(q, args.target, q["description"])
+        total = q["ft_weight"].size
+        print(f"written {args.target} (arch {F.ARCH}): {nw} of {total} weights "
+              f"({100 * nw / total:.4f}%) and {nb} biases clamped"
+              + ("" if nw or nb else ", same evaluation as the old file"))
+        return
 
     import torch
     from model import NNUE

@@ -437,6 +437,28 @@ void fused_row_reduce(const ElementType* in, ElementType* out, const Ts* const..
           vecIn[i], reinterpret_cast<const typename VectorWrapper::type*>(rows)[i]...);
 }
 
+// Same for the 16-bit accumulator and rows of 8-bit feature transformer
+// weights, sign-extended on the fly
+template<IndexType Width,
+         UpdateOperation... ops,
+         typename... Ts,
+         std::enable_if_t<is_all_same_v<WeightType, Ts...>, bool> = true>
+void fused_weight_row_reduce(const BiasType* in, BiasType* out, const Ts* const... rows) {
+#ifdef VECTOR
+    constexpr IndexType Lanes = sizeof(vec_t) / sizeof(BiasType);
+    static_assert(Width % Lanes == 0);
+
+    auto* vecIn  = reinterpret_cast<const vec_t*>(in);
+    auto* vecOut = reinterpret_cast<vec_t*>(out);
+
+    for (IndexType i = 0; i < Width / Lanes; ++i)
+        vecOut[i] = fused<Vec16Wrapper, ops...>(vecIn[i], vec_load_i8_16(rows + i * Lanes)...);
+#else
+    for (IndexType i = 0; i < Width; ++i)
+        out[i] = fused<Vec16Wrapper, ops...>(in[i], BiasType(rows[i])...);
+#endif
+}
+
 template<Color Perspective, IndexType Dimensions>
 struct AccumulatorUpdateContext {
     const FeatureTransformer<Dimensions>& featureTransformer;
@@ -462,7 +484,7 @@ struct AccumulatorUpdateContext {
             return &featureTransformer.psqtWeights[index * PSQTBuckets];
         };
 
-        fused_row_reduce<Vec16Wrapper, Dimensions, ops...>(
+        fused_weight_row_reduce<Dimensions, ops...>(
           (from.acc<Dimensions>()).accumulation[Perspective],
           (to.acc<Dimensions>()).accumulation[Perspective], to_weight_vector(indices)...);
 
@@ -668,6 +690,9 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
     accumulator.computed[Perspective] = true;
 
 #ifdef VECTOR
+    // Weights per vector of the accumulator
+    constexpr IndexType Lanes = sizeof(vec_t) / sizeof(BiasType);
+
     vec_t      acc[Tiling::NumRegs];
     psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
@@ -683,33 +708,34 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
         IndexType i = 0;
         for (; i < std::min(removed.size(), added.size()); ++i)
         {
-            IndexType       indexR  = removed[i];
-            const IndexType offsetR = Dimensions * indexR + j * Tiling::TileHeight;
-            auto* columnR = reinterpret_cast<const vec_t*>(&featureTransformer.weights[offsetR]);
-            IndexType       indexA  = added[i];
-            const IndexType offsetA = Dimensions * indexA + j * Tiling::TileHeight;
-            auto* columnA = reinterpret_cast<const vec_t*>(&featureTransformer.weights[offsetA]);
+            IndexType         indexR  = removed[i];
+            const IndexType   offsetR = Dimensions * indexR + j * Tiling::TileHeight;
+            const WeightType* columnR = &featureTransformer.weights[offsetR];
+            IndexType         indexA  = added[i];
+            const IndexType   offsetA = Dimensions * indexA + j * Tiling::TileHeight;
+            const WeightType* columnA = &featureTransformer.weights[offsetA];
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fused<Vec16Wrapper, Add, Sub>(acc[k], columnA[k], columnR[k]);
+                acc[k] = fused<Vec16Wrapper, Add, Sub>(acc[k], vec_load_i8_16(columnA + k * Lanes),
+                                                       vec_load_i8_16(columnR + k * Lanes));
         }
         for (; i < removed.size(); ++i)
         {
-            IndexType       index  = removed[i];
-            const IndexType offset = Dimensions * index + j * Tiling::TileHeight;
-            auto* column = reinterpret_cast<const vec_t*>(&featureTransformer.weights[offset]);
+            IndexType         index  = removed[i];
+            const IndexType   offset = Dimensions * index + j * Tiling::TileHeight;
+            const WeightType* column = &featureTransformer.weights[offset];
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = vec_sub_16(acc[k], column[k]);
+                acc[k] = vec_sub_16(acc[k], vec_load_i8_16(column + k * Lanes));
         }
         for (; i < added.size(); ++i)
         {
-            IndexType       index  = added[i];
-            const IndexType offset = Dimensions * index + j * Tiling::TileHeight;
-            auto* column = reinterpret_cast<const vec_t*>(&featureTransformer.weights[offset]);
+            IndexType         index  = added[i];
+            const IndexType   offset = Dimensions * index + j * Tiling::TileHeight;
+            const WeightType* column = &featureTransformer.weights[offset];
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = vec_add_16(acc[k], column[k]);
+                acc[k] = vec_add_16(acc[k], vec_load_i8_16(column + k * Lanes));
         }
 
         for (IndexType k = 0; k < Tiling::NumRegs; k++)

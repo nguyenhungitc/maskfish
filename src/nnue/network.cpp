@@ -156,6 +156,9 @@ void Network<Arch, Transformer>::verify(std::string                             
               "https://github.com/official-pikafish/Networks/releases/download/master-net/"
               + std::string(evalFile.defaultName);
             std::string msg5 = "The engine will be terminated now.";
+            if (oldVersionFile)
+                msg3 = "The network file has an old format (16-bit weights): convert it with "
+                       "trainer/serialize.py --upgrade.";
 
             std::string msg = "ERROR: " + msg1 + '\n' + "ERROR: " + msg2 + '\n' + "ERROR: " + msg3
                             + '\n' + "ERROR: " + msg4 + '\n' + "ERROR: " + msg5 + '\n';
@@ -210,13 +213,21 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
 template<typename Arch, typename Transformer>
 void Network<Arch, Transformer>::load_user_net(const std::string& dir,
                                                const std::string& evalfilePath) {
-    std::stringstream stream(read_compressed_nnue(dir + evalfilePath));
+    std::stringstream stream      = read_compressed_nnue(dir + evalfilePath);
     auto              description = load(stream);
 
     if (description.has_value())
     {
         evalFile.current        = evalfilePath;
         evalFile.netDescription = description.value();
+        oldVersionFile          = false;
+    }
+    else
+    {
+        stream.clear();
+        stream.seekg(0);
+        const std::uint32_t version = read_little_endian<std::uint32_t>(stream);
+        oldVersionFile |= stream && version == OldVersion;
     }
 }
 

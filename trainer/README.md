@@ -692,6 +692,7 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 | `verify.py` báo `MISMATCH` | Engine và trainer không cùng kiến trúc. Build lại engine từ cùng commit với trainer; với `att` / `threats` nhớ `make clean` và `--arch` tương ứng |
 | Engine báo `network file ... was not loaded` | Sai kiến trúc (mạng `att` / `threats` trên engine thường hoặc ngược lại; `threats=yes` và `nnue=att` phải khớp với kiến trúc của mạng), hoặc file không phải `.nnue` nén zstd do trainer xuất |
 | `no threat data (prepare the data again ...)` | Dữ liệu được chuẩn bị bằng phiên bản cũ của `prepare_data.py`; chạy lại với `--arch threats` |
+| Engine báo `network file ... was not loaded` với một mạng train trước khi engine dùng trọng số 8 bit | File có phiên bản cũ (trọng số HalfKA 16 bit): chuyển bằng `serialize.py --upgrade`, xem [mục 11.1](#111-đổi-định-dạng-file-trọng-số-8-bit) |
 | `incompatible network for arch ...` | Truyền mạng sai kiến trúc cho `--init-net` / `serialize.py`; thông báo cho biết kiến trúc thật của file |
 | `prepare_data.py` hết RAM | Giảm `--shard-size` (ví dụ 500000) |
 | `train.py` hết bộ nhớ GPU | Giảm `--batch-size` (ví dụ 8192); kiến trúc `att` cần nhiều hơn |
@@ -714,3 +715,22 @@ lại; dữ liệu văn bản vẫn dùng được.
 Với các kiến trúc có đe dọa, phần "Threat features" của `jieqi_features.py`
 phải liệt kê đặc trưng theo đúng thứ tự của `src/nnue/features/jieqi_threats.cpp`
 (engine kiểm tra số đặc trưng lúc khởi động và dừng nếu khác 92 711).
+
+### 11.1. Đổi định dạng file: trọng số 8 bit
+
+Trọng số của feature transformer (đặc trưng HalfKA) nay là số nguyên 8 bit
+như trọng số đe dọa (trước là 16 bit), nên phiên bản file đổi từ
+`0x7AF32F20` sang `0x7AF32F21`; engine mới không đọc file cũ. Chuyển một
+mạng cũ:
+
+```
+python serialize.py --upgrade old.nnue new.nnue
+```
+
+Lệnh báo số trọng số nằm ngoài khoảng ±127 (tức ±1,0 trước khi lượng tử
+hóa) bị cắt về biên. Nếu là 0, engine mới đánh giá file mới **giống hệt**
+engine cũ với file cũ (bench cho cùng số node); nếu khác 0, mạng thay đổi
+một chút và nên kiểm tra bằng đấu trước khi dùng. Các checkpoint `.pt` không
+cần chuyển: `train.py` cắt trọng số vào khoảng mới (`model.clip_weights()`,
+tính cả các đặc trưng ảo của factorization) ngay ở bước đầu và `serialize.py`
+xuất được như thường.
