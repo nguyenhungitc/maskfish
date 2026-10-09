@@ -334,6 +334,7 @@ class Worker {
     bool malusDecay      = false;
     bool bestMoveBonusScale = false;
     bool contHistOffset = false;
+    bool contCorr6Ply = false;
 
    private:
     // Returns whether the last PV sent to the GUI is up to date

@@ -93,8 +93,13 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
                  ? (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                  : 0)
         : 0;
+    // 6 plies back (UCI option ContCorr6Ply), with a smaller weight
+    const int cntcv6 =
+      w.contCorr6Ply && m.is_ok()
+        ? 6657 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+        : 0;
 
-    return 4897 * pcv + 4190 * micv + 8120 * (wnpcv + bnpcv) + 8324 * cntcv;
+    return 4897 * pcv + 4190 * micv + 8120 * (wnpcv + bnpcv) + 8324 * cntcv + cntcv6;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -128,6 +133,9 @@ void update_correction_history(const Position& pos,
 
         if (workerThread.contCorr4Ply)
             (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 64 / 128;
+
+        if (workerThread.contCorr6Ply)
+            (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus * 35 / 128;
     }
 }
 
@@ -322,6 +330,7 @@ bool Search::Worker::iterative_deepening() {
     lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
     contHistOffset = bool(options["ContHistOffset"]);
     corrHistAsym = bool(options["CorrHistAsym"]);
+    contCorr6Ply = bool(options["ContCorr6Ply"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -689,6 +698,8 @@ void Search::Worker::prefetch_correction_histories(const Stack* ss,
     prefetch(&(*(ss - 1)->continuationCorrectionHistory)[pc][to]);
     if (contCorr4Ply)
         prefetch(&(*(ss - 3)->continuationCorrectionHistory)[pc][to]);
+    if (contCorr6Ply)
+        prefetch(&(*(ss - 5)->continuationCorrectionHistory)[pc][to]);
 }
 
 void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st) {
