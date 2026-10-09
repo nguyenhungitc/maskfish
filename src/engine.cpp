@@ -190,6 +190,8 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("FollowPV", Option(false));
     // Increase the reduction already when the next ply has two fail highs
     options.add("CutoffCntTweak", Option(false));
+    // Make null move pruning easier after null move fail highs of previous siblings
+    options.add("NMPFailHighCount", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

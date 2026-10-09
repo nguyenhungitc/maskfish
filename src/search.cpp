@@ -334,6 +334,7 @@ bool Search::Worker::iterative_deepening() {
     hindsightFirst = bool(options["HindsightFirst"]);
     followPVOption = bool(options["FollowPV"]);
     cutoffCntTweak = bool(options["CutoffCntTweak"]);
+    nmpFailHighCount = bool(options["NMPFailHighCount"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -898,6 +899,7 @@ Value Search::Worker::search(
     ss->statScore       = 0;
     ss->isPvNode        = PvNode;
     (ss + 2)->cutoffCnt = 0;
+    (ss + 1)->priorNMPFailHigh = 0;
 
     // Computed before the TT lookup, to overlap with the TT prefetch
     const auto correctionValue = correction_value(*thisThread, pos, ss);
@@ -1081,7 +1083,8 @@ Value Search::Worker::search(
 
     // Step 8. Null move search with verification search
     if (cutNode && (ss - 1)->currentMove != Move::null() && eval >= beta
-        && ss->staticEval >= beta - 9 * depth - 50 * (pruningTweaks && improving) + 201
+        && ss->staticEval + (nmpFailHighCount ? 50 * ss->priorNMPFailHigh : 0)
+             >= beta - 9 * depth - 50 * (pruningTweaks && improving) + 201
         && !excludedMove && pos.major_material(us) && ss->ply >= thisThread->nmpMinPly
         && (pruningTweaks ? beta >= -2000 : !is_loss(beta)))
     {
@@ -1106,7 +1109,10 @@ Value Search::Worker::search(
         if (nullValue >= beta && !is_win(nullValue))
         {
             if (thisThread->nmpMinPly || depth < 16)
+            {
+                ++ss->priorNMPFailHigh;
                 return nullValue;
+            }
 
             assert(!thisThread->nmpMinPly);  // Recursive verification is not allowed
 
@@ -1119,7 +1125,10 @@ Value Search::Worker::search(
             thisThread->nmpMinPly = 0;
 
             if (v >= beta)
+            {
+                ++ss->priorNMPFailHigh;
                 return nullValue;
+            }
         }
     }
 
