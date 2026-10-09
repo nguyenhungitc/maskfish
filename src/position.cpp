@@ -767,6 +767,13 @@ DirtyPiece Position::do_move(Move                      m,
 
     // Update hash key
     k ^= moveDark ? Zobrist::psq[DARK_PIECE][from] : Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+
+    // Update the key with the final value, and prefetch the TT entry as early
+    // as possible (the key of a dark move is completed by the reveal)
+    st->key = k;
+    if (!moveDark && tt)
+        prefetch(tt->first_entry(key()));
+
     // If the moving piece is a pawn, update pawn hash key.
     if (type_of(pc) == PAWN)
         st->pawnKey ^= Zobrist::psq[pc][from] ^ (moveDark ? 0 : Zobrist::psq[pc][to]);
@@ -783,11 +790,6 @@ DirtyPiece Position::do_move(Move                      m,
 
     // Move the piece.
     move_piece(from, to);
-
-    // Update the key with the final value
-    st->key = k;
-    if (!moveDark && tt)
-        prefetch(tt->first_entry(key()));
 
     // Set capture piece
     st->capturedPiece = captured;
