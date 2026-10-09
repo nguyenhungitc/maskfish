@@ -37,6 +37,14 @@
 
 namespace Stockfish {
 
+// Entries of the attack tables: with pext, the attacks are stored compressed
+// (pext over the attacks on an empty board) in 32 bits, 4 times smaller
+#ifdef USE_PEXT
+using MagicMask = uint32_t;
+#else
+using MagicMask = Bitboard;
+#endif
+
 namespace Bitboards {
 
 void        init();
@@ -86,10 +94,14 @@ int popcount(Bitboard b);  // required for 128 bit pext
 
 // Magic holds all magic bitboards relevant data for a single square
 struct Magic {
-    Bitboard  mask;
-    Bitboard* attacks;
-    unsigned  shift;
-    IF_NOT_PEXT(Bitboard magic;)
+    Bitboard   mask;
+    MagicMask* attacks;
+    unsigned   shift;
+#ifdef USE_PEXT
+    Bitboard pseudoAttacks;  // attacks on an empty board
+#else
+    Bitboard magic;
+#endif
 
     // Compute the attack's index using the 'magic bitboards' approach
     unsigned index(Bitboard occupied) const {
@@ -98,6 +110,14 @@ struct Magic {
         return unsigned(pext(occupied, mask, shift));
 #else
         return unsigned(((occupied & mask) * magic) >> shift);
+#endif
+    }
+
+    Bitboard attack_bb(Bitboard occupied) const {
+#ifdef USE_PEXT
+        return pdep(attacks[index(occupied)], pseudoAttacks);
+#else
+        return attacks[index(occupied)];
 #endif
     }
 };
@@ -266,15 +286,15 @@ inline Bitboard attacks_bb(Square s, Bitboard occupied) {
     switch (Pt)
     {
     case ROOK :
-        return RookMagics[s].attacks[RookMagics[s].index(occupied)];
+        return RookMagics[s].attack_bb(occupied);
     case CANNON :
-        return CannonMagics[s].attacks[CannonMagics[s].index(occupied)];
+        return CannonMagics[s].attack_bb(occupied);
     case BISHOP :
-        return BishopMagics[s].attacks[BishopMagics[s].index(occupied)];
+        return BishopMagics[s].attack_bb(occupied);
     case KNIGHT :
-        return KnightMagics[s].attacks[KnightMagics[s].index(occupied)];
+        return KnightMagics[s].attack_bb(occupied);
     case KNIGHT_TO :
-        return KnightToMagics[s].attacks[KnightToMagics[s].index(occupied)];
+        return KnightToMagics[s].attack_bb(occupied);
     default :
         return PseudoAttacks[Pt][s];
     }
