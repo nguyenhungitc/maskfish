@@ -638,6 +638,13 @@ class NumaConfig {
         // We have to ensure no empty NUMA nodes persist.
         cfg.remove_empty_numa_nodes();
 
+        // If no processor could be detected (e.g. the Windows NUMA functions
+        // fail under Wine), use a single node with all the processors, as on
+        // unsupported systems, rather than a configuration without any node.
+        if (cfg.nodes.empty())
+            for (CpuIndex c = 0; c < SYSTEM_THREADS_NB; ++c)
+                cfg.add_cpu_to_node(NumaIndex{0}, c);
+
         // If the user explicitly opts out from respecting the current process affinity
         // then it may be inconsistent with the current affinity (obviously), so we
         // consider it custom.
