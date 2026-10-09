@@ -191,15 +191,16 @@ void apply_threats(std::int16_t* __restrict dst,
             dstPsqt[b] += featureTransformer.threatPsqtWeights[added[k] * PSQTBuckets + b];
 }
 
-// Feature indices of a list of threats (those that are features)
+// Feature indices of a list of threats (those that are features). Branchless:
+// the index is always written, and kept if it is a feature.
 template<Color Perspective>
 int threat_indices(const ThreatFeatureSet::Threat* threats, int n, bool mirror, IndexType* out) {
     int m = 0;
     for (int k = 0; k < n; ++k)
     {
         const IndexType index = ThreatFeatureSet::index<Perspective>(threats[k], mirror);
-        if (index < ThreatFeatureSet::Dimensions)
-            out[m++] = index;
+        out[m]                = index;
+        m += index < ThreatFeatureSet::Dimensions;
     }
     return m;
 }
