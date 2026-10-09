@@ -162,6 +162,9 @@ Engine::Engine(std::optional<std::string> path) :
     // high the new alpha is beta - delta, and helper threads start with
     // slightly different windows.
     options.add("AspirationTweaks", Option(false));
+    // At each new search, move the main history 1/4 of the way back to its
+    // initial value.
+    options.add("MainHistoryDecay", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

@@ -64,6 +64,7 @@ Value flip_winrate_to_score(double winrate, double scaling) {
 }
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
+constexpr int MainHistoryDefault    = 51;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // (*Scalers):
@@ -308,6 +309,7 @@ bool Search::Worker::iterative_deepening() {
     lmrTweaks          = bool(options["LMRTweaks"]);
     failHighRecoveryOption = bool(options["FailHighRecovery"]);
     aspirationTweaks = bool(options["AspirationTweaks"]);
+    mainHistoryDecay = bool(options["MainHistoryDecay"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -351,6 +353,13 @@ bool Search::Worker::iterative_deepening() {
     int searchAgainCounter = 0;
 
     lowPlyHistory.fill(102);
+
+    // Main history of earlier searches is partly forgotten (UCI option
+    // MainHistoryDecay)
+    if (mainHistoryDecay)
+        for (Color c : {WHITE, BLACK})
+            for (auto& h : mainHistory[c])
+                h = (h - MainHistoryDefault) * 3 / 4 + MainHistoryDefault;
 
     // Iterative deepening loop until requested to stop or the target depth is reached
     // (rootDepth always holds the last depth for which a search was started)
@@ -699,7 +708,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
-    mainHistory.fill(51);
+    mainHistory.fill(MainHistoryDefault);
     captureHistory.fill(-560);
     ttMoveHistory = 0;
 

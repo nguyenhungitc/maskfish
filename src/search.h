@@ -421,6 +421,7 @@ class Worker {
     bool   lmrTweaks          = false;
     bool   failHighRecoveryOption = false;
     bool   aspirationTweaks = false;
+    bool   mainHistoryDecay = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
