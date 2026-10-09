@@ -654,6 +654,11 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st) {
 }
 
 void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, const bool givesCheck) {
+    // Prefetch the TT entry of the next position as soon as the move is known
+    // (a move of a dark piece is completed by the reveal: no prefetch)
+    if (!pos.move_dark(move))
+        prefetch(tt.first_entry(pos.prefetch_key(move)));
+
     DirtyPiece dp = pos.do_move(move, st, givesCheck, &tt);
     // Preferable over fetch_add to avoid locking instructions (only this
     // thread writes its node count)

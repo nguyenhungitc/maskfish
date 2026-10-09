@@ -822,6 +822,25 @@ DirtyPiece Position::do_move(Move                      m,
 }
 
 
+// Key of the position after a move of a revealed piece, as used by the TT,
+// to prefetch its entry before the move is made. Approximate in rare cases
+// (repetition filter); the prefetch then lands on an unused line.
+Key Position::prefetch_key(Move m) const {
+    assert(!move_dark(m));
+
+    Square from     = m.from_sq();
+    Square to       = m.to_sq();
+    Piece  pc       = piece_on(from);
+    Piece  captured = piece_on(to);
+    Key    k        = st->key ^ Zobrist::side ^ Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+
+    if (captured)
+        return k ^ Zobrist::psq[is_dark(to) ? DARK_PIECE : captured][to];
+
+    return adjust_key40<true>(k);
+}
+
+
 // Unmakes a move. When it returns, the position should
 // be restored to exactly the same state as before the move was made.
 void Position::undo_move(Move m) {
