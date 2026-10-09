@@ -832,6 +832,9 @@ Value Search::Worker::search(
     ss->isPvNode        = PvNode;
     (ss + 2)->cutoffCnt = 0;
 
+    // Computed before the TT lookup, to overlap with the TT prefetch
+    const auto correctionValue = correction_value(*thisThread, pos, ss);
+
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
     posKey                         = observer_tt_key(pos.key(), rootObserver);
@@ -897,8 +900,7 @@ Value Search::Worker::search(
         ttWriter.penalize(1);
 
     // Step 5. Static evaluation of the position
-    Value      unadjustedStaticEval = VALUE_NONE;
-    const auto correctionValue      = correction_value(*thisThread, pos, ss);
+    Value unadjustedStaticEval = VALUE_NONE;
     if (ss->inCheck)
     {
         // Skip early pruning when in check
