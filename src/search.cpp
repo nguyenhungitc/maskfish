@@ -143,7 +143,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   capturesSearched,
                       Depth           depth,
                       Move            TTMove,
-                      int             moveCount);
+                      int             moveCount,
+                      bool            PvNode);
 
 // Detect shuffling moves (a piece going back and forth) in order to limit
 // search explosions. Captures are never shuffling; a reveal cannot be either,
@@ -311,6 +312,7 @@ bool Search::Worker::iterative_deepening() {
     aspirationTweaks = bool(options["AspirationTweaks"]);
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
     malusDecay = bool(options["MalusDecay"]);
+    bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1619,7 +1621,7 @@ moves_loop:  // When in check, search starts here
     else if (bestMove)
     {
         update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move, moveCount);
+                         ttData.move, moveCount, PvNode);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 774 : -844);
     }
@@ -2260,13 +2262,19 @@ void update_all_stats(const Position& pos,
                       SearchedList&   capturesSearched,
                       Depth           depth,
                       Move            ttMove,
-                      int             moveCount) {
+                      int             moveCount,
+                      bool            PvNode) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
     PieceType              capturedPiece;
 
     int bonus = std::min(144 * depth - 106, 1803) + 273 * (bestMove == ttMove);
+
+    // The more moves were searched before the best one, the more significant
+    // it is (UCI option BestMoveBonusScale). 64-bit product: no overflow.
+    if (workerThread.bestMoveBonusScale && !PvNode)
+        bonus += int(std::int64_t(bonus) * (quietsSearched.size() + capturesSearched.size()) / 256);
     int malus = std::min(1012 * depth - 213, 2437) - (workerThread.malusDecay ? 0 : 31 * moveCount);
 
     if (!pos.capture(bestMove))

@@ -332,6 +332,7 @@ class Worker {
     bool multiCutHistory = false;
     bool cmhc            = false;
     bool malusDecay      = false;
+    bool bestMoveBonusScale = false;
 
    private:
     // Returns whether the last PV sent to the GUI is up to date

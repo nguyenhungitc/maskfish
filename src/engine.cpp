@@ -168,6 +168,9 @@ Engine::Engine(std::optional<std::string> path) :
     // History malus of the quiet moves searched before the best move decreasing
     // geometrically with their number (instead of the move count term).
     options.add("MalusDecay", Option(false));
+    // At non-PV nodes, scale the history bonus of the best move with the
+    // number of moves searched before it.
+    options.add("BestMoveBonusScale", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
