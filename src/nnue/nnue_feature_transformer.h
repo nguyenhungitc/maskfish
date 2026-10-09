@@ -230,24 +230,21 @@ class FeatureTransformer {
         const auto& accumulation     = (accumulatorState.acc<HalfDimensions>()).accumulation;
 
 #ifdef JIEQI_NNUE_THREATS
-        // Add the threat accumulators (in half units: the threat weights are
-        // not doubled on load) to the HalfKA ones. The sums are computed in 32
-        // bits and saturated, which does not change the clipped result.
+        // The threat accumulators (in half units: the threat weights are not
+        // doubled on load) are added to the HalfKA ones twice, with saturation,
+        // which gives the HalfKA value + 2 x threats clamped to the int16 range
+        // (the threat accumulators are bounded by 144 x 127 in absolute value,
+        // so both additions saturate in the same direction), and this clamp
+        // does not change the clipped result.
         const auto& threats = accumulatorState.threats;
         const auto  psqt =
           (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
            - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
           / 2;
-
-        alignas(CacheLineSize) BiasType combined[2][HalfDimensions];
-        for (IndexType p = 0; p < 2; ++p)
-        {
-            const BiasType* a = accumulation[perspectives[p]];
-            const BiasType* t = threats.acc[perspectives[p]];
-            for (IndexType j = 0; j < HalfDimensions; ++j)
-                combined[p][j] = BiasType(std::clamp(int(a[j]) + 2 * int(t[j]), -32768, 32767));
-        }
-        const BiasType* accumulations[2] = {combined[0], combined[1]};
+        const BiasType* accumulations[2] = {accumulation[perspectives[0]],
+                                            accumulation[perspectives[1]]};
+        const BiasType* threatAccumulations[2] = {threats.acc[perspectives[0]],
+                                                  threats.acc[perspectives[1]]};
 #else
         const auto psqt =
           (psqtAccumulation[perspectives[0]][bucket] - psqtAccumulation[perspectives[1]][bucket])
@@ -273,6 +270,19 @@ class FeatureTransformer {
             const vec_t* in1 =
               reinterpret_cast<const vec_t*>(&(accumulations[p][HalfDimensions / 2]));
             vec_t* out = reinterpret_cast<vec_t*>(output + offset);
+    #ifdef JIEQI_NNUE_THREATS
+            const vec_t* thr0 = reinterpret_cast<const vec_t*>(&(threatAccumulations[p][0]));
+            const vec_t* thr1 =
+              reinterpret_cast<const vec_t*>(&(threatAccumulations[p][HalfDimensions / 2]));
+            // HalfKA + 2 x threats, saturated (see above)
+            auto in = [](const vec_t* acc, const vec_t* thr, IndexType i) {
+                return vec_adds_16(vec_adds_16(acc[i], thr[i]), thr[i]);
+            };
+    #else
+            auto in = [](const vec_t* acc, const vec_t*, IndexType i) { return acc[i]; };
+            const vec_t* thr0 = nullptr;
+            const vec_t* thr1 = nullptr;
+    #endif
 
             // Per the NNUE architecture, here we want to multiply pairs of
             // clipped elements and divide the product by 128. To do this,
@@ -337,11 +347,11 @@ class FeatureTransformer {
             for (IndexType j = 0; j < NumOutputChunks; ++j)
             {
                 const vec_t sum0a =
-                  vec_slli_16(vec_max_16(vec_min_16(in0[j * 2 + 0], One), Zero), shift);
+                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 0), One), Zero), shift);
                 const vec_t sum0b =
-                  vec_slli_16(vec_max_16(vec_min_16(in0[j * 2 + 1], One), Zero), shift);
-                const vec_t sum1a = vec_min_16(in1[j * 2 + 0], One);
-                const vec_t sum1b = vec_min_16(in1[j * 2 + 1], One);
+                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 1), One), Zero), shift);
+                const vec_t sum1a = vec_min_16(in(in1, thr1, j * 2 + 0), One);
+                const vec_t sum1b = vec_min_16(in(in1, thr1, j * 2 + 1), One);
 
                 const vec_t pa = vec_mulhi_16(sum0a, sum1a);
                 const vec_t pb = vec_mulhi_16(sum0b, sum1b);
@@ -353,10 +363,14 @@ class FeatureTransformer {
 
             for (IndexType j = 0; j < HalfDimensions / 2; ++j)
             {
-                BiasType sum0 = accumulations[p][j + 0];
-                BiasType sum1 = accumulations[p][j + HalfDimensions / 2];
-                sum0               = std::clamp<BiasType>(sum0, 0, 127 * 2);
-                sum1               = std::clamp<BiasType>(sum1, 0, 127 * 2);
+                int sum0 = accumulations[p][j + 0];
+                int sum1 = accumulations[p][j + HalfDimensions / 2];
+    #ifdef JIEQI_NNUE_THREATS
+                sum0 += 2 * threatAccumulations[p][j + 0];
+                sum1 += 2 * threatAccumulations[p][j + HalfDimensions / 2];
+    #endif
+                sum0               = std::clamp(sum0, 0, 127 * 2);
+                sum1               = std::clamp(sum1, 0, 127 * 2);
                 output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);
             }
 

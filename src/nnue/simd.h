@@ -61,6 +61,7 @@ using vec_uint_t = __m512i;
 
     #ifdef USE_AVX512BW
         #define vec_add_16(a, b) _mm512_add_epi16(a, b)
+        #define vec_adds_16(a, b) _mm512_adds_epi16(a, b)
         #define vec_sub_16(a, b) _mm512_sub_epi16(a, b)
         #define vec_mulhi_16(a, b) _mm512_mulhi_epi16(a, b)
         #define vec_max_16(a, b) _mm512_max_epi16(a, b)
@@ -76,6 +77,7 @@ using vec_uint_t = __m512i;
                                        __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
                                     0, 1, 2, 3, 4, 5, 6, 7)
         #define vec_add_16(a, b) vec_op(_mm256_add_epi16, a, b)
+        #define vec_adds_16(a, b) vec_op(_mm256_adds_epi16, a, b)
         #define vec_sub_16(a, b) vec_op(_mm256_sub_epi16, a, b)
         #define vec_mulhi_16(a, b) vec_op(_mm256_mulhi_epi16, a, b)
         #define vec_max_16(a, b) vec_op(_mm256_max_epi16, a, b)
@@ -100,6 +102,7 @@ using vec_uint_t = __m256i;
     #define vec_load(a) _mm256_load_si256(a)
     #define vec_store(a, b) _mm256_store_si256(a, b)
     #define vec_add_16(a, b) _mm256_add_epi16(a, b)
+    #define vec_adds_16(a, b) _mm256_adds_epi16(a, b)
     #define vec_sub_16(a, b) _mm256_sub_epi16(a, b)
     #define vec_mulhi_16(a, b) _mm256_mulhi_epi16(a, b)
     #define vec_zero() _mm256_setzero_si256()
@@ -142,6 +145,7 @@ using vec_uint_t = __m128i;
     #define vec_load(a) (*(a))
     #define vec_store(a, b) *(a) = (b)
     #define vec_add_16(a, b) _mm_add_epi16(a, b)
+    #define vec_adds_16(a, b) _mm_adds_epi16(a, b)
     #define vec_sub_16(a, b) _mm_sub_epi16(a, b)
     #define vec_mulhi_16(a, b) _mm_mulhi_epi16(a, b)
     #define vec_zero() _mm_setzero_si128()
@@ -185,6 +189,7 @@ using vec_uint_t __attribute__((may_alias)) = uint32x4_t;
     #define vec_load(a) (*(a))
     #define vec_store(a, b) *(a) = (b)
     #define vec_add_16(a, b) vaddq_s16(a, b)
+    #define vec_adds_16(a, b) vqaddq_s16(a, b)
     #define vec_sub_16(a, b) vsubq_s16(a, b)
     #define vec_mulhi_16(a, b) vqdmulhq_s16(a, b)
     #define vec_zero() vec_t{0}
