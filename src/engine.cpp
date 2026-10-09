@@ -177,6 +177,9 @@ Engine::Engine(std::optional<std::string> path) :
     // Add a constant offset to the continuation history updates of the move
     // one ply back.
     options.add("ContHistOffset", Option(false));
+    // Correction history: smaller updates when the search result is above the
+    // static eval than when it is below.
+    options.add("CorrHistAsym", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.

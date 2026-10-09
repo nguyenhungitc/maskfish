@@ -426,6 +426,7 @@ class Worker {
     bool   aspirationTweaks = false;
     bool   mainHistoryDecay = false;
     bool   lmrHistoryDivisor = false;
+    bool   corrHistAsym = false;
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

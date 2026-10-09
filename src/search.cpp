@@ -321,6 +321,7 @@ bool Search::Worker::iterative_deepening() {
     bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
     lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
     contHistOffset = bool(options["ContHistOffset"]);
+    corrHistAsym = bool(options["CorrHistAsym"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1696,8 +1697,10 @@ moves_loop:  // When in check, search starts here
         && ((bestValue < ss->staticEval && bestValue < beta)  // negative correction & no fail high
             || (bestValue > ss->staticEval && bestMove)))     // positive correction & no fail low
     {
-        auto bonus = std::clamp(int(bestValue - ss->staticEval) * depth / 8,
-                                -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+        // With CorrHistAsym, positive corrections are smaller
+        const int divisor = 8 + (corrHistAsym ? 2 * (bestValue > ss->staticEval) : 0);
+        auto      bonus   = std::clamp(int(bestValue - ss->staticEval) * depth / divisor,
+                                       -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *thisThread, bonus);
     }
 
