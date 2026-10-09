@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -83,7 +84,7 @@ class Engine {
     // network related
 
     void verify_networks() const;
-    void load_networks();
+    std::unique_ptr<Eval::NNUE::Networks> get_default_networks() const;
     void load_big_network(const std::string& file);
     void save_network(const std::pair<std::optional<std::string>, std::string> files);
 

@@ -60,10 +60,7 @@ Engine::Engine(std::optional<std::string> path) :
     numaContext(NumaConfig::from_system()),
     states(new std::deque<StateInfo>(1)),
     threads(),
-    networks(numaContext,
-             // Heap-allocate because sizeof(NN::Networks) is large
-             std::make_unique<NN::Networks>(std::make_unique<NN::NetworkBig>(
-               NN::EvalFile{EvalFileDefaultNameBig, "None", ""}))) {
+    networks(numaContext, get_default_networks()) {
 
     pos.set(StartFEN, &states->back());
 
@@ -185,7 +182,8 @@ Engine::Engine(std::optional<std::string> path) :
           return std::nullopt;
       }));
 
-    load_networks();
+    threads.clear();
+    threads.ensure_network_replicated();
     resize_threads();
 }
 
@@ -390,12 +388,17 @@ void Engine::verify_networks() const {
     }
 }
 
-void Engine::load_networks() {
-    networks.modify_and_replicate([this](NN::Networks& networks_) {
-        networks_.big.load(binaryDirectory, options["EvalFile"]);
-    });
-    threads.clear();
-    threads.ensure_network_replicated();
+// The network with the default file name (EvalFile default value), loaded
+// before it is shared: replicating it is then done only once
+std::unique_ptr<NN::Networks> Engine::get_default_networks() const {
+
+    // Heap-allocate because sizeof(NN::Networks) is large
+    auto networks_ = std::make_unique<NN::Networks>(
+      std::make_unique<NN::NetworkBig>(NN::EvalFile{EvalFileDefaultNameBig, "None", ""}));
+
+    networks_->big.load(binaryDirectory, "");
+
+    return networks_;
 }
 
 void Engine::load_big_network(const std::string& file) {
