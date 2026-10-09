@@ -98,7 +98,7 @@ class Logger {
 
         if (!fname.empty())
         {
-            l.file.open(fname, std::ifstream::out);
+            l.file.open(path_from_utf8(fname), std::ifstream::out);
 
             if (!l.file.is_open())
             {
@@ -455,12 +455,85 @@ void prefetch(const void* addr) {
 #endif
 
 #ifdef _WIN32
-    #include <direct.h>
-    #define GETCWD _getcwd
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+    #include <shellapi.h>
 #else
     #include <unistd.h>
-    #define GETCWD getcwd
 #endif
+
+std::string utf8_from_wstring(std::wstring_view s) {
+#ifdef _WIN32
+    if (s.empty())
+        return {};
+
+    int size =
+      WideCharToMultiByte(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0)
+        return {};
+
+    std::string out(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.data(), int(s.size()), out.data(), size, nullptr, nullptr);
+    return out;
+#else
+    return std::string(s.begin(), s.end());
+#endif
+}
+
+std::filesystem::path path_from_utf8(const std::string& path) {
+#ifdef _WIN32
+    int u8len = static_cast<int>(path.size());
+
+    // First attempt UTF-8, then fall back to ANSI for old GUIs like Arena
+    constexpr unsigned CodePages[2] = {CP_UTF8, CP_ACP};
+    for (unsigned cp : CodePages)
+    {
+        DWORD flags = cp == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0;
+        int   wlen  = MultiByteToWideChar(cp, flags, path.c_str(), u8len, NULL, 0);
+        if (wlen > 0)
+        {
+            std::wstring wstr(static_cast<size_t>(wlen), L'\0');
+            MultiByteToWideChar(cp, 0, path.c_str(), u8len, wstr.data(), wlen);
+            return {wstr};
+        }
+    }
+
+    return {path};
+#else
+    return {path};
+#endif
+}
+
+void set_console_utf8() {
+#ifdef _WIN32
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+}
+
+CommandLine::CommandLine(int _argc, char** _argv) :
+    argc(_argc),
+    argv(_argv) {
+#ifdef _WIN32
+    // Convert any non-ANSI characters passed on the command line to UTF-8
+    int wargc = 0;
+    if (LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc))
+    {
+        for (int i = 0; i < wargc; ++i)
+            argvStorage.push_back(utf8_from_wstring(wargv[i]));
+        LocalFree(wargv);
+
+        for (std::string& s : argvStorage)
+            argvUtf8.push_back(s.data());
+        argvUtf8.push_back(nullptr);
+
+        argc = wargc;
+        argv = argvUtf8.data();
+    }
+#endif
+}
 
 std::optional<size_t> str_to_size_t(const std::string& s) {
     if (s.empty() || s[0] == '-')
@@ -494,13 +567,14 @@ std::string CommandLine::get_binary_directory(std::string argv0) {
 
 #ifdef _WIN32
     pathSeparator = "\\";
-    #ifdef _MSC_VER
-    // Under windows argv[0] may not have the extension. Also _get_pgmptr() had
-    // issues in some Windows 10 versions, so check returned values carefully.
-    char* pgmptr = nullptr;
-    if (!_get_pgmptr(&pgmptr) && pgmptr != nullptr && *pgmptr)
-        argv0 = pgmptr;
-    #endif
+    // Prefer the executable path reported by Windows (argv[0] may lack the
+    // extension or the directory), as UTF-8. Windows paths cannot exceed
+    // 32767 characters. Falls back to argv0 if the API fails.
+    constexpr DWORD MaxPath = 32768;
+    static wchar_t  path[MaxPath];
+
+    if (const DWORD length = GetModuleFileNameW(nullptr, path, MaxPath))
+        argv0 = utf8_from_wstring(std::wstring_view(path, length));
 #else
     pathSeparator = "/";
 #endif
@@ -525,18 +599,23 @@ std::string CommandLine::get_binary_directory(std::string argv0) {
 
 std::string CommandLine::get_working_directory() {
     std::string workingDirectory = "";
-    char        buff[40000];
-    char*       cwd = GETCWD(buff, 40000);
+#ifdef _WIN32
+    wchar_t buff[32768];
+    if (DWORD length = GetCurrentDirectoryW(32768, buff); length > 0 && length < 32768)
+        workingDirectory = utf8_from_wstring(std::wstring_view(buff, length));
+#else
+    char  buff[40000];
+    char* cwd = getcwd(buff, 40000);
     if (cwd)
         workingDirectory = cwd;
-
+#endif
     return workingDirectory;
 }
 
 std::stringstream read_compressed_nnue(const std::string& fpath) {
     std::stringstream ss;
 
-    std::ifstream fin(fpath, std::ios::binary);
+    std::ifstream fin(path_from_utf8(fpath), std::ios::binary);
     if (!fin)
         return ss;
     std::vector<char> buffIn(ZSTD_DStreamInSize()), buffOut(ZSTD_DStreamOutSize());

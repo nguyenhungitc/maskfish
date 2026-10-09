@@ -339,7 +339,7 @@ std::vector<std::string> setup_bench(const std::string& currentFen, std::istream
     else
     {
         std::string   fen;
-        std::ifstream file(fenFile);
+        std::ifstream file(path_from_utf8(fenFile));
 
         if (!file.is_open())
         {

@@ -105,7 +105,7 @@ bool Network<Arch, Transformer>::save(const std::optional<std::string>& filename
         actualFilename = evalFile.defaultName;
     }
 
-    std::ofstream stream(actualFilename, std::ios_base::binary);
+    std::ofstream stream(path_from_utf8(actualFilename), std::ios_base::binary);
     bool          saved = save(stream, evalFile.current, evalFile.netDescription);
 
     msg = saved ? "Network saved successfully to " + actualFilename : "Failed to export a net";

@@ -32,6 +32,7 @@
 #include <iosfwd>
 #include <optional>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -66,6 +67,15 @@ std::string compiler_info();
 void prefetch(const void* addr);
 
 void start_logger(const std::string& fname);
+
+// File names are UTF-8 strings everywhere in the engine. On Windows they must
+// be converted to wide strings to open files whose path has non-ASCII
+// characters; path_from_utf8() also accepts the ANSI code page (old GUIs).
+std::string           utf8_from_wstring(std::wstring_view s);
+std::filesystem::path path_from_utf8(const std::string& path);
+
+// Windows console: read and write UTF-8
+void set_console_utf8();
 
 std::optional<size_t> str_to_size_t(const std::string& s);
 
@@ -416,15 +426,23 @@ class FixedString {
 
 struct CommandLine {
    public:
-    CommandLine(int _argc, char** _argv) :
-        argc(_argc),
-        argv(_argv) {}
+    // On Windows, the arguments are converted to UTF-8
+    CommandLine(int _argc, char** _argv);
 
+    // argv may point into argvUtf8
+    CommandLine(const CommandLine&)            = delete;
+    CommandLine& operator=(const CommandLine&) = delete;
+
+    // UTF-8 paths, the directory with a trailing separator
     static std::string get_binary_directory(std::string argv0);
     static std::string get_working_directory();
 
     int    argc;
     char** argv;
+
+   private:
+    std::vector<std::string> argvStorage;
+    std::vector<char*>       argvUtf8;
 };
 
 namespace Utility {

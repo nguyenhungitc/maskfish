@@ -67,6 +67,8 @@ UCIEngine::UCIEngine(int argc, char** argv) :
     engine(argv[0]),
     cli(argc, argv) {
 
+    set_console_utf8();
+
     engine.get_options().add_info_listener([](const std::optional<std::string>& str) {
         if (str.has_value())
             print_info_string(*str);
