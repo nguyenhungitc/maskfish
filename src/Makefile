@@ -673,7 +673,14 @@ ifeq ($(threats),yes)
 	CXXFLAGS += -DJIEQI_NNUE_THREATS
 endif
 
-### 3.2.1 Debugging
+### 3.2.1 Floating point
+# The chance nodes average win rates computed in double precision: without
+# this flag, targets with FMA (x86-64 AVX-512 builds, ARMv8) contract a*b+c
+# into a fused multiply-add, which rounds differently, so that the search, and
+# the bench signature, would depend on the build.
+CXXFLAGS += -ffp-contract=off
+
+### 3.2.2 Debugging
 ifeq ($(debug),no)
 	CXXFLAGS += -DNDEBUG
 else
@@ -681,7 +688,7 @@ else
 	CXXFLAGS += -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG
 endif
 
-### 3.2.2 Debugging with undefined behavior sanitizers
+### 3.2.3 Debugging with undefined behavior sanitizers
 ifneq ($(sanitize),none)
         CXXFLAGS += -g3 $(addprefix -fsanitize=,$(sanitize))
         LDFLAGS += $(addprefix -fsanitize=,$(sanitize))
