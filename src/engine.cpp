@@ -135,7 +135,7 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("ChanceBranchDepth", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
-    // with SPRT (trainer/match.py --opt-a Name=true).
+    // with SPRT (match.py --opt-a Name=true, nnue-pytorch).
     // Continuation correction history also from the move 4 plies back.
     options.add("ContCorr4Ply", Option(false));
     // On a multi-cut, penalize the ttMove in ttMoveHistory and use the cut
@@ -221,7 +221,7 @@ Engine::Engine(std::optional<std::string> path) :
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
     // Score -> win rate scale used to average chance nodes (0 = built-in
-    // 360.83524). trainer/fit_scaling.py fits it from self-play data.
+    // 360.83524). fit_scaling.py (nnue-pytorch) fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));
     // Risk preference of the side causing a chance event, in percent of the
     // standard deviation of the outcomes' win rates: > 0 avoids uncertain
@@ -290,7 +290,14 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
     pos.set(fen, &states->back());
 
     if (std::string reason; !pos.pool_is_consistent(&reason))
+    {
         sync_cout << "info string Invalid position: " << reason << sync_endl;
+
+        // Without exactly one king per side, move generation is not defined:
+        // ignore the moves (and 'go' will not search, see start_thinking())
+        if (pos.count<KING>(WHITE) != 1 || pos.count<KING>(BLACK) != 1)
+            return;
+    }
 
     // Parses one character naming a revealed piece of color c, which must still
     // be in the pool. Returns NO_PIECE if the character is not acceptable.
@@ -315,7 +322,11 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
         auto m = UCIEngine::to_move(pos, move);
 
         if (m == Move::none())
+        {
+            sync_cout << "info string Invalid move " << move
+                      << ": illegal move, ignoring this and the following moves" << sync_endl;
             break;
+        }
 
         const Color us          = pos.side_to_move();
         const bool  moveDark    = pos.move_dark(m);
@@ -354,7 +365,7 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
             pos.do_flip(m.to_sq(), flipped);
 
         if (captured != NO_PIECE)
-            pos.reveal_captured(captured);
+            pos.remove_rest_piece(captured);
     }
 }
 

@@ -32,7 +32,7 @@
 // * threats of a king, of an advisor to its own king, and checks of rooks,
 //   cannons and knights are not features (Pikafish does the same).
 //
-// trainer/jieqi_features.py implements exactly the same features ("Threat
+// jieqi_features.py of nnue-pytorch implements exactly the same features ("Threat
 // features" section); verify.py checks that both agree.
 
 #ifndef NNUE_FEATURES_JIEQI_THREATS_H_INCLUDED

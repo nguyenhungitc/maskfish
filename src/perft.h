@@ -81,6 +81,10 @@ inline uint64_t perft(const std::string& fen, Depth depth) {
     Position     p;
     p.set(fen, &states->back());
 
+    // Move generation needs exactly one king per side (see Engine::set_position())
+    if (p.count<KING>(WHITE) != 1 || p.count<KING>(BLACK) != 1)
+        return 0;
+
     return perft<true>(p, depth);
 }
 }

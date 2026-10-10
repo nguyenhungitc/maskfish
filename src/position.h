@@ -28,6 +28,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "bitboard.h"
 #include "nnue/features/half_ka_v2_hm.h"
@@ -138,11 +139,11 @@ class Position {
     Piece
     do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr, const TranspositionTable* tt = nullptr);
     void undo_flip(Square s, Piece fromPc);
-    void reveal_captured(Piece pc);
 
-    // Used by the search to try each possible identity of a captured dark
-    // piece: take one piece out of / put it back into the pool. The caller
-    // must also refresh the NNUE accumulator (pool features).
+    // Take one piece out of / put it back into the pool of unrevealed pieces,
+    // when the identity of a captured dark piece becomes known (setting up a
+    // position, or trying each possible identity in the search). In the search
+    // the caller must also refresh the NNUE accumulator (pool features).
     void remove_rest_piece(Piece pc);
     void restore_rest_piece(Piece pc);
 
@@ -154,7 +155,6 @@ class Position {
     Key prefetch_key(Move m) const;
     Key pawn_key() const;
     Key minor_piece_key() const;
-    Key defender_piece_key() const;
     Key non_pawn_key(Color c) const;
 
     // Other properties of the position
@@ -317,9 +317,16 @@ inline Value Position::jieqi_major_material() const {
     Value total = major_material();
     for (Color c : {WHITE, BLACK})
     {
-        const int dark = popcount(pieces(c, DARK));
+        const Bitboard darkBB = pieces(c, DARK);
+        const int      dark   = popcount(darkBB);
         if (!dark)
             continue;
+
+        // major_material() counts a dark piece at the value of the piece that
+        // starts on its square: replace that value by the expected one below
+        for (Bitboard b = darkBB & pieces(ROOK, CANNON, KNIGHT); b;)
+            total -= PieceValue[piece_on(pop_lsb(b))];
+
         int poolCount = 0, poolMajor = 0;
         for (PieceType pt = ROOK; pt < KING; ++pt)
         {

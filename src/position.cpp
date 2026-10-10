@@ -125,24 +125,25 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
     /*
    A FEN string defines a particular position using only the ASCII character set.
 
-   A FEN string contains six fields separated by a space. The fields are:
+   A Jieqi FEN string contains five fields separated by a space. The fields are:
 
    1) Piece placement (from white's perspective). Each rank is described, starting
       with rank 9 and ending with rank 0. Within each rank, the contents of each
-      square are described from file A through file I. Following the Standard
-      Algebraic Notation (SAN), each piece is identified by a single letter taken
-      from the standard English names. White pieces are designated using upper-case
-      letters ("RACPNBK") whilst Black uses lowercase ("racpnbk"). Blank squares are
-      noted using digits 1 through 9 (the number of blank squares), and "/"
-      separates ranks.
+      square are described from file A through file I. Each piece is identified
+      by a single letter: white pieces use upper-case letters ("RACPNBK"), black
+      pieces lower-case ones ("racpnbk"), and "X" / "x" is a dark (face down)
+      piece of white / black, accepted only on a starting square of its own side
+      other than the king's. Blank squares are noted using digits 1 through 9
+      (the number of blank squares), and "/" separates ranks.
 
    2) Active color. "w" means white moves next, "b" means black.
 
-   3) Halfmove clock. This is the number of halfmoves since the last pawn advance
-      or capture. This is used to determine if a draw can be claimed under the
-      fifty-move rule.
+   3) Pool of unrevealed pieces: <piece><count> pairs, e.g.
+      R2A2C2P5N2B2r2a2c2p5n2b2 (kinds that are not listed count as 0).
 
-   4) Fullmove number. The number of the full move. It starts at 1, and is
+   4) Number of plies since the last capture, for the 40-move rule (80 plies).
+
+   5) Fullmove number. The number of the full move. It starts at 1, and is
       incremented after Black's move.
 */
 
@@ -620,21 +621,8 @@ void Position::undo_flip(Square s, Piece fromPc) {
 }
 
 
-// Removes one piece from the pool of unrevealed pieces, when the identity of
-// a captured dark piece becomes known. Keeps the hash key consistent with
-// set_state().
-void Position::reveal_captured(Piece pc) {
-
-    assert(pc != NO_PIECE && type_of(pc) != KING && restPieces[pc] > 0);
-
-    if (restPieces[pc] <= 0)
-        return;
-
-    restPieces[pc]--;
-    st->key ^= Zobrist::rest[pc][restPieces[pc]];
-}
-
-
+// Removes one piece from the pool of unrevealed pieces. Keeps the hash key
+// consistent with set_state().
 void Position::remove_rest_piece(Piece pc) {
 
     assert(pc != NO_PIECE && type_of(pc) != KING && restPieces[pc] > 0);

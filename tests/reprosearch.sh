@@ -15,7 +15,7 @@ echo "reprosearch testing started"
 # the same node count for each iteration.
 cat << EOF > repeat.exp
  set timeout 10
- spawn ./stockfish
+ spawn ./pikafish
  lassign \$argv nodes
 
  send "uci\n"
@@ -26,7 +26,7 @@ cat << EOF > repeat.exp
  send "go nodes \$nodes\n"
  expect "bestmove"
 
- send "position startpos moves e2e4 e7e6\n"
+ send "position startpos moves a3a4P a6a5p\n"
  send "go nodes \$nodes\n"
  expect "bestmove"
 
@@ -35,7 +35,7 @@ cat << EOF > repeat.exp
  send "go nodes \$nodes\n"
  expect "bestmove"
 
- send "position startpos moves e2e4 e7e6\n"
+ send "position startpos moves a3a4P a6a5p\n"
  send "go nodes \$nodes\n"
  expect "bestmove"
 

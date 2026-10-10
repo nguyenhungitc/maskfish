@@ -280,9 +280,14 @@ void Search::Worker::start_searching() {
 
     std::string ponder;
 
-    // No ponder move after a move of a dark piece: the reply depends on the reveal
+    // No ponder move after a move of a dark piece (the reply depends on the
+    // reveal), and no ponder move that moves a dark piece itself: the GUI could
+    // not send it back, since a move of a dark piece must name the revealed piece.
+    // (pv[0] moves a piece of the side to move, so it does not change whether
+    // the 'from' square of pv[1] holds a dark piece.)
     if (bestThread->rootMoves[0].pv.size() > 1
-        && !rootPos.move_dark(bestThread->rootMoves[0].pv[0]))
+        && !rootPos.move_dark(bestThread->rootMoves[0].pv[0])
+        && !rootPos.move_dark(bestThread->rootMoves[0].pv[1]))
         ponder = UCIEngine::move(bestThread->rootMoves[0].pv[1]);
 
     auto bestmove = UCIEngine::move(bestThread->rootMoves[0].pv[0]);
@@ -2357,7 +2362,7 @@ Value value_to_tt(Value v, int ply) { return is_win(v) ? v + ply : is_loss(v) ? 
 // Inverse of value_to_tt(): it adjusts a mate score from the transposition
 // table (which refers to the plies to mate/be mated from current position) to
 // "plies to mate/be mated from the root". However, to avoid potentially false
-// mate scores related to the 60 moves rule and the graph history interaction,
+// mate scores related to the 40 moves rule and the graph history interaction,
 // we return the highest non-mate score instead.
 Value value_from_tt(Value v, int ply, int r40c) {
 

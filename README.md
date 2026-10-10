@@ -64,7 +64,9 @@ xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w R2A2C2P5N2B2r2a2c2
   The pool also contains captured dark pieces whose identity was never
   reported. Each side needs at least as many pieces in its pool as it has dark
   pieces on the board; otherwise the engine prints
-  `info string Invalid position: ...`.
+  `info string Invalid position: ...`. A board without exactly one king per
+  side is not searched at all (`go` answers `bestmove (none)`) and the moves
+  that follow the FEN are ignored.
 * No-capture counter in plies, and the move number.
 
 `position startpos` uses the FEN above.
@@ -108,7 +110,9 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
   GUI must reveal the piece and send it back in the next `position` command.
 * A PV in `info` lines stops after the first move of a dark piece, because the
   continuation depends on the piece that will be revealed.
-* No `ponder` move is given when the best move reveals a piece.
+* No `ponder` move is given when the best move reveals a piece, or when the
+  expected reply would reveal one (the GUI could not send it back without the
+  revealed piece).
 * Scores of moves that reveal pieces are expected values over the possible
   outcomes. A mate score is only reported when every outcome leads to mate.
 
@@ -122,18 +126,28 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 | `RevealQuietHighValue` | `-12` | Weight of the share of rooks, cannons and knights in the mover's pool. |
 | `RevealQuietPhase` | `0` | Weight of the number of dark pieces still on the board. |
 | `RevealQuietDiversity` | `0` | Weight of how mixed the mover's pool is. |
-
 | `ProbCutDarkCapture` | `false` | ProbCut asks a larger margin (+64) and searches one ply less for captures of dark pieces. |
 | `TTPenalize` | `false` | Lowers by one the depth of a TT entry that is deep enough but whose bound cannot produce a cutoff, so it is replaced sooner. |
 | `ChanceBranchDepth` | `false` | In a reveal, the outcomes after the most likely one are searched one ply shallower. |
-| `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of revealed pieces only). |
-| `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with `trainer/fit_scaling.py`. |
+| `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of the value of the piece that starts on its square). |
+| `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with `fit_scaling.py` of [nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch). |
 | `ChanceRiskAversion` | `0` | Risk preference, in percent of the standard deviation of the outcomes, of the side whose move causes a chance event: positive avoids uncertain reveals/captures, negative seeks them. |
 
 The bonus is in internal score units and clamped to -192..192. Setting all
 `RevealQuiet*` options to 0 disables it. The defaults are those of AB-JChess
 and have not been re-tuned for this engine's networks; both features should be
 validated with SPRT tests against a version where they are disabled.
+
+The engine also has boolean options for search ideas under test, all off by
+default and described next to their definition in `src/engine.cpp`:
+`ContCorr4Ply`, `ContCorr6Ply`, `MultiCutHistory`, `CMHC`, `SeekMate`,
+`PruningTweaks`, `LMRTweaks`, `FailHighRecovery`, `AspirationTweaks`,
+`MainHistoryDecay`, `MalusDecay`, `BestMoveBonusScale`, `LMRHistoryDivisor`,
+`ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
+`CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
+`RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory` and
+`SharedHistory`. Test them with `match.py --opt-a Name=true` of nnue-pytorch; the ones
+that fail should be removed rather than kept as dead options.
 
 ### Debugging commands
 
@@ -143,7 +157,7 @@ one child per kind of piece left in the mover's pool (each kind counted once).
 `evalraw` prints the raw network output (PSQT and layer parts, in internal
 units) and the layer stack used. The option `RawScore` makes `info ... score cp`
 report internal units instead of normalized centipawns. Both are used by the
-trainer.
+trainer ([nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch)).
 
 ## Network
 
@@ -159,9 +173,9 @@ it does not mean that this network would work.
 
 ### Training a network
 
-The `trainer/` directory contains a PyTorch trainer for this engine's network
-(self-play data generation, training, export, and a bit-exact check against
-the engine). See [trainer/README.md](trainer/README.md).
+The trainer for this engine's network is a separate repository,
+[nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch): a PyTorch trainer (self-play data generation,
+training, export, and a bit-exact check against the engine). See its README.
 
 ## Compiling
 
@@ -196,7 +210,7 @@ compatible with the default one, and rejected by a default build):
   canonical orientation (dark pieces count as the kind of their square).
 
 Both ideas come from Pikafish (xiangqi) and are also used by AB-JChess. Train
-such a network with `--arch att` in `trainer/`, and compare it with a default
+such a network with `--arch att` in nnue-pytorch, and compare it with a default
 network trained on the same data before adopting it.
 
 `make -j build threats=yes` (possibly with `nnue=att`) adds **threat
@@ -206,7 +220,7 @@ on the board, 92711 features (not those of the kings), where a dark piece attack
 piece of its starting square. The feature transformer has 1024 outputs
 instead of 2048. The engine is about a third slower and needs about 90 MB
 more memory for the network. Train such a network with `--arch threats` (or
-`att-threats`); see section 7.3 of `trainer/README.md`.
+`att-threats`); see section 7.3 of the nnue-pytorch README.
 
 `make -j build layers=2` (combinable with the options above) uses the layer
 stacks of Pikafish's "Update nnue-architecture": the first layer has 32
@@ -214,7 +228,7 @@ outputs, all of them activated, the second layer gets a squared activation
 too, the last layer is fed by all the activations of both, and the direct
 term is the difference of the last two outputs of the first layer. The engine
 is about 10% slower. Train such a network with `train.py --layers 2` (section
-7.4 of `trainer/README.md`); it can start from the feature transformer of a
+7.4 of the nnue-pytorch README); it can start from the feature transformer of a
 network with the current layer stacks.
 
 ## Contributing
@@ -228,7 +242,7 @@ Useful checks when changing Jieqi-specific code:
 * build with `make -j build debug=yes sanitize="address undefined"` and run
   searches from positions with dark pieces;
 * compare `go perft` counts before and after changes to move generation or to
-  `Position`;
+  `Position` (`tests/perft.sh`, run from `src`, checks a few recorded counts);
 * compare the key printed by `d` for the same position reached through
   `position startpos moves ...` and set directly with `position fen ...`; they
   must be equal.

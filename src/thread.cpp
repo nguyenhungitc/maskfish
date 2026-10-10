@@ -287,19 +287,25 @@ void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::Lim
     increaseDepth = true;
 
     Search::RootMoves rootMoves;
-    const auto        legalmoves = MoveList<LEGAL>(pos);
 
-    for (const auto& uciMove : limits.searchmoves)
+    // A board without exactly one king per side (reported as invalid by
+    // Engine::set_position()) is not searched: no root moves, "bestmove (none)"
+    if (pos.count<KING>(WHITE) == 1 && pos.count<KING>(BLACK) == 1)
     {
-        auto move = UCIEngine::to_move(pos, uciMove);
+        const auto legalmoves = MoveList<LEGAL>(pos);
 
-        if (std::find(legalmoves.begin(), legalmoves.end(), move) != legalmoves.end())
-            rootMoves.emplace_back(move);
+        for (const auto& uciMove : limits.searchmoves)
+        {
+            auto move = UCIEngine::to_move(pos, uciMove);
+
+            if (std::find(legalmoves.begin(), legalmoves.end(), move) != legalmoves.end())
+                rootMoves.emplace_back(move);
+        }
+
+        if (rootMoves.empty())
+            for (const auto& m : legalmoves)
+                rootMoves.emplace_back(m);
     }
-
-    if (rootMoves.empty())
-        for (const auto& m : legalmoves)
-            rootMoves.emplace_back(m);
 
     // After ownership transfer 'states' becomes empty, so if we stop the search
     // and call 'go' again without setting a new position states.get() == nullptr.

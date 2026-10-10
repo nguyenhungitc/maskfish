@@ -158,7 +158,7 @@ void Network<Arch, Transformer>::verify(std::string                             
             std::string msg5 = "The engine will be terminated now.";
             if (oldVersionFile)
                 msg3 = "The network file has an old format (16-bit weights): convert it with "
-                       "trainer/serialize.py --upgrade.";
+                       "serialize.py --upgrade (nnue-pytorch).";
 
             std::string msg = "ERROR: " + msg1 + '\n' + "ERROR: " + msg2 + '\n' + "ERROR: " + msg3
                             + '\n' + "ERROR: " + msg4 + '\n' + "ERROR: " + msg5 + '\n';
