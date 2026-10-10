@@ -451,12 +451,24 @@ class Worker {
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
 
-    // Averages the outcomes of a chance node (flip_search, hidden_capture_search)
-    struct ChanceOutcome {
-        Value value;
-        int   count;
+    // Aggregates the outcomes of a chance node (flip_search, hidden_capture_search),
+    // from their exact values or from bounds of them
+    enum class ChanceBound {
+        Exact,
+        Lower,
+        Upper
     };
-    Value aggregate_chance(const ChanceOutcome* outcomes, int n, int total) const;
+    Value aggregate_chance(
+      const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+
+    // Searches the outcomes of a chance node, see search.cpp
+    template<typename SearchOutcome>
+    Value chance_node(const int*      counts,
+                      int             n,
+                      int             total,
+                      Value           alpha,
+                      Value           beta,
+                      SearchOutcome&& searchOutcome);
     Reveal::QuietParameters revealQuiet;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;

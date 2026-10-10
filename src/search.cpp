@@ -56,12 +56,26 @@ namespace {
 // The scaling is 360.83524 unless the UCI option ChanceScaling is set.
 double flip_score_to_winrate(Value v, double scaling) { return 1.0 / (1.0 + std::exp(-v / scaling)); }
 
-Value flip_winrate_to_score(double winrate, double scaling) {
+// Inverse of flip_score_to_winrate(), in non-decisive scores. The direction of
+// rounding matters: a lower bound is rounded down, an upper bound up, and an
+// estimate to the nearest score. (Truncation used to turn about 30% of the
+// scores into a neighbouring one: a chance node whose outcomes all returned
+// beta could return beta - 1.)
+enum class Rounding {
+    Nearest,
+    Down,
+    Up
+};
+
+Value flip_winrate_to_score(double winrate, double scaling, Rounding rounding = Rounding::Nearest) {
     constexpr double epsilon = 1e-9;
     winrate                  = std::clamp(winrate, epsilon, 1.0 - epsilon);
-    double q                 = std::log(winrate / (1.0 - winrate));
-    return std::clamp(static_cast<Value>(q * scaling), VALUE_MATED_IN_MAX_PLY + 1,
-                      VALUE_MATE_IN_MAX_PLY - 1);
+    const double q           = std::log(winrate / (1.0 - winrate)) * scaling;
+    const double r           = rounding == Rounding::Down ? std::floor(q)
+                             : rounding == Rounding::Up   ? std::ceil(q)
+                                                          : std::round(q);
+    return Value(
+      std::clamp(r, double(VALUE_MATED_IN_MAX_PLY + 1), double(VALUE_MATE_IN_MAX_PLY - 1)));
 }
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
@@ -2119,41 +2133,128 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 // of the win rates is added (from the point of view of the side to move here,
 // i.e. subtracted for the side whose move caused the chance event): positive
 // values make that side avoid uncertain reveals/captures, negative values
-// make it seek them. (Risk-sensitive aggregation idea from AB-JChess.)
-Value Search::Worker::aggregate_chance(const ChanceOutcome* outcomes, int n, int total) const {
+// make it seek them. (Risk-sensitive aggregation idea from AB-JChess.) The
+// average always lies between the smallest and the largest outcome.
+//
+// With kind == Lower (resp. Upper), 'values' are lower (resp. upper) bounds of
+// the outcomes, and the result is a lower (resp. upper) bound of the value
+// the exact outcomes would give. This relies on the aggregate being
+// non-decreasing in every outcome (with ChanceRiskAversion, the standard
+// deviation, at most 0.5, is bounded separately).
+Value Search::Worker::aggregate_chance(
+  const Value* values, const int* counts, int n, int total, ChanceBound kind) const {
 
-    bool allWin = true, allLoss = true;
+    assert(n > 0 && total > 0);
+
+    bool  allWin = true, allLoss = true;
+    Value vmin = values[0], vmax = values[0];
     for (int i = 0; i < n; ++i)
     {
-        allWin &= is_win(outcomes[i].value);
-        allLoss &= is_loss(outcomes[i].value);
+        allWin &= is_win(values[i]);
+        allLoss &= is_loss(values[i]);
+        vmin = std::min(vmin, values[i]);
+        vmax = std::max(vmax, values[i]);
     }
 
-    if (n > 0 && (allWin || allLoss))
-    {
-        // All wins: the guaranteed mate is the slowest one (minimum value).
-        // All losses: we are mated at the latest by the slowest one (maximum value).
-        Value v = outcomes[0].value;
-        for (int i = 1; i < n; ++i)
-            v = allWin ? std::min(v, outcomes[i].value) : std::max(v, outcomes[i].value);
-        return v;
-    }
+    // All wins: the guaranteed mate is the slowest one (minimum value).
+    // All losses: we are mated at the latest by the slowest one (maximum value).
+    // For bounds, the other rule gives a bound as well: if all lower bounds are
+    // losses, the true value is at least the largest of them (whether or not
+    // the true outcomes are all losses), and symmetrically for upper bounds.
+    if (allWin)
+        return vmin;
+    if (allLoss)
+        return vmax;
 
     double winrateSum = 0.0, winrateSqSum = 0.0;
     for (int i = 0; i < n; ++i)
     {
-        const double w = flip_score_to_winrate(outcomes[i].value, chanceScaling);
-        winrateSum += w * outcomes[i].count;
-        winrateSqSum += w * w * outcomes[i].count;
+        const double w = flip_score_to_winrate(values[i], chanceScaling);
+        winrateSum += w * counts[i];
+        winrateSqSum += w * w * counts[i];
     }
 
     double expected = winrateSum / total;
-    if (chanceRisk != 0.0)
+
+    if (kind == ChanceBound::Exact)
     {
-        const double variance = std::max(0.0, winrateSqSum / total - expected * expected);
-        expected += chanceRisk * std::sqrt(variance);
+        if (chanceRisk != 0.0)
+        {
+            const double variance = std::max(0.0, winrateSqSum / total - expected * expected);
+            expected += chanceRisk * std::sqrt(variance);
+        }
+        return std::clamp(flip_winrate_to_score(expected, chanceScaling), vmin, vmax);
     }
-    return flip_winrate_to_score(expected, chanceScaling);
+
+    if (kind == ChanceBound::Lower)
+        return std::max(vmin, flip_winrate_to_score(expected + std::min(chanceRisk, 0.0) * 0.5,
+                                                    chanceScaling, Rounding::Down));
+
+    return std::min(vmax, flip_winrate_to_score(expected + std::max(chanceRisk, 0.0) * 0.5,
+                                                chanceScaling, Rounding::Up));
+}
+
+
+// Searches the outcomes of a chance node and returns their aggregate.
+// searchOutcome(i, alpha, beta) searches outcome i, from the point of view of
+// the side to move at the chance node. The outcomes are sorted from the most
+// to the least likely.
+//
+// Every outcome is searched with the window of the node, so a value returned
+// by an outcome is only a lower bound if it failed high, an upper bound if it
+// failed low. The proven bounds of every outcome are kept, and the node fails
+// high (low) as soon as the aggregate of the lower (upper) bounds, where an
+// outcome not searched yet counts as a loss (win), proves it (Star1, Ballard
+// 1983). This also skips the remaining outcomes when the first ones are
+// conclusive. When some outcomes failed high and others low, the aggregate of
+// the values returned is only an estimate: it is kept within the proven
+// bounds. (Searching such outcomes again until the result is exact multiplies
+// the size of the tree by 20 to 35 at depths 10-12, even in PV nodes only.)
+template<typename SearchOutcome>
+Value Search::Worker::chance_node(
+  const int* counts, int n, int total, Value alpha, Value beta, SearchOutcome&& searchOutcome) {
+
+    assert(n > 0 && n <= Position::MaxRestPieceTypes && total > 0);
+
+    if (n == 1)
+        return searchOutcome(0, alpha, beta);
+
+    std::array<Value, Position::MaxRestPieceTypes> lo, hi, values;
+    lo.fill(-VALUE_MATE);
+    hi.fill(VALUE_MATE);
+
+    for (int i = 0; i < n; ++i)
+    {
+        const Value v = values[i] = searchOutcome(i, alpha, beta);
+
+        // The search was stopped: the remaining outcomes would only return
+        // meaningless values, and the caller discards this result anyway.
+        if (threads.stop.load(std::memory_order_relaxed))
+            return VALUE_ZERO;
+
+        if (v <= alpha)
+            hi[i] = v;
+        else if (v >= beta)
+            lo[i] = v;
+        else
+            lo[i] = hi[i] = v;
+
+        const Value upper = aggregate_chance(hi.data(), counts, n, total, ChanceBound::Upper);
+        if (upper <= alpha)
+            return upper;
+
+        const Value lower = aggregate_chance(lo.data(), counts, n, total, ChanceBound::Lower);
+        if (lower >= beta)
+            return lower;
+
+        if (i == n - 1)
+            return lower == upper
+                   ? lower
+                   : std::clamp(aggregate_chance(values.data(), counts, n, total, ChanceBound::Exact),
+                                lower, upper);
+    }
+
+    return VALUE_ZERO;  // Unreachable
 }
 
 
@@ -2171,37 +2272,52 @@ Value Search::Worker::search_child(
 }
 
 
+// Sorts the possible identities of a dark piece from the most to the least
+// likely (ties: more valuable piece first), and returns their total count.
+// The aggregate of a chance node does not depend on the order, but the TT and
+// the histories filled by the first, most representative outcome help the
+// following ones, and the first outcomes are the ones most likely to decide
+// the node on their own (see chance_node()). (Idea from AB-JChess.)
+static int sort_outcomes(Position::RestPieceList&                      restPieces,
+                         int                                           restCount,
+                         std::array<int, Position::MaxRestPieceTypes>& counts) {
+    std::stable_sort(restPieces.begin(), restPieces.begin() + restCount,
+                     [](const auto& a, const auto& b) {
+                         return a.second != b.second ? a.second > b.second
+                                                     : PieceValue[a.first] > PieceValue[b.first];
+                     });
+    int total = 0;
+    for (int i = 0; i < restCount; ++i)
+        total += counts[i] = restPieces[i].second;
+    return total;
+}
+
+
 // Chance node over the identity of a dark piece that the root side (the
 // observer) has just captured. In Jieqi the capturer is shown the captured
 // piece, so the observer will know which piece left the pool, while its own
 // dark pieces captured by the opponent stay unknown (they remain in the pool,
 // which is already the correct probability model). Each possible identity is
 // searched with that piece removed from its owner's pool, and the results are
-// averaged like in flip_search(). (Idea from AB-JChess.)
+// aggregated by chance_node(). (Idea from AB-JChess.)
 template<NodeType nodeType>
 Value Search::Worker::hidden_capture_search(
   Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
 
     // The captured piece belongs to the side to move
-    Position::RestPieceList restPieces;
-    const int               restCount = pos.rest_pieces(pos.side_to_move(), restPieces);
+    Position::RestPieceList                        restPieces;
+    std::array<int, Position::MaxRestPieceTypes> counts{};
+    const int restCount = pos.rest_pieces(pos.side_to_move(), restPieces);
+    const int total     = sort_outcomes(restPieces, restCount, counts);
 
     // Do not enumerate again when the children are searched
     (ss - 1)->capturedDark = false;
 
-    auto search_one = [&]() {
-        return isQsearch ? qsearch<nodeType>(pos, ss, alpha, beta)
-                         : search<nodeType>(pos, ss, alpha, beta, depth, cutNode);
-    };
-
-    int total = 0;
-    for (int i = 0; i < restCount; ++i)
-        total += restPieces[i].second;
-
     // Pool empty (can only come from an inconsistent input): plain search
     if (total == 0)
     {
-        Value v                = search_one();
+        Value v = isQsearch ? qsearch<nodeType>(pos, ss, alpha, beta)
+                            : search<nodeType>(pos, ss, alpha, beta, depth, cutNode);
         (ss - 1)->capturedDark = true;
         return v;
     }
@@ -2213,44 +2329,25 @@ Value Search::Worker::hidden_capture_search(
 
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
-    std::array<ChanceOutcome, Position::MaxRestPieceTypes> results;
-    int                                            resultCount = 0;
-    bool                                           stopped     = false;
-
-    for (int i = 0; i < restCount; ++i)
-    {
-        const auto [piece, num] = restPieces[i];
+    auto searchOutcome = [&](int i, Value a, Value b) {
+        const Piece piece = restPieces[i].first;
 
         branchReduction.restore();
         accumulatorStack.pop();
         pos.remove_rest_piece(piece);
         accumulatorStack.push(dp);
 
-        const Value value = search_one();
+        const Value value = isQsearch ? qsearch<nodeType>(pos, ss, a, b)
+                                      : search<nodeType>(pos, ss, a, b, depth, cutNode);
 
         pos.restore_rest_piece(piece);
+        return value;
+    };
 
-        if (restCount == 1)
-        {
-            (ss - 1)->capturedDark = true;
-            return value;
-        }
-
-        if (threads.stop.load(std::memory_order_relaxed))
-        {
-            stopped = true;
-            break;
-        }
-
-        results[resultCount++] = {value, num};
-    }
+    const Value value = chance_node(counts.data(), restCount, total, alpha, beta, searchOutcome);
 
     (ss - 1)->capturedDark = true;
-
-    if (stopped)
-        return VALUE_ZERO;
-
-    return aggregate_chance(results.data(), resultCount, total);
+    return value;
 }
 
 
@@ -2258,12 +2355,10 @@ template<NodeType nodeType>
 Value Search::Worker::flip_search(
     Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
 
-    Position::RestPieceList restPieces;
-    const int               restCount = pos.rest_pieces(~pos.side_to_move(), restPieces);
-
-    int total = 0;
-    for (int i = 0; i < restCount; ++i)
-        total += restPieces[i].second;
+    Position::RestPieceList                        restPieces;
+    std::array<int, Position::MaxRestPieceTypes> counts{};
+    const int restCount = pos.rest_pieces(~pos.side_to_move(), restPieces);
+    const int total     = sort_outcomes(restPieces, restCount, counts);
 
     // In a consistent position a dark piece always has a candidate in its
     // owner's pool. An inconsistent position can only come from the input (it
@@ -2272,60 +2367,33 @@ Value Search::Worker::flip_search(
     if (total == 0)
         return VALUE_DRAW;
 
-    // Search the most likely outcomes first (ties: more valuable piece first).
-    // The averaged result does not depend on the order, but the TT and the
-    // histories filled by the first, most representative outcome help the
-    // following ones. (Idea from AB-JChess.)
-    std::stable_sort(restPieces.begin(), restPieces.begin() + restCount,
-                     [](const auto& a, const auto& b) {
-                         return a.second != b.second ? a.second > b.second
-                                                     : PieceValue[a.first] > PieceValue[b.first];
-                     });
-
-    const Square flipSq = (ss - 1)->currentMove.to_sq();
+    const Square     flipSq = (ss - 1)->currentMove.to_sq();
     const DirtyPiece baseDp = accumulatorStack.latest().dirtyPiece;
 
     // Give every outcome the same view of the parent's LMR reduction.
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
-    // Collect per-flip results (no heap allocation in this hot path)
-    std::array<ChanceOutcome, Position::MaxRestPieceTypes> results;
-    int                                            resultCount = 0;
-
-    for (int i = 0; i < restCount; ++i)
-    {
-        const auto [piece, num] = restPieces[i];
+    auto searchOutcome = [&](int i, Value a, Value b) {
+        const Piece piece = restPieces[i].first;
 
         branchReduction.restore();
         DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();
-        Piece flipped_piece = pos.do_flip(flipSq, piece, &dp, &tt);
+        const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp, &tt);
         accumulatorStack.push(dp);
 
-        Value value;
+        // Optionally search the less likely outcomes one ply shallower
+        const Value value =
+          isQsearch ? qsearch<nodeType>(pos, ss, a, b)
+                    : search<nodeType>(pos, ss, a, b,
+                                       chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth,
+                                       cutNode);
 
-        if (isQsearch)
-            value = qsearch<nodeType>(pos, ss, alpha, beta);
-        else
-            // Optionally search the less likely outcomes one ply shallower
-            value = search<nodeType>(pos, ss, alpha, beta,
-                                     chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth,
-                                     cutNode);
+        pos.undo_flip(flipSq, flippedPiece);
+        return value;
+    };
 
-        pos.undo_flip(flipSq, flipped_piece);
-
-        if (restCount == 1)
-            return value;
-
-        // The search was stopped: the remaining outcomes would only return
-        // meaningless values, and the caller discards this result anyway.
-        if (threads.stop.load(std::memory_order_relaxed))
-            return VALUE_ZERO;
-
-        results[resultCount++] = {value, num};
-    }
-
-    return aggregate_chance(results.data(), resultCount, total);
+    return chance_node(counts.data(), restCount, total, alpha, beta, searchOutcome);
 }
 
 
