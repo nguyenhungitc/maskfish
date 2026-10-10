@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -29,11 +30,11 @@
 #include "../../types.h"
 #include "../nnue_common.h"
 
-namespace Stockfish {
+namespace Maskfish {
 class Position;
 }
 
-namespace Stockfish::Eval::NNUE::Features {
+namespace Maskfish::Eval::NNUE::Features {
 
 // Feature HalfKAv2_hm: Combination of the position of own king and the
 // position of pieces. Position mirrored such that king is always on d..e files.
@@ -231,6 +232,6 @@ class HalfKAv2_hm {
     static bool requires_refresh(const DirtyPiece& dirtyPiece, Color perspective);
 };
 
-}  // namespace Stockfish::Eval::NNUE::Features
+}  // namespace Maskfish::Eval::NNUE::Features
 
 #endif  // #ifndef NNUE_FEATURES_HALF_KA_V2_HM_H_INCLUDED

@@ -1,11 +1,12 @@
 /*
-  Pikafish, a UCI chess variant playing engine derived from Stockfish
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2018-2022 PikaCat++
-  Pikafish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
-  Pikafish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -18,7 +19,7 @@
 
 #include "types.h"
 
-namespace Stockfish {
+namespace Maskfish {
 
 #define B(h, l) (Bitboard(h) << 64) ^ Bitboard(l)
 
@@ -399,6 +400,6 @@ constexpr Bitboard KnightToMagicsInit[SQUARE_NB] = {
 // clang-format on
 
 #undef B
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 #endif  // #ifndef MAGICS_H_INCLUDED

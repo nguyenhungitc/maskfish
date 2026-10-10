@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2026 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -58,13 +59,13 @@
     #define MADV_COLLAPSE 25
 #endif
 
-namespace Stockfish::shm {
+namespace Maskfish::shm {
 
 namespace detail {
 
 inline void* map_shared(int fd, usize size) noexcept {
 #if defined(__linux__) && !defined(__ANDROID__)
-    return Stockfish::mmap_huge_aligned(size, MAP_SHARED, fd);
+    return Maskfish::mmap_huge_aligned(size, MAP_SHARED, fd);
 #else
     return mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 #endif
@@ -139,12 +140,12 @@ struct UniqueFd {
 };
 
 struct TempRoot {
-    // /tmp/stockfish-[uid], with appropriate permissions
+    // /tmp/maskfish-[uid], with appropriate permissions
     std::string prefix;
 
     static const std::optional<TempRoot>& get_temp_root() {
         static auto temp_root = []() -> std::optional<TempRoot> {
-            auto proposed = std::string("/tmp/stockfish-") + std::to_string(getuid());
+            auto proposed = std::string("/tmp/maskfish-") + std::to_string(getuid());
 
             if (mkdir(proposed.c_str(), 0700) == 0)
             {
@@ -512,7 +513,7 @@ class SharedMemory {
                     return false;
 #else
                 char temp_path[PATH_MAX];
-                strncpy(temp_path, "/tmp/stockfish_replicated_data.XXXXXX", PATH_MAX);
+                strncpy(temp_path, "/tmp/maskfish_replicated_data.XXXXXX", PATH_MAX);
 
                 memfd.reset(mkstemp(temp_path));
                 if (!memfd.is_valid())
@@ -603,6 +604,6 @@ template<typename T>
     return std::nullopt;
 }
 
-}  // namespace Stockfish::shm
+}  // namespace Maskfish::shm
 
 #endif  // #ifndef SHM_UNIX_H_INCLUDED

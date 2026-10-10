@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -38,11 +39,11 @@
 #include "nnue_feature_transformer.h"
 #include "nnue_misc.h"
 
-namespace Stockfish {
+namespace Maskfish {
 class Position;
 }
 
-namespace Stockfish::Eval::NNUE {
+namespace Maskfish::Eval::NNUE {
 
 using NetworkOutput = std::tuple<Value, Value>;
 
@@ -130,21 +131,21 @@ struct Networks {
 };
 
 
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 template<typename ArchT, typename FeatureTransformerT>
-struct std::hash<Stockfish::Eval::NNUE::Network<ArchT, FeatureTransformerT>> {
+struct std::hash<Maskfish::Eval::NNUE::Network<ArchT, FeatureTransformerT>> {
     std::size_t operator()(
-      const Stockfish::Eval::NNUE::Network<ArchT, FeatureTransformerT>& network) const noexcept {
+      const Maskfish::Eval::NNUE::Network<ArchT, FeatureTransformerT>& network) const noexcept {
         return network.get_content_hash();
     }
 };
 
 template<>
-struct std::hash<Stockfish::Eval::NNUE::Networks> {
-    std::size_t operator()(const Stockfish::Eval::NNUE::Networks& networks) const noexcept {
+struct std::hash<Maskfish::Eval::NNUE::Networks> {
+    std::size_t operator()(const Maskfish::Eval::NNUE::Networks& networks) const noexcept {
         std::size_t h = 0;
-        Stockfish::hash_combine(h, networks.big);
+        Maskfish::hash_combine(h, networks.big);
         return h;
     }
 };

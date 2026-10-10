@@ -2,18 +2,18 @@
 # Visit https://bit.ly/cffinit to generate yours today!
 
 cff-version: 1.2.0
-title: Pikafish
+title: Maskfish
 message: >-
   Please cite this software using the metadata from this
   file.
 type: software
 authors:
-  - name: The Pikafish developers (see AUTHORS file)
-repository-code: 'https://github.com/official-pikafish/Pikafish'
-url: 'https://pikafish.org/'
-repository-artifact: 'https://pikafish.org/'
-abstract: Pikafish is a free and strong UCI xiangqi engine.
+  - name: The Maskfish developers (see AUTHORS file)
+repository-code: 'https://github.com/official-maskfish/maskfish'
+url: 'https://github.com/official-maskfish/maskfish'
+abstract: Maskfish is a free and strong UCI jieqi engine.
 keywords:
+  - jieqi
   - xiangqi
   - artificial intelligence (AI)
   - tree search

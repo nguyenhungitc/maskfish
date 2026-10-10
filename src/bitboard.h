@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -35,7 +36,7 @@
     #define IF_NOT_PEXT(...) __VA_ARGS__
 #endif
 
-namespace Stockfish {
+namespace Maskfish {
 
 // Entries of the attack tables: with pext, the attacks are stored compressed
 // (pext over the attacks on an empty board) in 32 bits, 4 times smaller
@@ -50,7 +51,7 @@ namespace Bitboards {
 void        init();
 std::string pretty(Bitboard b);
 
-}  // namespace Stockfish::Bitboards
+}  // namespace Maskfish::Bitboards
 
 constexpr Bitboard Palace = Bitboard(0x70381CULL) << 64 | Bitboard(0xE07038ULL);
 
@@ -389,6 +390,6 @@ inline Square pop_lsb(Bitboard& b) {
     return s;
 }
 
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 #endif  // #ifndef BITBOARD_H_INCLUDED

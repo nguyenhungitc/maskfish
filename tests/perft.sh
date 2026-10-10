@@ -22,7 +22,7 @@ run_test() {
   echo -n "Testing depth $depth: ${pos:0:50}... "
 
   local nodes
-  nodes=$(printf "position %s\ngo perft %s\nquit\n" "$pos" "$depth" | ./pikafish 2>&1 \
+  nodes=$(printf "position %s\ngo perft %s\nquit\n" "$pos" "$depth" | ./maskfish 2>&1 \
           | awk '/^Nodes searched:/ {print $3}')
 
   if [ "$nodes" = "$expected" ]; then

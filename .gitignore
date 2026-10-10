@@ -11,7 +11,7 @@ CMakeLists.txt
 CMakeLists.txt.user
 
 # Built binary
-src/pikafish*
+src/maskfish*
 src/-lstdc++.res
 
 # Neural network for the NNUE evaluation

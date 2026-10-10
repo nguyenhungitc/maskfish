@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -41,7 +42,7 @@
 #include "timeman.h"
 #include "types.h"
 
-namespace Stockfish {
+namespace Maskfish {
 
 // Different node types, used as a template parameter
 enum NodeType {
@@ -252,7 +253,7 @@ class SearchManager: public ISearchManager {
             const TranspositionTable& tt,
             Depth                     depth) const;
 
-    Stockfish::TimeManagement tm;
+    Maskfish::TimeManagement  tm;
     double                    originalTimeAdjust;
     int                       callsCnt;
     std::atomic_bool          ponder;
@@ -479,7 +480,7 @@ class Worker {
     Eval::NNUE::AccumulatorStack  accumulatorStack;
     Eval::NNUE::AccumulatorCaches refreshTable;
 
-    friend class Stockfish::ThreadPool;
+    friend class Maskfish::ThreadPool;
     friend class SearchManager;
 };
 
@@ -491,6 +492,6 @@ struct ConthistBonus {
 
 }  // namespace Search
 
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 #endif  // #ifndef SEARCH_H_INCLUDED

@@ -1,5 +1,5 @@
 /*
-  Jieqi reveal heuristics.
+  Maskfish: Jieqi reveal heuristics.
 
   Ported (subset) from AB-JChess (https://github.com/lxsgx23/AB-JChess),
   GPL-3.0, by Huorongrong and Laoxu (Kouza).
@@ -19,11 +19,11 @@
 
 #include "types.h"
 
-namespace Stockfish {
+namespace Maskfish {
 class Position;
 }
 
-namespace Stockfish::Reveal {
+namespace Maskfish::Reveal {
 
 // "Safe reveal" bonus: a score adjustment (in internal units) added to the
 // value of a quiet move of a dark piece, depending on whether the square it
@@ -79,6 +79,6 @@ Value search_with_bonus(Value alpha, Value beta, int bonus, ChildSearch&& childS
     return apply_bonus(Value(-child), bonus);
 }
 
-}  // namespace Stockfish::Reveal
+}  // namespace Maskfish::Reveal
 
 #endif  // #ifndef REVEAL_H_INCLUDED

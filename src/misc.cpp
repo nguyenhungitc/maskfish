@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -38,7 +39,7 @@
 #include "types.h"
 #include "external/zstd.h"
 
-namespace Stockfish {
+namespace Maskfish {
 
 namespace {
 
@@ -116,20 +117,20 @@ class Logger {
 }  // namespace
 
 
-// Returns the full name of the current Pikafish version.
+// Returns the full name of the current Maskfish version.
 //
 // For local dev compiles we try to append the commit SHA and
 // commit date from git. If that fails only the local compilation
 // date is set and "nogit" is specified:
-//      Pikafish dev-YYYYMMDD-SHA
+//      Maskfish dev-YYYYMMDD-SHA
 //      or
-//      Pikafish dev-YYYYMMDD-nogit
+//      Maskfish dev-YYYYMMDD-nogit
 //
 // For releases (non-dev builds) we only include the version number:
-//      Pikafish version
+//      Maskfish version
 std::string engine_version_info() {
     std::stringstream ss;
-    ss << "Pikafish " << version << std::setfill('0');
+    ss << "Maskfish " << version << std::setfill('0');
 
     if constexpr (version == "dev")
     {
@@ -161,7 +162,7 @@ std::string engine_version_info() {
 
 std::string engine_info(bool to_uci) {
     return engine_version_info() + (to_uci ? "\nid author " : " by ")
-         + "the Pikafish developers (see AUTHORS file)";
+         + "the Maskfish developers (see AUTHORS file)";
 }
 
 
@@ -686,4 +687,4 @@ std::stringstream read_compressed_nnue(const std::string& fpath) {
     return ss;
 }
 
-}  // namespace Stockfish
+}  // namespace Maskfish

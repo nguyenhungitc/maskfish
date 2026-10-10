@@ -1,41 +1,23 @@
 #!/bin/sh
 
-# Downloads the default network into the current directory if it is missing.
-# Note: this is Pikafish's xiangqi network (master-net), which this Jieqi
-# engine cannot use (different feature set, see README.md). Put a Jieqi
-# network at src/pikafish.nnue to skip the download.
+# Checks that the default network is present in the current directory.
+#
+# Maskfish needs a Jieqi network (feature set HalfKAv2_hm with dark-piece and
+# pool features). No compatible network is downloaded automatically: train one
+# with https://github.com/official-maskfish/nnue-pytorch and put it at
+# src/maskfish.nnue, or point the EvalFile UCI option to it at run time.
 
-wget_or_curl=$( (command -v wget > /dev/null 2>&1 && echo "wget -qO-") || \
-                (command -v curl > /dev/null 2>&1 && echo "curl -fsSL"))
-
-
-fetch_network() {
-  _filename="pikafish.nnue"
+check_network() {
+  _filename="maskfish.nnue"
 
   if [ -f "$_filename" ]; then
-    echo "Exists $_filename, skipping download"
+    echo "Exists $_filename"
     return
   fi
 
-  if [ -z "$wget_or_curl" ]; then
-    >&2 printf "%s\n" "Neither wget or curl is installed." \
-          "Install one of these tools to download NNUE files automatically."
-    exit 1
-  fi
-
-  url="https://github.com/official-pikafish/Networks/releases/download/master-net/$_filename"
-  echo "Downloading from $url ..."
-  # Download to a temporary file, so that a failed download does not leave an
-  # empty or partial network that would be taken for a valid one next time
-  if $wget_or_curl "$url" > "$_filename.part" && [ -s "$_filename.part" ]; then
-    mv "$_filename.part" "$_filename"
-    echo "Successfully downloaded $_filename"
-    echo "Warning: this xiangqi network is not compatible with this Jieqi engine (see README.md)"
-  else
-    rm -f "$_filename.part"
-    echo "Failed to download $_filename from $url"
-    return 1
-  fi
+  echo "Note: $_filename not found. The engine builds without it, but needs a"
+  echo "Jieqi network at run time (EvalFile option). Train one with"
+  echo "https://github.com/official-maskfish/nnue-pytorch"
 }
 
-fetch_network
+check_network

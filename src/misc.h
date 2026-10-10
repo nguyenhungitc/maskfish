@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -41,7 +42,7 @@
 #define stringify2(x) #x
 #define stringify(x) stringify2(x)
 
-namespace Stockfish {
+namespace Maskfish {
 
 // Short integer type aliases, as used by upstream Pikafish/Stockfish code
 using u64 = std::uint64_t;
@@ -467,12 +468,12 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
     #define sf_assume(cond)
 #endif
 
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 template<std::size_t N>
-struct std::hash<Stockfish::FixedString<N>> {
-    std::size_t operator()(const Stockfish::FixedString<N>& fstr) const noexcept {
-        return Stockfish::hash_bytes(fstr.data(), fstr.size());
+struct std::hash<Maskfish::FixedString<N>> {
+    std::size_t operator()(const Maskfish::FixedString<N>& fstr) const noexcept {
+        return Maskfish::hash_bytes(fstr.data(), fstr.size());
     }
 };
 

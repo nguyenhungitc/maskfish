@@ -1,13 +1,14 @@
 /*
-  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
+  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
-  Stockfish is free software: you can redistribute it and/or modify
+  Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Stockfish is distributed in the hope that it will be useful,
+  Maskfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -60,12 +61,12 @@
 // Enforce minimum GCC version
     #if defined(__GNUC__) && !defined(__clang__) \
       && (__GNUC__ < 9 || (__GNUC__ == 9 && __GNUC_MINOR__ < 3))
-        #error "Pikafish requires GCC 9.3 or later for correct compilation"
+        #error "Maskfish requires GCC 9.3 or later for correct compilation"
     #endif
 
     // Enforce minimum Clang version
     #if defined(__clang__) && (__clang_major__ < 10)
-        #error "Pikafish requires Clang 10.0 or later for correct compilation"
+        #error "Maskfish requires Clang 10.0 or later for correct compilation"
     #endif
 
     #define ASSERT_ALIGNED(ptr, alignment) assert(reinterpret_cast<uintptr_t>(ptr) % alignment == 0)
@@ -104,7 +105,7 @@ using __uint128_t = std::_Unsigned128;
         #define pdep(b, m) 0
     #endif
 
-namespace Stockfish {
+namespace Maskfish {
 
     #ifdef USE_POPCNT
 constexpr bool HasPopCnt = true;
@@ -420,7 +421,7 @@ struct is_all_same {
 template<typename... Ts>
 constexpr auto is_all_same_v = is_all_same<Ts...>::value;
 
-}  // namespace Stockfish
+}  // namespace Maskfish
 
 #endif  // #ifndef TYPES_H_INCLUDED
 

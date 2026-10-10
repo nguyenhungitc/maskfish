@@ -1,3 +1,5 @@
+Contributors to the training data of the Pikafish project (upstream of Maskfish).
+
 1. Contributors for training data generation with >10,000,000 positions generated, as of 2023-02-16.
 Thank you!
 

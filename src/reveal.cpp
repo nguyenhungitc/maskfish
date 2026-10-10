@@ -1,5 +1,5 @@
 /*
-  Jieqi reveal heuristics.
+  Maskfish: Jieqi reveal heuristics.
 
   Ported (subset) from AB-JChess (https://github.com/lxsgx23/AB-JChess),
   GPL-3.0, by Huorongrong and Laoxu (Kouza).
@@ -19,7 +19,7 @@
 #include "bitboard.h"
 #include "position.h"
 
-namespace Stockfish::Reveal {
+namespace Maskfish::Reveal {
 
 std::int64_t round_divide(std::int64_t numerator, std::int64_t denominator) {
     assert(denominator > 0);
@@ -159,4 +159,4 @@ Window child_window(Value alpha, Value beta, int bonus) {
     return {Value(-rawBeta), Value(-rawAlpha)};
 }
 
-}  // namespace Stockfish::Reveal
+}  // namespace Maskfish::Reveal

@@ -1,12 +1,13 @@
-# Pikafish, a UCI chess playing engine derived from Stockfish
+# Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+# Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
 # Copyright (C) 2004-2023 The Pikafish developers (see AUTHORS file)
 #
-# Pikafish is free software: you can redistribute it and/or modify
+# Maskfish is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# Pikafish is distributed in the hope that it will be useful,
+# Maskfish is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
@@ -39,9 +40,9 @@ endif
 
 ### Executable name
 ifeq ($(target_windows),yes)
-	EXE = pikafish.exe
+	EXE = maskfish.exe
 else
-	EXE = pikafish
+	EXE = maskfish
 endif
 
 ### Installation dir definitions
@@ -964,7 +965,7 @@ endif
 
 help:
 	@echo "" && \
-	echo "To compile pikafish, type: " && \
+	echo "To compile maskfish, type: " && \
 	echo "" && \
 	echo "make -j target [ARCH=arch] [COMP=compiler] [COMPCXX=cxx]" && \
 	echo "" && \
@@ -973,7 +974,7 @@ help:
 	echo "help                    > Display architecture details" && \
 	echo "profile-build           > standard build with profile-guided optimization" && \
 	echo "build                   > skip profile-guided optimization" && \
-	echo "net                     > Download the default nnue nets" && \
+	echo "net                     > Check for the default nnue net (maskfish.nnue)" && \
 	echo "strip                   > Strip executable" && \
 	echo "install                 > Install executable" && \
 	echo "clean                   > Clean up" && \
@@ -1084,16 +1085,16 @@ clean: objclean profileclean
 
 # clean binaries and objects
 objclean:
-	@rm -f pikafish pikafish.exe $(shell find . -name '*.o')
+	@rm -f maskfish maskfish.exe $(shell find . -name '*.o')
 
 # clean auxiliary profiling files
 profileclean:
 	@rm -rf profdir
 	@rm -f bench.txt $(shell find . -name '*.gcda' -o -name '*.gcno') *.s PGOBENCH.out
-	@rm -f pikafish.profdata *.profraw
-	@rm -f pikafish.*args*
-	@rm -f pikafish.*lt*
-	@rm -f pikafish.res
+	@rm -f maskfish.profdata *.profraw
+	@rm -f maskfish.*args*
+	@rm -f maskfish.*lt*
+	@rm -f maskfish.res
 	@rm -f ./-lstdc++.res
 
 # evaluation network (nnue)
@@ -1198,9 +1199,9 @@ clang-profile-make:
 	all
 
 clang-profile-use:
-	$(XCRUN) $(LLVM_PROFDATA) merge -output=pikafish.profdata *.profraw
+	$(XCRUN) $(LLVM_PROFDATA) merge -output=maskfish.profdata *.profraw
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-use=pikafish.profdata' \
+	EXTRACXXFLAGS='-fprofile-use=maskfish.profdata' \
 	EXTRALDFLAGS='-fprofile-use ' \
 	all
 
@@ -1226,9 +1227,9 @@ icx-profile-make:
 	all
 
 icx-profile-use:
-	$(XCRUN) $(LLVM_PROFDATA) merge -output=stockfish.profdata *.profraw
+	$(XCRUN) $(LLVM_PROFDATA) merge -output=maskfish.profdata *.profraw
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-instr-use=stockfish.profdata' \
+	EXTRACXXFLAGS='-fprofile-instr-use=maskfish.profdata' \
 	EXTRALDFLAGS='-fprofile-use ' \
 	all
 

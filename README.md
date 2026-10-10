@@ -1,10 +1,14 @@
+# Maskfish
+
+Maskfish is a free and strong UCI engine for **Jieqi**.
+
 ## Overview
 
-This project adapts Pikafish, a free UCI xiangqi engine derived
+Maskfish adapts Pikafish, a free UCI xiangqi engine derived
 from Stockfish, to **Jieqi**: a xiangqi variant in which all
 pieces except the kings start face down and are revealed when they first move.
 
-The project shares the search framework, NNUE architecture and UCI interface of
+Maskfish shares the search framework, NNUE architecture and UCI interface of
 Pikafish, and adds:
 
 * a board representation for hidden ("dark") pieces and for the pool of pieces
@@ -16,14 +20,14 @@ Pikafish, and adds:
 * extensions of the FEN and UCI move notation to describe hidden pieces and
   reveals (see [UCI protocol](#uci-protocol)).
 
-Like Pikafish, this engine **does not include a graphical user interface**. It
+Like Pikafish, Maskfish **does not include a graphical user interface**. It
 needs a GUI or another program that knows the Jieqi rules and the notation
 described below, and that tells the engine which piece was revealed after each
 reveal.
 
 > [!IMPORTANT]
-> This engine needs a **Jieqi network**. The default xiangqi network published
-> at `master-net` is **not compatible** (it uses a different feature set), see
+> Maskfish needs a **Jieqi network**. Xiangqi networks (such as Pikafish's
+> `master-net`) are **not compatible** (they use a different feature set), see
 > [Network](#network).
 
 ## Rules implemented
@@ -135,7 +139,7 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 
 The bonus is in internal score units and clamped to -192..192. Setting all
 `RevealQuiet*` options to 0 disables it. The defaults are those of AB-JChess
-and have not been re-tuned for this engine's networks; both features should be
+and have not been re-tuned for Maskfish's networks; both features should be
 validated with SPRT tests against a version where they are disabled.
 
 The engine also has boolean options for search ideas under test, all off by
@@ -161,19 +165,18 @@ trainer ([nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch)).
 
 ## Network
 
-The network file is set with the `EvalFile` option (default `pikafish.nnue`,
+The network file is set with the `EvalFile` option (default `maskfish.nnue`,
 looked up next to the binary and in the working directory).
 
-This engine uses its own feature set (`HalfKAv2_hm` with dark-piece and pool
+Maskfish uses its own feature set (`HalfKAv2_hm` with dark-piece and pool
 features, feature hash `0x0d17b100`). Networks trained for Pikafish master
 (xiangqi), including the one published as `master-net`, use a different feature
 set and are rejected when loaded; the engine then prints an error and exits at
-the first `go`. The error message still points to the `master-net` download;
-it does not mean that this network would work.
+the first `go`.
 
 ### Training a network
 
-The trainer for this engine's network is a separate repository,
+The trainer for Maskfish's network is a separate repository,
 [nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch): a PyTorch trainer (self-play data generation,
 training, export, and a bit-exact check against the engine). See its README.
 
@@ -188,11 +191,9 @@ make -j build
 
 Run `make help` for the list of targets and architectures.
 
-Every build target first runs `make net`, which downloads the xiangqi
-`master-net` network into `src/pikafish.nnue` **if that file does not exist**.
-That network is not compatible with this engine (see [Network](#network)), so
-put a Jieqi network at `src/pikafish.nnue` before building, or point the
-`EvalFile` option to one at run time.
+Every build target first runs `make net`, which only checks whether
+`src/maskfish.nnue` exists (nothing is downloaded). Put a Jieqi network at
+`src/maskfish.nnue`, or point the `EvalFile` option to one at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network.
@@ -234,8 +235,8 @@ network with the current layer stacks.
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or
-evaluation should be validated by testing against the current version of this
-project, as for Pikafish.
+evaluation should be validated by testing against the current version of
+Maskfish.
 
 Useful checks when changing Jieqi-specific code:
 
@@ -249,7 +250,7 @@ Useful checks when changing Jieqi-specific code:
 
 ## Terms of use
 
-Pikafish is free and distributed under the
+Maskfish is free and distributed under the
 [**GNU General Public License version 3**](./Copying.txt) (GPL v3). Essentially,
 this means you are free to do almost exactly what you want with the program,
 including distributing it among your friends, making it available for download
@@ -257,7 +258,7 @@ from your website, selling it (either by itself or as part of some bigger
 software package), or using it as the starting point for a software project of
 your own.
 
-The only real limitation is that whenever you distribute Pikafish in some way,
+The only real limitation is that whenever you distribute Maskfish in some way,
 you MUST always include the license and the full source code (or a pointer to
 where the source code can be found) to generate the exact binary you are
 distributing. If you make any changes to the source code, these changes must
@@ -270,7 +271,7 @@ chance-node improvements are ported from [AB-JChess](https://github.com/lxsgx23/
 (GPL-3.0).
 
 
-This project is based on the `jieqi` branch of
+Maskfish is based on the `jieqi` branch of
 [Pikafish](https://github.com/official-pikafish/Pikafish), which is derived from
 [Stockfish](https://github.com/official-stockfish/Stockfish). Pikafish networks
 are trained on
