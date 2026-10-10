@@ -18,7 +18,9 @@ error()
 trap 'error ${LINENO}' ERR
 
 # obtain
-eval "$WINE_PATH ./maskfish bench" > "$STDOUT_FILE" 2> "$STDERR_FILE" || error ${LINENO}
+EXE=${EXE:-./maskfish}
+RUN_PREFIX=${RUN_PREFIX:-$WINE_PATH}
+eval "$RUN_PREFIX $EXE bench" > "$STDOUT_FILE" 2> "$STDERR_FILE" || error ${LINENO}
 signature=$(grep "Nodes searched  : " "$STDERR_FILE" | awk '{print $4}')
 
 rm -f "$STDOUT_FILE" "$STDERR_FILE"

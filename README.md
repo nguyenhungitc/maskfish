@@ -197,7 +197,10 @@ Every build target first runs `make net`, which only checks whether
 `src/maskfish.nnue`, or point the `EvalFile` option to one at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
-a compatible network.
+a compatible network. When the binary cannot run natively (cross compilation),
+`RUN_PREFIX` gives the command used to run it, e.g.
+`make profile-build COMP=mingw RUN_PREFIX=wine` (`WINE_PATH` is still accepted
+but deprecated).
 
 ### Experimental network architecture
 

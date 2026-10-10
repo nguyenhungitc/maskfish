@@ -26,6 +26,17 @@ ifeq ($(KERNEL),Linux)
 	OS := $(shell uname -o)
 endif
 
+### Command prefix used to run the freshly built binary (e.g. wine, qemu, sde).
+### WINE_PATH is still accepted for backwards compatibility.
+ifneq ($(strip $(WINE_PATH)),)
+	ifeq ($(strip $(RUN_PREFIX)),)
+		RUN_PREFIX := $(WINE_PATH)
+	else ifneq ($(strip $(RUN_PREFIX)),$(strip $(WINE_PATH)))
+$(warning *** Both RUN_PREFIX and WINE_PATH are set; ignoring WINE_PATH. ***)
+	endif
+$(warning *** WINE_PATH is deprecated; use RUN_PREFIX instead. ***)
+endif
+
 ### Target Windows OS
 ifeq ($(OS),Windows_NT)
 	ifneq ($(COMP),ndk)
@@ -33,8 +44,8 @@ ifeq ($(OS),Windows_NT)
 	endif
 else ifeq ($(COMP),mingw)
 	target_windows = yes
-	ifeq ($(WINE_PATH),)
-		WINE_PATH := $(shell which wine)
+	ifeq ($(RUN_PREFIX),)
+		RUN_PREFIX := $(shell which wine)
 	endif
 endif
 
@@ -50,7 +61,7 @@ PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
 
 ### Built-in benchmark for pgo-builds
-PGOBENCH = printf "speedtest\nbench\n" | $(WINE_PATH) ./$(EXE)
+PGOBENCH = printf "speedtest\nbench\n" | $(RUN_PREFIX) ./$(EXE)
 
 ### Source and object files
 SRCS = $(shell find . -name '*.cpp') $(shell find . -name '*.S')
