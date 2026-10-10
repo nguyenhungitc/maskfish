@@ -1,4 +1,5 @@
-# Maskfish
+<h1 align="center">Maskfish</h1>
+<p align="center"><em>Luck is a skill too.</em></p>
 
 Maskfish is a free and strong UCI engine for **Jieqi**.
 
