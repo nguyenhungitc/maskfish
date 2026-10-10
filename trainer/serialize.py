@@ -17,6 +17,10 @@ File layout (src/nnue/network.cpp, nnue_feature_transformer.h, layers/):
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
       fc1: int32 bias[32]  (scale 64*127), int8 weight[32][32]   (30 used)
       fc2: int32 bias[1]   (scale 600*16), int8 weight[1][32]    (scale 600*16/127)
+    or, layer stacks 2 (architectures "*-l2", make layers=2):
+      fc0: int32 bias[32], int8 weight[32][L1]
+      fc1: int32 bias[32], int8 weight[32][64]
+      fc2: int32 bias[1],  int8 weight[1][128]   (same scales)
 
 L1 = 2048, or 1024 for the threat architectures. (7560 is 30240 for "att".)
 
@@ -48,9 +52,19 @@ MAX_FT_BIAS = 16383           # keeps the engine accumulators from wrapping arou
 LEB128_MAGIC = b"COMPRESSED_LEB128"
 
 L2, L3 = 15, 32
+L2_V2 = 32
 
 
-def arch_hash(l1: int | None = None) -> int:
+def stack_dims(layers: int | None = None) -> dict:
+    """Sizes of the layer stacks: fc0 outputs, activated fc0 outputs, fc1
+    inputs (used, and in the file), fc2 inputs."""
+    if (F.LAYERS if layers is None else layers) == 2:
+        return {"fc0_out": L2_V2, "act0": L2_V2, "fc1_in": 2 * L2_V2, "fc1_file": 2 * L2_V2,
+                "fc2_in": 2 * L2_V2 + 2 * L3}
+    return {"fc0_out": L2 + 1, "act0": L2, "fc1_in": 2 * L2, "fc1_file": 32, "fc2_in": L3}
+
+
+def arch_hash(l1: int | None = None, layers: int | None = None) -> int:
     """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
     (0x63336B4A for L1 = 2048, 0x63336A4A for 1024)."""
     m = 0xFFFFFFFF
@@ -64,7 +78,7 @@ def arch_hash(l1: int | None = None) -> int:
         return (0x538D24C7 + prev) & m
 
     h = 0xEC42E90D ^ (l1 * 2)
-    h = crelu(affine(h, L2 + 1))
+    h = crelu(affine(h, stack_dims(layers)["fc0_out"]))
     h = crelu(affine(h, L3))
     return affine(h, 1)
 
@@ -191,12 +205,13 @@ def quantize(model) -> dict:
             q["thr_psqt"] = np.round(tw[:, L1:].cpu().double().numpy()
                                      * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
 
+        d = stack_dims()
         st = model.stacks
-        l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, L2 + 1, L1)
-        l1b = st.l1.bias.detach().cpu().double().numpy().reshape(STACKS, L2 + 1)
-        l2w = st.l2.weight.detach().cpu().double().numpy().reshape(STACKS, L3, 2 * L2)
+        l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"], L1)
+        l1b = st.l1.bias.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"])
+        l2w = st.l2.weight.detach().cpu().double().numpy().reshape(STACKS, L3, d["fc1_in"])
         l2b = st.l2.bias.detach().cpu().double().numpy().reshape(STACKS, L3)
-        ow = st.output.weight.detach().cpu().double().numpy().reshape(STACKS, L3)
+        ow = st.output.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc2_in"])
         ob = st.output.bias.detach().cpu().double().numpy().reshape(STACKS)
 
     hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
@@ -204,9 +219,9 @@ def quantize(model) -> dict:
     q["fc0_weight"] = np.round(np.clip(l1w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
                                * HIDDEN_WEIGHT_SCALE).astype(np.int64)
     q["fc1_bias"] = np.round(l2b * hb).astype(np.int64)
-    fc1 = np.zeros((STACKS, L3, FC1_PADDED_IN), dtype=np.int64)
-    fc1[:, :, :2 * L2] = np.round(np.clip(l2w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-                                  * HIDDEN_WEIGHT_SCALE)
+    fc1 = np.zeros((STACKS, L3, d["fc1_file"]), dtype=np.int64)
+    fc1[:, :, :d["fc1_in"]] = np.round(np.clip(l2w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                                       * HIDDEN_WEIGHT_SCALE)
     q["fc1_weight"] = fc1
     q["fc2_bias"] = np.round(ob * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
     q["fc2_weight"] = np.round(np.clip(ow, -MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
@@ -284,16 +299,17 @@ def read_nnue(path: str) -> dict:
 
     keys = ("fc0_bias", "fc0_weight", "fc1_bias", "fc1_weight", "fc2_bias", "fc2_weight")
     parts = {k: [] for k in keys}
+    d = stack_dims()
     for _ in range(STACKS):
         (ah,) = struct.unpack("<I", f.read(4))
         if ah != arch_hash():
             raise ValueError("architecture hash mismatch")
-        parts["fc0_bias"].append(arr("<i4", L2 + 1))
-        parts["fc0_weight"].append(arr(np.int8, (L2 + 1) * L1).reshape(L2 + 1, L1))
+        parts["fc0_bias"].append(arr("<i4", d["fc0_out"]))
+        parts["fc0_weight"].append(arr(np.int8, d["fc0_out"] * L1).reshape(d["fc0_out"], L1))
         parts["fc1_bias"].append(arr("<i4", L3))
-        parts["fc1_weight"].append(arr(np.int8, L3 * FC1_PADDED_IN).reshape(L3, FC1_PADDED_IN))
+        parts["fc1_weight"].append(arr(np.int8, L3 * d["fc1_file"]).reshape(L3, d["fc1_file"]))
         parts["fc2_bias"].append(arr("<i4", 1)[0])
-        parts["fc2_weight"].append(arr(np.int8, L3))
+        parts["fc2_weight"].append(arr(np.int8, d["fc2_in"]))
     for k in keys:
         q[k] = np.array(parts[k])
     return q
@@ -301,9 +317,9 @@ def read_nnue(path: str) -> dict:
 
 def _arch_network_hashes() -> dict:
     out = {}
-    for name, (_, h, _, threats) in F.ARCHS.items():
+    for name, (_, h, _, threats, layers) in F.ARCHS.items():
         l1 = 1024 if threats else 2048
-        out[name] = (h ^ (F.THREAT_HASH if threats else 0) ^ (l1 * 2)) ^ arch_hash(l1)
+        out[name] = (h ^ (F.THREAT_HASH if threats else 0) ^ (l1 * 2)) ^ arch_hash(l1, layers)
     return out
 
 
@@ -336,9 +352,11 @@ def upgrade(q: dict) -> tuple[int, int]:
     return clamped
 
 
-def load_into_model(q: dict, model):
+def load_into_model(q: dict, model, ft_only: bool = False):
     """Dequantize a network into a model (to continue training from it). The
-    training-only factorized parts, if any, are set to zero."""
+    training-only factorized parts, if any, are set to zero. ft_only: only the
+    feature transformer (from a network with the same input features but the
+    other layer stacks); the layer stacks of the model are kept."""
     import torch
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE)
@@ -353,17 +371,20 @@ def load_into_model(q: dict, model):
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
             model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+        for name in ("ft_ps", "ft_kb"):
+            if getattr(model, name, None) is not None:
+                getattr(model, name).weight.zero_()
+        if ft_only:
+            return
         st = model.stacks
         st.l1.weight[:] = torch.tensor(q["fc0_weight"].reshape(-1, L1) / HIDDEN_WEIGHT_SCALE)
         st.l1.bias[:] = torch.tensor(q["fc0_bias"].reshape(-1) / hb)
-        st.l2.weight[:] = torch.tensor(q["fc1_weight"][:, :, :2 * L2].reshape(-1, 2 * L2)
+        n = stack_dims()["fc1_in"]
+        st.l2.weight[:] = torch.tensor(q["fc1_weight"][:, :, :n].reshape(-1, n)
                                        / HIDDEN_WEIGHT_SCALE)
         st.l2.bias[:] = torch.tensor(q["fc1_bias"].reshape(-1) / hb)
         st.output.weight[:] = torch.tensor(q["fc2_weight"] / OUTPUT_WEIGHT_SCALE)
         st.output.bias[:] = torch.tensor(q["fc2_bias"] / (NNUE2SCORE * OUTPUT_SCALE))
-        for name in ("ft_ps", "ft_kb"):
-            if getattr(model, name, None) is not None:
-                getattr(model, name).weight.zero_()
         if getattr(st, "l1_fact", None) is not None:
             st.l1_fact.weight.zero_()
 
@@ -400,16 +421,22 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
         psqt_acc.append(ps[bucket])
     x = np.concatenate(transformed)                  # uint8 in the engine
 
+    def sqr_crelu(v):   # SqrClippedReLU and ClippedReLU, concatenated
+        return np.concatenate([np.minimum(127, (v * v) >> 19), np.clip(v >> 6, 0, 127)])
+
+    d = stack_dims()
     fc0 = q["fc0_bias"][bucket] + q["fc0_weight"][bucket] @ x
-    sqr = np.minimum(127, (fc0[:L2] * fc0[:L2]) >> 19)
-    crelu = np.clip(fc0[:L2] >> 6, 0, 127)
-    h = np.zeros(FC1_PADDED_IN, dtype=np.int64)
-    h[:L2] = sqr
-    h[L2:2 * L2] = crelu
+    h = np.zeros(d["fc1_file"], dtype=np.int64)
+    h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]])
     fc1 = q["fc1_bias"][bucket] + q["fc1_weight"][bucket] @ h
-    h2 = np.clip(fc1 >> 6, 0, 127)
+    if F.LAYERS == 2:
+        h2 = np.concatenate([h, sqr_crelu(fc1)])
+        direct = int(fc0[L2_V2 - 2]) - int(fc0[L2_V2 - 1])
+    else:
+        h2 = np.clip(fc1 >> 6, 0, 127)
+        direct = int(fc0[L2])
     fc2 = int(q["fc2_bias"][bucket] + q["fc2_weight"][bucket] @ h2)
-    fwd = _tdiv(int(fc0[L2]) * (600 * 16), 127 * 64)
+    fwd = _tdiv(direct * (600 * 16), 127 * 64)
     positional = fc2 + fwd
     psqt = _tdiv(int(psqt_acc[0] - psqt_acc[1]), 2)
     return _tdiv(psqt, 16), _tdiv(positional, 16), bucket

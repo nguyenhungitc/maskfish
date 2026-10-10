@@ -78,6 +78,9 @@ VPATH = $(shell find . -type d | tr '\n' ':')
 #                                                and mid mirror (needs a matching net)
 # threats = yes/no    --- -DJIEQI_NNUE_THREATS --- Experimental network with threat features
 #                                                (L1 1024, needs a matching net)
+# layers = 1/2        --- -DJIEQI_NNUE_LAYERS2 --- Experimental layer stacks (fc0 32 outputs,
+#                                                squared fc1 activations, fc2 fed by all
+#                                                activations; needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -138,6 +141,7 @@ debug = no
 sanitize = none
 nnue = default
 threats = no
+layers = 1
 bits = 64
 prefetch = no
 popcnt = no
@@ -671,6 +675,9 @@ ifeq ($(nnue),att)
 endif
 ifeq ($(threats),yes)
 	CXXFLAGS += -DJIEQI_NNUE_THREATS
+endif
+ifeq ($(layers),2)
+	CXXFLAGS += -DJIEQI_NNUE_LAYERS2
 endif
 
 ### 3.2.1 Floating point

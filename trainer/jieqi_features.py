@@ -25,6 +25,10 @@ Four architectures exist (select with set_arch() before building a model):
   "Threat features" section below). Idea and design from Pikafish/Stockfish
   ("full threats"), adapted to dark pieces.
 
+Each of them also exists with the layer stacks of `make layers=2` (name
+suffix "-l2", e.g. "threats-l2"): same input features (so the same prepared
+data), different layer stacks (see model.py).
+
 If you change the feature set in the engine, change it here too and re-run
 verify.py.
 """
@@ -45,15 +49,18 @@ NUM_PSQT_BUCKETS = 16
 NUM_LAYER_STACKS = 16
 
 ARCHS = {
-    # name: (attack buckets, feature hash, mid mirror, threat features)
-    "default": (1, 0x0D17B100, False, False),
-    "att": (4, 0x7A17B104, True, False),
-    "threats": (1, 0x0D17B100, False, True),
-    "att-threats": (4, 0x7A17B104, True, True),
+    # name: (attack buckets, feature hash, mid mirror, threat features, layer stacks)
+    "default": (1, 0x0D17B100, False, False, 1),
+    "att": (4, 0x7A17B104, True, False, 1),
+    "threats": (1, 0x0D17B100, False, True, 1),
+    "att-threats": (4, 0x7A17B104, True, True, 1),
 }
+LAYERS2_SUFFIX = "-l2"           # same features, layer stacks of `make layers=2`
+for _name, _a in list(ARCHS.items()):
+    ARCHS[_name + LAYERS2_SUFFIX] = _a[:4] + (2,)
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -61,14 +68,26 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, NUM_FEATURES, PAD_INDEX, L1
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_FEATURES
+    global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[name]
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
+
+
+def feature_arch(name: str) -> str:
+    """Architecture of the input features (what prepared data is made for):
+    the name without the layer stacks suffix."""
+    return name[:-len(LAYERS2_SUFFIX)] if name.endswith(LAYERS2_SUFFIX) else name
+
+
+def with_layers(name: str, layers: int) -> str:
+    """Architecture with these input features and these layer stacks."""
+    return feature_arch(name) + (LAYERS2_SUFFIX if layers == 2 else "")
 
 # Engine piece codes (src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)

@@ -625,7 +625,7 @@ trúc; không chuyển được mạng `default` (2048 đầu ra) sang `threats`
 | | `default` | `threats` |
 | --- | --- | --- |
 | Tốc độ engine (bench, 1 luồng, AVX2) | 100 % | khoảng 65–70 % |
-| Bộ nhớ engine cho mạng | khoảng 32 MB | khoảng 120 MB (trọng số đe dọa int8 ≈ 96 MB) |
+| Bộ nhớ engine cho mạng | khoảng 15 MB | khoảng 105 MB (trọng số đe dọa int8 ≈ 96 MB) |
 | File `.nnue` (nén zstd) | khoảng 8 MB | tới khoảng 60 MB khi trọng số đã train |
 | Dữ liệu đã chuẩn bị | khoảng 260 byte/thế cờ | khoảng 350 byte/thế cờ |
 | `prepare_data.py` | khoảng 15 000 dòng/giây mỗi nhân | khoảng 6 000 dòng/giây mỗi nhân |
@@ -637,6 +637,52 @@ thắng với `--nodes`):
 
 ```
 python match.py --engine-a ../src/pikafish-thr --net-a runs/thr1/epoch_40.nnue \
+    --engine-b ../src/pikafish --net-b nets/genN.nnue \
+    --movetime 100 --workers 15 --sprt 0 5
+```
+
+### 7.4. Layer stack kiểu mới (`layers=2`)
+
+Theo "Update nnue-architecture" của Pikafish (tháng 7/2026). So với layer
+stack hiện tại (`fc0`: L1 → 15 + 1, `fc1`: 30 → 32, `fc2`: 32 → 1):
+
+- `fc0` có 32 đầu ra, cả 32 đều qua hai hàm kích hoạt (bình phương và cắt);
+- `fc1` (64 → 32) cũng có thêm hàm kích hoạt bình phương;
+- `fc2` nhận cả 128 giá trị kích hoạt (của `fc0` và `fc1`), không chỉ của `fc1`;
+- số hạng cộng thẳng vào kết quả là hiệu hai đầu ra cuối của `fc0`
+  (`fc0[30] − fc0[31]`) thay vì đầu ra riêng thứ 16.
+
+Lượng tử hóa giữ như layer stack hiện tại (upstream đổi thang lượng tử cùng lúc
+để train có lượng tử hóa — QAT — mà trainer này không làm).
+
+Layer stack mới đi được với mọi bộ đặc trưng: tên kiến trúc thêm hậu tố `-l2`
+(`default-l2`, `att-l2`, `threats-l2`, `att-threats-l2`). Đặc trưng đầu vào
+không đổi nên **dữ liệu đã chuẩn bị dùng chung được**.
+
+```
+cd src
+make clean && make -j build ARCH=x86-64-avx2 layers=2 && mv pikafish pikafish-l2
+make clean && make -j build ARCH=x86-64-avx2 layers=2 threats=yes && mv pikafish pikafish-thr-l2
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/pikafish-l2 --arch default-l2
+python train.py data/train --val data/val --out runs/l2 --layers 2 \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python verify.py --engine ../src/pikafish-l2 --net runs/l2/epoch_40.nnue \
+    --checkpoint runs/l2/epoch_40.pt
+```
+
+`--init-net` nhận mạng `-l2` cùng bộ đặc trưng, hoặc mạng layer stack cũ cùng
+bộ đặc trưng: khi đó chỉ lấy feature transformer (phần lớn nhất, train lâu
+nhất), còn layer stack train lại từ đầu. `--resume` phải cùng kiến trúc.
+
+Đo nhanh trên máy này (dữ liệu nhỏ, 166 000 thế cờ tự chơi, CPU, 15 epoch,
+nên chỉ có tính chất tham khảo): val loss 0,00188 so với 0,00200 của layer
+stack hiện tại; engine chậm hơn khoảng 12 % (`default`) và 8 % (`threats`)
+vì `fc0` gấp đôi. Hãy so bằng `--movetime`:
+
+```
+python match.py --engine-a ../src/pikafish-l2 --net-a runs/l2/epoch_40.nnue \
     --engine-b ../src/pikafish --net-b nets/genN.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
@@ -690,7 +736,7 @@ Tốc độ train phụ thuộc GPU; hãy chạy thử một epoch nhỏ (`--epo
 | Hiện tượng | Nguyên nhân / cách xử lý |
 | --- | --- |
 | `verify.py` báo `MISMATCH` | Engine và trainer không cùng kiến trúc. Build lại engine từ cùng commit với trainer; với `att` / `threats` nhớ `make clean` và `--arch` tương ứng |
-| Engine báo `network file ... was not loaded` | Sai kiến trúc (mạng `att` / `threats` trên engine thường hoặc ngược lại; `threats=yes` và `nnue=att` phải khớp với kiến trúc của mạng), hoặc file không phải `.nnue` nén zstd do trainer xuất |
+| Engine báo `network file ... was not loaded` | Sai kiến trúc (mạng `att` / `threats` / `-l2` trên engine thường hoặc ngược lại; `threats=yes`, `nnue=att` và `layers=2` phải khớp với kiến trúc của mạng), hoặc file không phải `.nnue` nén zstd do trainer xuất |
 | `no threat data (prepare the data again ...)` | Dữ liệu được chuẩn bị bằng phiên bản cũ của `prepare_data.py`; chạy lại với `--arch threats` |
 | Engine báo `network file ... was not loaded` với một mạng train trước khi engine dùng trọng số 8 bit | File có phiên bản cũ (trọng số HalfKA 16 bit): chuyển bằng `serialize.py --upgrade`, xem [mục 11.1](#111-đổi-định-dạng-file-trọng-số-8-bit) |
 | `incompatible network for arch ...` | Truyền mạng sai kiến trúc cho `--init-net` / `serialize.py`; thông báo cho biết kiến trúc thật của file |

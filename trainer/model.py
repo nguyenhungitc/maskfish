@@ -5,6 +5,9 @@
     layer stack (one of 16, chosen by piece count):
         fc0: L1 -> 16   (output 15 is added directly to the result)
         [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
+    or, for the "*-l2" architectures (make layers=2), see LayerStacks:
+        fc0: L1 -> 32 -> [sqr_crelu, crelu] -> fc1: 64 -> 32 -> [sqr_crelu, crelu]
+        fc2: all 128 activations -> 1, plus fc0[30] - fc0[31]
 
 L1 = 2048, or 1024 for the threat architectures, which also have a second
 feature transformer for the 92711 threat features (ft_thr, same outputs and
@@ -41,7 +44,8 @@ from torch import nn
 import jieqi_features as F
 
 L1 = 2048            # feature transformer outputs per perspective (F.L1 for the current arch)
-L2 = 15
+L2 = 15              # layer stacks 1: activated fc0 outputs (+1 direct term)
+L2_V2 = 32           # layer stacks 2 (make layers=2): fc0 outputs
 L3 = 32
 NNUE2SCORE = 600.0   # network unit -> internal score units
 
@@ -61,15 +65,31 @@ MAX_FT_BIAS = 16383.0 / FT_SCALE
 
 
 class LayerStacks(nn.Module):
-    """All 16 layer stacks, evaluated for the bucket of each sample."""
+    """All 16 layer stacks, evaluated for the bucket of each sample.
+
+    Layer stacks 1 (default):
+        fc0: L1 -> 16 (output 15 is added directly to the result)
+        [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
+    Layer stacks 2 (make layers=2, architectures "*-l2"):
+        fc0: L1 -> 32, a0 = [sqr_crelu(32), crelu(32)]
+        fc1: 64 -> 32, a1 = [sqr_crelu(32), crelu(32)]
+        fc2: [a0, a1] (128) -> 1, plus the direct term fc0[30] - fc0[31]
+    """
 
     def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
         super().__init__()
         self.count = count
         self.in_dim = F.L1
-        self.l1 = nn.Linear(self.in_dim, (L2 + 1) * count)
-        self.l2 = nn.Linear(L2 * 2, L3 * count)
-        self.output = nn.Linear(L3, count)
+        self.layers = F.LAYERS
+        if self.layers == 2:
+            self.fc0_out, self.act0 = L2_V2, L2_V2         # 32 outputs, all activated
+            self.out_in = 2 * L2_V2 + 2 * L3
+        else:
+            self.fc0_out, self.act0 = L2 + 1, L2           # 15 activated + direct term
+            self.out_in = L3
+        self.l1 = nn.Linear(self.in_dim, self.fc0_out * count)
+        self.l2 = nn.Linear(self.act0 * 2, L3 * count)
+        self.output = nn.Linear(self.out_in, count)
         with torch.no_grad():
             self.output.weight.zero_()
             self.output.bias.zero_()
@@ -78,30 +98,43 @@ class LayerStacks(nn.Module):
             self.add_l1_fact()
 
     def add_l1_fact(self):
-        """Shared fc0 component (outputs 0..14 only: output 15 is the direct
-        term added to the result, kept per stack like in AB-JChess), zeroed."""
-        self.l1_fact = nn.Linear(self.in_dim, L2, bias=False)
+        """Shared fc0 component, zeroed. Layer stacks 1: outputs 0..14 only
+        (output 15 is the direct term added to the result, kept per stack like
+        in AB-JChess); layer stacks 2: all the outputs."""
+        self.l1_fact = nn.Linear(self.in_dim, self.act0, bias=False)
         with torch.no_grad():
             self.l1_fact.weight.zero_()
+
+    @staticmethod
+    def _activate(v: torch.Tensor) -> torch.Tensor:
+        """SqrClippedReLU and ClippedReLU of the engine, concatenated."""
+        return torch.clamp(torch.cat([v.pow(2.0) * (127.0 / 128.0), v], dim=1), 0.0, 1.0)
 
     def forward(self, x: torch.Tensor, buckets: torch.Tensor) -> torch.Tensor:
         n = x.shape[0]
         idx = torch.arange(n, device=x.device) * self.count + buckets.long()
 
-        l1 = self.l1(x).reshape(n * self.count, L2 + 1)[idx]
-        l1x, l1out = l1.split(L2, dim=1)
-        if self.l1_fact is not None:
-            l1x = l1x + self.l1_fact(x)
-        # SqrClippedReLU and ClippedReLU of the engine
-        l1x = torch.clamp(torch.cat([l1x.pow(2.0) * (127.0 / 128.0), l1x], dim=1), 0.0, 1.0)
+        l1 = self.l1(x).reshape(n * self.count, self.fc0_out)[idx]
+        if self.layers == 2:
+            if self.l1_fact is not None:
+                l1 = l1 + self.l1_fact(x)
+            a0 = self._activate(l1)
+            l2 = self.l2(a0).reshape(n * self.count, L3)[idx]
+            h = torch.cat([a0, self._activate(l2)], dim=1)
+            direct = l1[:, L2_V2 - 2] - l1[:, L2_V2 - 1]
+        else:
+            l1x, l1out = l1.split(L2, dim=1)
+            if self.l1_fact is not None:
+                l1x = l1x + self.l1_fact(x)
+            a0 = self._activate(l1x)
+            l2 = self.l2(a0).reshape(n * self.count, L3)[idx]
+            h = torch.clamp(l2, 0.0, 1.0)
+            direct = l1out.squeeze(1)
 
-        l2 = self.l2(l1x).reshape(n * self.count, L3)[idx]
-        l2x = torch.clamp(l2, 0.0, 1.0)
-
-        w = self.output.weight[buckets.long()]          # (n, L3)
+        w = self.output.weight[buckets.long()]          # (n, out_in)
         b = self.output.bias[buckets.long()]            # (n,)
-        out = (l2x * w).sum(dim=1) + b
-        return (out + l1out.squeeze(1)).unsqueeze(1)
+        out = (h * w).sum(dim=1) + b
+        return (out + direct).unsqueeze(1)
 
     def clip_weights(self):
         with torch.no_grad():
@@ -109,10 +142,11 @@ class LayerStacks(nn.Module):
                 self.l1.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             else:
                 # Clip the coalesced weights (stack + shared part), as exported
-                w = self.l1.weight.view(self.count, L2 + 1, self.in_dim)
+                w = self.l1.weight.view(self.count, self.fc0_out, self.in_dim)
                 f = self.l1_fact.weight.unsqueeze(0)
-                w[:, :L2] = torch.clamp(w[:, :L2] + f, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT) - f
-                w[:, L2].clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                a = self.act0
+                w[:, :a] = torch.clamp(w[:, :a] + f, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT) - f
+                w[:, a:].clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             self.l2.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             self.output.weight.clamp_(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
 
@@ -223,8 +257,8 @@ class NNUE(nn.Module):
             src, dst = self.stacks, plain.stacks
             l1w = src.l1.weight.detach().cpu().clone()
             if src.l1_fact is not None:
-                v = l1w.view(src.count, L2 + 1, src.in_dim)
-                v[:, :L2] += src.l1_fact.weight.detach().cpu().unsqueeze(0)
+                v = l1w.view(src.count, src.fc0_out, src.in_dim)
+                v[:, :src.act0] += src.l1_fact.weight.detach().cpu().unsqueeze(0)
             dst.l1.weight.copy_(l1w)
             dst.l1.bias.copy_(src.l1.bias.detach().cpu())
             for name in ("l2", "output"):

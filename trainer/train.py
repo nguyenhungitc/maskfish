@@ -6,6 +6,8 @@
 
 Each data argument is a prefix written by prepare_data.py (all its shards are
 used); several prefixes can be given, e.g. the data of several generations.
+The data gives the input features (architecture); --layers 2 trains the
+layer stacks of `make layers=2` on them (architecture "<arch>-l2").
 
 After every epoch: runs/exp1/epoch_N.pt, runs/exp1/last.pt and
 runs/exp1/epoch_N.nnue (ready for the engine's EvalFile option). With
@@ -48,7 +50,7 @@ from model import NNUE, NNUE2SCORE
 def data_arch(prefix: str) -> str:
     try:
         with open(prefix + ".arch") as f:
-            return f.read().strip()
+            return F.feature_arch(f.read().strip())
     except FileNotFoundError:
         return "default"
 
@@ -183,6 +185,8 @@ def main():
     ap.add_argument("--scaling", type=float, default=361.0)
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
+    ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
+                    help="layer stacks: 1 (default) or 2 (make layers=2, architecture *-l2)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--seed", type=int, default=42)
@@ -213,9 +217,21 @@ def main():
     val = Data(args.val) if args.val else None
     if val and val.arch != train.arch:
         raise SystemExit(f"train data is arch '{train.arch}' but validation data is '{val.arch}'")
-    F.set_arch(train.arch)
-    if args.init_net and S.detect_arch(args.init_net) != F.ARCH:
-        raise SystemExit(f"--init-net is arch '{S.detect_arch(args.init_net)}', data is '{F.ARCH}'")
+    F.set_arch(F.with_layers(train.arch, args.layers))
+    init_q, init_ft_only = None, False
+    if args.init_net:
+        # A network with the other layer stacks gives only its feature transformer
+        init_arch = S.detect_arch(args.init_net)
+        if F.feature_arch(init_arch) != train.arch:
+            raise SystemExit(f"--init-net is arch '{init_arch}', training '{F.ARCH}' "
+                             f"(data '{train.arch}', --layers {args.layers})")
+        init_ft_only = init_arch != F.ARCH
+        F.set_arch(init_arch)
+        init_q = S.read_nnue(args.init_net)
+        F.set_arch(F.with_layers(train.arch, args.layers))
+        if init_ft_only:
+            print(f"--init-net is arch '{init_arch}': only its feature transformer is used",
+                  flush=True)
     print(f"arch {F.ARCH}, train: {train.n} positions" + (f", val: {val.n}" if val else ""),
           flush=True)
 
@@ -223,14 +239,15 @@ def main():
     if args.resume:
         ck = torch.load(args.resume, map_location="cpu")
         if ck.get("arch", "default") != F.ARCH:
-            raise SystemExit(f"checkpoint is arch '{ck.get('arch', 'default')}', data is '{F.ARCH}'")
+            raise SystemExit(f"checkpoint is arch '{ck.get('arch', 'default')}', training "
+                             f"'{F.ARCH}' (data '{train.arch}', --layers {args.layers})")
         # keep the factorization of the run being resumed
         model = NNUE.from_state_dict(ck["model"])
     else:
         model = NNUE(factorized=not args.no_factorize, l1_fact=not args.no_l1_fact,
                      kb_factor=args.factorize_kb)
-        if args.init_net:
-            S.load_into_model(S.read_nnue(args.init_net), model)
+        if init_q is not None:
+            S.load_into_model(init_q, model, ft_only=init_ft_only)
     print(f"factorized inputs: {model.factorized} (king bucket rows: {model.ft_kb is not None}), "
           f"shared fc0: {model.has_l1_fact}", flush=True)
     model.to(device)

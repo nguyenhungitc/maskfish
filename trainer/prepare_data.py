@@ -153,7 +153,7 @@ def main():
             shard += 1
 
     with open(args.out + ".arch", "w") as f:
-        f.write(args.arch + "\n")
+        f.write(F.feature_arch(args.arch) + "\n")   # the layer stacks do not matter
     print(f"{total_out} positions ({total_in - total_out} skipped) in {shard} shard(s) -> {args.out}-*.npy")
 
 

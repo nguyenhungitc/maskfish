@@ -208,6 +208,15 @@ instead of 2048. The engine is about a third slower and needs about 90 MB
 more memory for the network. Train such a network with `--arch threats` (or
 `att-threats`); see section 7.3 of `trainer/README.md`.
 
+`make -j build layers=2` (combinable with the options above) uses the layer
+stacks of Pikafish's "Update nnue-architecture": the first layer has 32
+outputs, all of them activated, the second layer gets a squared activation
+too, the last layer is fed by all the activations of both, and the direct
+term is the difference of the last two outputs of the first layer. The engine
+is about 10% slower. Train such a network with `train.py --layers 2` (section
+7.4 of `trainer/README.md`); it can start from the feature transformer of a
+network with the current layer stacks.
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or
