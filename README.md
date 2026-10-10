@@ -158,6 +158,7 @@ that fail should be removed rather than kept as dead options.
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.
 `go perft <depth>` counts leaf nodes; a move of a dark piece is expanded into
 one child per kind of piece left in the mover's pool (each kind counted once).
+It does not need a network.
 `evalraw` prints the raw network output (PSQT and layer parts, in internal
 units) and the layer stack used. The option `RawScore` makes `info ... score cp`
 report internal units instead of normalized centipawns. Both are used by the

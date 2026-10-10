@@ -2,7 +2,8 @@
 # Verify perft numbers of the Jieqi move generator.
 #
 # Run from the src directory, after building: ../tests/perft.sh
-# Like 'go', 'go perft' needs a compatible network (EvalFile).
+# 'go perft' does not need a network. In a debug build (make build debug=yes)
+# it also checks gives_check() for every move of a dark piece.
 #
 # A move of a dark piece is expanded into one child per kind of piece left in
 # the mover's pool (see src/perft.h). There is no independent reference for

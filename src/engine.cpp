@@ -240,9 +240,9 @@ Engine::Engine(std::optional<std::string> path) :
     resize_threads();
 }
 
+// Move generation does not need the network: perft also works without one
+// (no Jieqi network is distributed with the engine, see tests/perft.sh)
 std::uint64_t Engine::perft(const std::string& fen, Depth depth) {
-    verify_networks();
-
     return Benchmark::perft(fen, depth);
 }
 
