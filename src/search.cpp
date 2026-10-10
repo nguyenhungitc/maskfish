@@ -1525,8 +1525,8 @@ moves_loop:  // When in check, search starts here
             // reduction is negative, we allow this move a limited search extension
             // beyond the first move depth. To avoid search explosion, extensions
             // are not allowed deep, relative to rootDepth, in the search tree.
-            const int maxExtension =
-              ss->ply < 2 * thisThread->rootDepth ? !allNode + (PvNode && !bestMove) : 0;
+            const bool notTooDeep   = ss->ply < 2 * thisThread->rootDepth;
+            const int  maxExtension = notTooDeep ? !allNode + (PvNode && !bestMove) : 0;
             Depth d = std::max(1, newDepth + std::min(-r / 1090, maxExtension))
                     + (ss - 1)->isPvNode;
 
@@ -1541,7 +1541,12 @@ moves_loop:  // When in check, search starts here
             {
                 // Adjust full-depth search based on LMR results - if the result was
                 // good enough search deeper, if it was bad enough search shallower.
-                const bool doDeeperSearch    = value > (bestValue + 52 + 2 * newDepth);
+                // Searching deeper gives the child the depth of this node: like the
+                // extensions above, not deep in the tree, otherwise chains of such
+                // re-searches (one per ply, frequent with the noisy values of the
+                // chance nodes) do not reduce the depth at all.
+                const bool doDeeperSearch =
+                  notTooDeep && value > (bestValue + 52 + 2 * newDepth);
                 const bool doShallowerSearch = value < bestValue + 9;
 
                 newDepth += doDeeperSearch - doShallowerSearch;
