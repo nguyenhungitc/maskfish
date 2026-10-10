@@ -339,6 +339,7 @@ bool Search::Worker::iterative_deepening() {
     stopEarly = bool(options["StopEarly"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
     standPatNoTT = bool(options["StandPatNoTT"]);
+    bigPawnHistory = bool(options["BigPawnHistory"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1059,7 +1060,7 @@ Value Search::Worker::search(
         int bonus = std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus * 1269 / 1024;
         if (type_of(pos.piece_on(prevSq)) != PAWN)
-            thisThread->pawnHistory[pawn_structure_index(pos)][pos.piece_on(prevSq)][prevSq]
+            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
               << bonus * 1267 / 1024;
     }
 
@@ -1228,7 +1229,8 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &thisThread->mainHistory, &thisThread->lowPlyHistory,
-                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply);
+                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply,
+                  thisThread->pawn_history_index(pos));
 
     value = bestValue;
 
@@ -1321,7 +1323,7 @@ moves_loop:  // When in check, search starts here
                 int history =
                   (*contHist[0])[movedPiece][move.to_sq()]
                   + (*contHist[1])[movedPiece][move.to_sq()]
-                  + thisThread->pawnHistory[pawn_structure_index(pos)][movedPiece][move.to_sq()];
+                  + thisThread->pawnHistory[thisThread->pawn_history_index(pos)][movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
                 if (history < -3491 * depth)
@@ -1779,7 +1781,7 @@ moves_loop:  // When in check, search starts here
           << scaledBonus * 221 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN)
-            thisThread->pawnHistory[pawn_structure_index(pos)][pos.piece_on(prevSq)][prevSq]
+            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
               << int(std::int64_t(scaledBonus) * 1001 / 32768);
     }
 
@@ -1979,7 +1981,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &thisThread->mainHistory, &thisThread->lowPlyHistory,
-                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply);
+                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply,
+                  thisThread->pawn_history_index(pos));
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.
@@ -2026,7 +2029,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             // Continuation history based pruning
             if (!capture
                 && (*contHist[0])[pos.moved_piece(move)][move.to_sq()]
-                       + thisThread->pawnHistory[pawn_structure_index(pos)][pos.moved_piece(move)]
+                       + thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.moved_piece(move)]
                                                 [move.to_sq()]
                      <= 2861)
                 continue;
@@ -2496,9 +2499,13 @@ void update_quiet_histories(
     update_continuation_histories(workerThread, ss, pos.moved_piece(move), move.to_sq(),
                                   bonus * (bonus > 0 ? 1064 : 824) / 1024);
 
-    int pIndex = pawn_structure_index(pos);
+    // With BigPawnHistory, stronger updates, scaled like upstream's (691 / 468
+    // -> 800 / 500)
+    int pIndex = workerThread.pawn_history_index(pos);
     workerThread.pawnHistory[pIndex][pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 754 : 460) / 1024;
+      << bonus
+           * (workerThread.bigPawnHistory ? (bonus > 0 ? 873 : 491) : (bonus > 0 ? 754 : 460))
+           / 1024;
 }
 
 }

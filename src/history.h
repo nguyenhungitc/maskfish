@@ -33,7 +33,9 @@
 
 namespace Stockfish {
 
-constexpr int PAWN_HISTORY_SIZE        = 512;    // has to be a power of 2
+// Size of the pawn history table. Only half of it is used without the UCI
+// option BigPawnHistory (see Search::Worker::pawn_history_index()).
+constexpr int PAWN_HISTORY_SIZE        = 1024;   // has to be a power of 2
 constexpr int CORRECTION_HISTORY_SIZE  = 32768;  // has to be a power of 2
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
@@ -49,9 +51,12 @@ enum PawnHistoryType {
     Correction
 };
 
+// Index of the pawn history (big: the whole table, otherwise half of it)
+// or of the correction histories
 template<PawnHistoryType T = Normal>
-inline int pawn_structure_index(const Position& pos) {
-    return pos.pawn_key() & ((T == Normal ? PAWN_HISTORY_SIZE : CORRECTION_HISTORY_SIZE) - 1);
+inline int pawn_structure_index(const Position& pos, bool big = false) {
+    return pos.pawn_key()
+         & ((T == Normal ? PAWN_HISTORY_SIZE / (big ? 1 : 2) : CORRECTION_HISTORY_SIZE) - 1);
 }
 
 inline int minor_piece_index(const Position& pos) {

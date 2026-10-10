@@ -337,6 +337,12 @@ class Worker {
     bool bestMoveBonusScale = false;
     bool contHistOffset = false;
     bool contCorr6Ply = false;
+    bool bigPawnHistory = false;
+
+    // Index of the pawn history for the position (UCI option BigPawnHistory)
+    int pawn_history_index(const Position& pos) const {
+        return pawn_structure_index(pos, bigPawnHistory);
+    }
 
    private:
     // Returns whether the last PV sent to the GUI is up to date

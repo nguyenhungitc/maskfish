@@ -207,6 +207,9 @@ Engine::Engine(std::optional<std::string> path) :
                     tt.set_decisive_aging(bool(o));
                     return std::nullopt;
                 }));
+    // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
+    // always has the size for 10), with stronger updates
+    options.add("BigPawnHistory", Option(false));
     // Share the continuation, pawn and correction histories between the
     // threads of a NUMA node (only matters with Threads > 1). Changing it
     // recreates the threads.
