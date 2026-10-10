@@ -1,7 +1,11 @@
-<h1 align="center">Maskfish</h1>
-<p align="center"><em>Luck is a skill too.</em></p>
-
-Maskfish is a free and strong UCI engine for **Jieqi**.
+<div align="center">
+<img src="https://github.com/official-maskfish.png" width="120" alt="Maskfish logo">
+<h3>Maskfish</h3>
+Luck is a skill too.
+<br>
+<br>
+<br>
+</div>
 
 ## Overview
 
