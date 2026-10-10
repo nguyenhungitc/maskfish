@@ -182,6 +182,9 @@ void apply_threats(std::int16_t* __restrict dst,
     }
 #endif
 
+    if constexpr (!UsePSQT)
+        return;
+
     for (IndexType b = 0; b < PSQTBuckets; ++b)
         dstPsqt[b] = srcPsqt ? srcPsqt[b] : 0;
     for (int k = 0; k < nRemoved; ++k)
@@ -489,9 +492,13 @@ struct AccumulatorUpdateContext {
           (from.acc<Dimensions>()).accumulation[Perspective],
           (to.acc<Dimensions>()).accumulation[Perspective], to_weight_vector(indices)...);
 
-        fused_row_reduce<Vec32Wrapper, PSQTBuckets, ops...>(
-          (from.acc<Dimensions>()).psqtAccumulation[Perspective],
-          (to.acc<Dimensions>()).psqtAccumulation[Perspective], to_psqt_weight_vector(indices)...);
+        if constexpr (UsePSQT)
+            fused_row_reduce<Vec32Wrapper, PSQTBuckets, ops...>(
+              (from.acc<Dimensions>()).psqtAccumulation[Perspective],
+              (to.acc<Dimensions>()).psqtAccumulation[Perspective],
+              to_psqt_weight_vector(indices)...);
+        else
+            (void) to_psqt_weight_vector;
     }
 };
 
@@ -745,7 +752,7 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
             vec_store(&accTile[k], acc[k]);
     }
 
-    for (IndexType j = 0; j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
+    for (IndexType j = 0; UsePSQT && j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
     {
         auto* accTilePsqt = reinterpret_cast<psqt_vec_t*>(
           &accumulator.psqtAccumulation[Perspective][j * Tiling::PsqtTileHeight]);
@@ -790,7 +797,7 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
         for (IndexType j = 0; j < Dimensions; ++j)
             entry.accumulation[j] -= featureTransformer.weights[offset + j];
 
-        for (std::size_t k = 0; k < PSQTBuckets; ++k)
+        for (std::size_t k = 0; UsePSQT && k < PSQTBuckets; ++k)
             entry.psqtAccumulation[k] -= featureTransformer.psqtWeights[index * PSQTBuckets + k];
     }
     for (const auto index : added)
@@ -799,7 +806,7 @@ void update_accumulator_refresh_cache(const FeatureTransformer<Dimensions>& feat
         for (IndexType j = 0; j < Dimensions; ++j)
             entry.accumulation[j] += featureTransformer.weights[offset + j];
 
-        for (std::size_t k = 0; k < PSQTBuckets; ++k)
+        for (std::size_t k = 0; UsePSQT && k < PSQTBuckets; ++k)
             entry.psqtAccumulation[k] += featureTransformer.psqtWeights[index * PSQTBuckets + k];
     }
 

@@ -233,6 +233,15 @@ is about 10% slower. Train such a network with `train.py --layers 2` (section
 7.4 of the nnue-pytorch README); it can start from the feature transformer of a
 network with the current layer stacks.
 
+`make -j build psqt=no` (combinable with the options above) builds the engine
+for a network **without PSQT outputs**, as Pikafish's SFNNv17: the feature
+transformer keeps only its L1 outputs and the evaluation is the layer-stack
+output alone. Such networks have a different hash (`0x5E0D0000` is xored into
+the feature-transformer hash), so they are rejected by a build with PSQT and
+vice versa. Train them with `train.py --no-psqt` (architecture names get a
+`-nopsqt` suffix; see section 7.5 of the nnue-pytorch README, also about the
+quantization). The default build keeps the PSQT outputs.
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

@@ -58,6 +58,14 @@ constexpr int L2Big = 15;
 constexpr int L3Big = 32;
 
 constexpr IndexType PSQTBuckets = 16;
+
+// make psqt=no: networks without the PSQT part of the feature transformer
+// (SFNNv17 of Pikafish). The material then goes through the layer stacks.
+#ifdef JIEQI_NNUE_NO_PSQT
+constexpr bool UsePSQT = false;
+#else
+constexpr bool UsePSQT = true;
+#endif
 constexpr IndexType LayerStacks = 16;
 
 // If vector instructions are enabled, we update and refresh the

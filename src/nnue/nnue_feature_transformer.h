@@ -123,10 +123,13 @@ class FeatureTransformer {
 
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
+        // Networks without PSQT (make psqt=no) have a different layout
+        constexpr std::uint32_t PSQTHash = UsePSQT ? 0 : 0x5E0D0000;
 #ifdef JIEQI_NNUE_THREATS
-        return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2);
+        return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2)
+             ^ PSQTHash;
 #else
-        return FeatureSet::HashValue ^ (OutputDimensions * 2);
+        return FeatureSet::HashValue ^ (OutputDimensions * 2) ^ PSQTHash;
 #endif
     }
 
@@ -156,15 +159,21 @@ class FeatureTransformer {
 
         read_leb_128<BiasType>(stream, biases, HalfDimensions);
         read_little_endian<WeightType>(stream, weights, HalfDimensions * InputDimensions);
-        read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
+        if constexpr (UsePSQT)
+            read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
+        else
+            std::memset(psqtWeights, 0, sizeof(psqtWeights));
 #ifdef JIEQI_NNUE_THREATS
         // Threat weights are not doubled: the threat accumulator is doubled
         // when it is added in transform(). Stored as raw int8 (LEB128 would
         // not make them smaller, the file is compressed anyway).
         read_little_endian<ThreatWeightType>(stream, threatWeights,
                                              HalfDimensions * ThreatInputDimensions);
-        read_leb_128<PSQTWeightType>(stream, threatPsqtWeights,
-                                     PSQTBuckets * ThreatInputDimensions);
+        if constexpr (UsePSQT)
+            read_leb_128<PSQTWeightType>(stream, threatPsqtWeights,
+                                         PSQTBuckets * ThreatInputDimensions);
+        else
+            std::memset(threatPsqtWeights, 0, sizeof(threatPsqtWeights));
 #endif
 
         permute_weights();
@@ -179,12 +188,14 @@ class FeatureTransformer {
 
         write_leb_128<BiasType>(stream, copy->biases, HalfDimensions);
         write_little_endian<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
-        write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
+        if constexpr (UsePSQT)
+            write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
 #ifdef JIEQI_NNUE_THREATS
         write_little_endian<ThreatWeightType>(stream, copy->threatWeights,
                                               HalfDimensions * ThreatInputDimensions);
-        write_leb_128<PSQTWeightType>(stream, copy->threatPsqtWeights,
-                                      PSQTBuckets * ThreatInputDimensions);
+        if constexpr (UsePSQT)
+            write_leb_128<PSQTWeightType>(stream, copy->threatPsqtWeights,
+                                          PSQTBuckets * ThreatInputDimensions);
 #endif
 
         return !stream.fail();
@@ -229,17 +240,20 @@ class FeatureTransformer {
 #ifdef JIEQI_NNUE_THREATS
         const auto& threats = accumulatorState.threats;
         const auto  psqt =
-          (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
-           - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
-          / 2;
+          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
+                     - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
+                      / 2
+                  : 0;
         const BiasType* accumulations[2] = {accumulation[perspectives[0]],
                                             accumulation[perspectives[1]]};
         const BiasType* threatAccumulations[2] = {threats.acc[perspectives[0]],
                                                   threats.acc[perspectives[1]]};
 #else
         const auto psqt =
-          (psqtAccumulation[perspectives[0]][bucket] - psqtAccumulation[perspectives[1]][bucket])
-          / 2;
+          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket]
+                     - psqtAccumulation[perspectives[1]][bucket])
+                      / 2
+                  : 0;
         const BiasType* accumulations[2] = {accumulation[perspectives[0]],
                                             accumulation[perspectives[1]]};
 #endif
