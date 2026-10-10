@@ -20,12 +20,13 @@
 #ifndef TUNE_H_INCLUDED
 #define TUNE_H_INCLUDED
 
-#include <cstddef>
 #include <memory>
 #include <string>
 #include <type_traits>  // IWYU pragma: keep
 #include <utility>
 #include <vector>
+
+#include "misc.h"
 
 namespace Maskfish {
 
@@ -133,9 +134,9 @@ class Tune {
     }
 
     // Template specialization for arrays: recursively handle multi-dimensional arrays
-    template<typename T, size_t N, typename... Args>
+    template<typename T, usize N, typename... Args>
     int add(const SetRange& range, std::string&& names, T (&value)[N], Args&&... args) {
-        for (size_t i = 0; i < N; i++)
+        for (usize i = 0; i < N; i++)
             add(range, next(names, i == N - 1) + "[" + std::to_string(i) + "]", value[i]);
         return add(range, std::move(names), args...);
     }
@@ -171,11 +172,20 @@ class Tune {
     static OptionsMap* options;
 };
 
+template<typename... Args>
+constexpr void tune_check_args(Args&&...) {
+    static_assert((!std::is_fundamental_v<Args> && ...), "TUNE macro arguments wrong");
+}
+
 // Some macro magic :-) we define a dummy int variable that the compiler initializes calling Tune::add()
 #define STRINGIFY(x) #x
 #define UNIQUE2(x, y) x##y
 #define UNIQUE(x, y) UNIQUE2(x, y)  // Two indirection levels to expand __LINE__
-#define TUNE(...) int UNIQUE(p, __LINE__) = Tune::add(STRINGIFY((__VA_ARGS__)), __VA_ARGS__)
+#define TUNE(...) \
+    int UNIQUE(p, __LINE__) = []() -> int { \
+        tune_check_args(__VA_ARGS__); \
+        return Tune::add(STRINGIFY((__VA_ARGS__)), __VA_ARGS__); \
+    }();
 
 #define UPDATE_ON_LAST() bool UNIQUE(p, __LINE__) = Tune::update_on_last = true
 

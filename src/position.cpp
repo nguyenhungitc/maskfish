@@ -30,6 +30,7 @@
 #include <string_view>
 #include <utility>
 
+#include "attacks.h"
 #include "bitboard.h"
 #include "misc.h"
 #include "movegen.h"
@@ -39,6 +40,8 @@
 using std::string;
 
 namespace Maskfish {
+
+using namespace Attacks;
 
 namespace Zobrist {
 
@@ -71,7 +74,7 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
 
     os << "\n +---+---+---+---+---+---+---+---+---+\n";
 
-    for (Rank r = RANK_9; r >= RANK_0; --r)
+    for (Rank r = RANK_9;; --r)
     {
         for (File f = FILE_A; f <= FILE_I; ++f)
         {
@@ -81,6 +84,9 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
         }
 
         os << " | " << int(r) << "\n +---+---+---+---+---+---+---+---+---+\n";
+
+        if (r == RANK_0)
+            break;
     }
 
     os << "   a   b   c   d   e   f   g   h   i\n"
@@ -247,15 +253,15 @@ void Position::set_check_info() const {
     Square ksq = king_square(~sideToMove);
 
     // We have to take special cares about the cannon and checks
-    st->needSlowCheck =
-      checkers() || (attacks_bb<ROOK>(king_square(sideToMove)) & pieces(~sideToMove, CANNON));
+    st->needFullCheck =
+      checkers() || (attacks_bb(ROOK, king_square(sideToMove)) & pieces(~sideToMove, CANNON));
 
-    st->checkSquares[PAWN]    = attacks_bb<PAWN_TO>(ksq, sideToMove);
-    st->checkSquares[KNIGHT]  = attacks_bb<KNIGHT_TO>(ksq, pieces());
-    st->checkSquares[CANNON]  = attacks_bb<CANNON>(ksq, pieces());
-    st->checkSquares[ROOK]    = attacks_bb<ROOK>(ksq, pieces());
-    st->checkSquares[ADVISOR] = attacks_bb<ADVISOR>(ksq);
-    st->checkSquares[BISHOP]  = attacks_bb<BISHOP>(ksq, pieces());
+    st->checkSquares[PAWN]    = attacks_bb(PAWN_TO, ksq, sideToMove);
+    st->checkSquares[KNIGHT]  = attacks_bb(KNIGHT_TO, ksq, pieces());
+    st->checkSquares[CANNON]  = attacks_bb(CANNON, ksq, pieces());
+    st->checkSquares[ROOK]    = attacks_bb(ROOK, ksq, pieces());
+    st->checkSquares[ADVISOR] = attacks_bb(ADVISOR, ksq);
+    st->checkSquares[BISHOP]  = attacks_bb(BISHOP, ksq, pieces());
     st->checkSquares[KING]    = 0;
 
     Bitboard hollowCannons = st->checkSquares[ROOK] & pieces(sideToMove, CANNON);
@@ -325,7 +331,7 @@ string Position::fen() const {
     int                emptyCnt;
     std::ostringstream ss;
 
-    for (Rank r = RANK_9; r >= RANK_0; --r)
+    for (Rank r = RANK_9;; --r)
     {
         for (File f = FILE_A; f <= FILE_I; ++f)
         {
@@ -342,8 +348,9 @@ string Position::fen() const {
             }
         }
 
-        if (r > RANK_0)
-            ss << '/';
+        if (r == RANK_0)
+            break;
+        ss << '/';
     }
 
     ss << (sideToMove == WHITE ? " w " : " b ");
@@ -373,8 +380,8 @@ void Position::update_blockers() const {
 
     // Snipers are pieces that attack 's' when a piece and other pieces are removed
     Bitboard snipers =
-      ((attacks_bb<ROOK>(ksq) & (pieces(ROOK) | pieces(CANNON) | pieces(KING)))
-       | (attacks_bb<KNIGHT>(ksq) & pieces(KNIGHT)) | (attacks_bb<BISHOP>(ksq) & pieces(BISHOP)))
+      ((attacks_bb(ROOK, ksq) & (pieces(ROOK) | pieces(CANNON) | pieces(KING)))
+       | (attacks_bb(KNIGHT, ksq) & pieces(KNIGHT)) | (attacks_bb(BISHOP, ksq) & pieces(BISHOP)))
       & pieces(~c);
     Bitboard occupancy = pieces() ^ (snipers & ~pieces(CANNON));
 
@@ -398,13 +405,13 @@ void Position::update_blockers() const {
 // Slider attacks use the occupied bitboard to indicate occupancy.
 Bitboard Position::attackers_to(Square s, Bitboard occupied) const {
 
-    return (attacks_bb<PAWN_TO>(s, WHITE) & pieces(WHITE, PAWN))
-         | (attacks_bb<PAWN_TO>(s, BLACK) & pieces(BLACK, PAWN))
-         | (attacks_bb<KNIGHT_TO>(s, occupied) & pieces(KNIGHT))
-         | (attacks_bb<ROOK>(s, occupied) & pieces(ROOK))
-         | (attacks_bb<CANNON>(s, occupied) & pieces(CANNON))
-         | (attacks_bb<BISHOP>(s, occupied) & pieces(BISHOP))
-         | (attacks_bb<ADVISOR>(s) & pieces(ADVISOR)) | (attacks_bb<KING>(s) & pieces(KING));
+    return (attacks_bb(PAWN_TO, s, WHITE) & pieces(WHITE, PAWN))
+         | (attacks_bb(PAWN_TO, s, BLACK) & pieces(BLACK, PAWN))
+         | (attacks_bb(KNIGHT_TO, s, occupied) & pieces(KNIGHT))
+         | (attacks_bb(ROOK, s, occupied) & pieces(ROOK))
+         | (attacks_bb(CANNON, s, occupied) & pieces(CANNON))
+         | (attacks_bb(BISHOP, s, occupied) & pieces(BISHOP))
+         | (attacks_bb(ADVISOR, s) & pieces(ADVISOR)) | (attacks_bb(KING, s) & pieces(KING));
 }
 
 
@@ -413,12 +420,12 @@ Bitboard Position::attackers_to(Square s, Bitboard occupied) const {
 // to indicate occupancy.
 Bitboard Position::checkers_to(Color c, Square s, Bitboard occupied) const {
 
-    return ((attacks_bb<PAWN_TO>(s, c) & pieces(PAWN))
-            | (attacks_bb<KNIGHT_TO>(s, occupied) & pieces(KNIGHT))
-            | (attacks_bb<ROOK>(s, occupied) & pieces(KING, ROOK))
-            | (attacks_bb<CANNON>(s, occupied) & pieces(CANNON))
-            | (attacks_bb<BISHOP>(s, occupied) & pieces(BISHOP))
-            | (attacks_bb<ADVISOR>(s, occupied) & pieces(ADVISOR)))
+    return ((attacks_bb(PAWN_TO, s, c) & pieces(PAWN))
+            | (attacks_bb(KNIGHT_TO, s, occupied) & pieces(KNIGHT))
+            | (attacks_bb(ROOK, s, occupied) & pieces(KING, ROOK))
+            | (attacks_bb(CANNON, s, occupied) & pieces(CANNON))
+            | (attacks_bb(BISHOP, s, occupied) & pieces(BISHOP))
+            | (attacks_bb(ADVISOR, s, occupied) & pieces(ADVISOR)))
          & pieces(c);
 }
 
@@ -450,7 +457,7 @@ bool Position::legal(Move m) const {
     // 1. Not moving a pinned piece.
     // 2. Moving a pinned non-cannon piece and aligned with king.
     // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
-    if (!st->needSlowCheck
+    if (!st->needFullCheck
         && (!(blockers_for_king(us) & from)
             || (((type_of(piece_on(from)) != CANNON) || !capture(m))
                 && aligned(from, to, king_square(us)))))
@@ -482,11 +489,23 @@ bool Position::pseudo_legal(const Move m) const {
 
     // Handle the special cases
     if (type_of(pc) == PAWN)
-        return bool(attacks_bb<PAWN>(from, us) & to);
+    {
+        if (!(attacks_bb(PAWN, from, us) & to))
+            return false;
+    }
     else if (type_of(pc) == CANNON && !capture(m))
-        return bool(attacks_bb<ROOK>(from, pieces()) & to);
-    else
-        return bool(attacks_bb(type_of(pc), from, pieces()) & to);
+    {
+        if (!(attacks_bb(ROOK, from, pieces()) & to))
+            return false;
+    }
+    else if (!(attacks_bb(type_of(pc), from, pieces()) & to))
+        return false;
+
+    // In check, only the evasions are pseudo-legal
+    if (checkers())
+        return MoveList<EVASIONS>(*this).contains(m);
+
+    return true;
 }
 
 
@@ -505,34 +524,38 @@ bool Position::gives_check(Move m) const {
     // A dark piece moves like the piece of its starting square, but gives a
     // direct check as the piece it turns out to be: the move may give check
     // if any kind of piece left in the mover's pool would check from 'to'.
-    // (The discovered checks below do not depend on the revealed piece.)
     if (move_dark(m))
     {
         const Bitboard occupied = (pieces() ^ from) | to;
         auto           inPool   = [&](PieceType t) { return restPieces[make_piece(sideToMove, t)] > 0; };
 
-        if ((inPool(ROOK) && (attacks_bb<ROOK>(ksq, occupied) & to))
-            || (inPool(CANNON) && (attacks_bb<CANNON>(ksq, occupied) & to))
-            || (inPool(KNIGHT) && (attacks_bb<KNIGHT_TO>(ksq, occupied) & to))
-            || (inPool(PAWN) && (attacks_bb<PAWN_TO>(ksq, sideToMove) & to))
-            || (inPool(ADVISOR) && (attacks_bb<ADVISOR>(ksq) & to))
-            || (inPool(BISHOP) && (attacks_bb<BISHOP>(ksq, occupied) & to)))
+        if ((inPool(ROOK) && (attacks_bb(ROOK, ksq, occupied) & to))
+            || (inPool(CANNON) && (attacks_bb(CANNON, ksq, occupied) & to))
+            || (inPool(KNIGHT) && (attacks_bb(KNIGHT_TO, ksq, occupied) & to))
+            || (inPool(PAWN) && (attacks_bb(PAWN_TO, ksq, sideToMove) & to))
+            || (inPool(ADVISOR) && (attacks_bb(ADVISOR, ksq) & to))
+            || (inPool(BISHOP) && (attacks_bb(BISHOP, ksq, occupied) & to)))
             return true;
+
+        // Discovered checks, including the dark piece becoming the screen of
+        // a cannon, do not depend on the revealed piece
+        if (attacks_bb(ROOK, ksq) & pieces(sideToMove, CANNON))
+            return bool(checkers_to(sideToMove, ksq, occupied) & ~square_bb(from));
+
+        return (blockers_for_king(~sideToMove) & from) && !aligned(from, to, ksq);
     }
 
     // Is there a direct check?
-    else if (pt == CANNON && aligned(from, to, ksq))
+    if (pt == CANNON && (check_squares(ROOK) & from) && aligned(from, to, ksq))
     {
-        if (attacks_bb<CANNON>(to, (pieces() ^ from) | to) & ksq)
+        if (capture(m) && (ray_pass_bb(ksq, from) & to))
             return true;
     }
     else if (check_squares(pt) & to)
         return true;
 
     // Is there a discovered check?
-    if (attacks_bb<ROOK>(ksq) & pieces(sideToMove, CANNON))
-        return bool(checkers_to(sideToMove, ksq, (pieces() ^ from) | to) & ~square_bb(from));
-    else if ((blockers_for_king(~sideToMove) & from) && !aligned(from, to, ksq))
+    if ((blockers_for_king(~sideToMove) & from) && (!aligned(from, to, ksq) || capture(m)))
         return true;
 
     return false;
@@ -664,11 +687,11 @@ void Position::restore_rest_piece(Piece pc) {
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.
 // If a pointer to the TT table is passed, the entry for the new position
-// will be prefetched
+// will be prefetched, and likewise for the shared histories.
 DirtyPiece Position::do_move(Move                      m,
                              StateInfo&                newSt,
                              bool                      givesCheck,
-                             const TranspositionTable* tt = nullptr) {
+                             const TranspositionTable* tt) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -890,7 +913,7 @@ void Position::undo_move(Move m) {
 
 // Used to do a "null move": it flips
 // the side to move without executing any move on the board.
-void Position::do_null_move(StateInfo& newSt, const TranspositionTable& tt) {
+void Position::do_null_move(StateInfo& newSt) {
 
     assert(!checkers());
     assert(&newSt != st);
@@ -904,7 +927,6 @@ void Position::do_null_move(StateInfo& newSt, const TranspositionTable& tt) {
     st             = &newSt;
 
     st->key ^= Zobrist::side;
-    prefetch(tt.first_entry(key()));
 
     st->pliesFromNull = 0;
 
@@ -969,7 +991,7 @@ bool Position::see_ge(Move m, int threshold) const {
     // Flying general
     bool kingAttacks = attackers & pieces(KING);
     if (kingAttacks)
-        attackers |= attacks_bb<ROOK>(to, occupied) & pieces(KING);
+        attackers |= attacks_bb(ROOK, to, occupied) & pieces(KING);
 
     Bitboard nonCannons = attackers & ~pieces(CANNON);
     Bitboard cannons    = attackers & pieces(CANNON);
@@ -1006,8 +1028,8 @@ bool Position::see_ge(Move m, int threshold) const {
             occupied ^= least_significant_square_bb(bb);
 
             nonCannons |=
-              attacks_bb<ROOK>(to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
-            cannons   = attacks_bb<CANNON>(to, occupied) & pieces(CANNON);
+              attacks_bb(ROOK, to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
+            cannons   = attacks_bb(CANNON, to, occupied) & pieces(CANNON);
             attackers = nonCannons | cannons;
         }
 
@@ -1024,7 +1046,7 @@ bool Position::see_ge(Move m, int threshold) const {
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            nonCannons |= attacks_bb<KNIGHT_TO>(to, occupied) & pieces(KNIGHT);
+            nonCannons |= attacks_bb(KNIGHT_TO, to, occupied) & pieces(KNIGHT);
             attackers = nonCannons | cannons;
         }
 
@@ -1034,7 +1056,7 @@ bool Position::see_ge(Move m, int threshold) const {
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            cannons   = attacks_bb<CANNON>(to, occupied) & pieces(CANNON);
+            cannons   = attacks_bb(CANNON, to, occupied) & pieces(CANNON);
             attackers = nonCannons | cannons;
         }
 
@@ -1054,8 +1076,8 @@ bool Position::see_ge(Move m, int threshold) const {
             occupied ^= least_significant_square_bb(bb);
 
             nonCannons |=
-              attacks_bb<ROOK>(to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
-            cannons   = attacks_bb<CANNON>(to, occupied) & pieces(CANNON);
+              attacks_bb(ROOK, to, occupied) & (kingAttacks ? pieces(KING, ROOK) : pieces(ROOK));
+            cannons   = attacks_bb(CANNON, to, occupied) & pieces(CANNON);
             attackers = nonCannons | cannons;
         }
 
@@ -1334,10 +1356,13 @@ void Position::flip() {
     string            f, token;
     std::stringstream ss(fen());
 
-    for (Rank r = RANK_9; r >= RANK_0; --r)  // Piece placement
+    for (Rank r = RANK_9;; --r)  // Piece placement
     {
         std::getline(ss, token, r > RANK_0 ? '/' : ' ');
         f.insert(0, token + (f.empty() ? " " : "/"));
+
+        if (r == RANK_0)
+            break;
     }
 
     ss >> token;                        // Active color

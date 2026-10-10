@@ -240,6 +240,7 @@ void Search::Worker::start_searching() {
     main_manager()->tm.init(limits, rootPos.side_to_move(), rootPos.game_ply(), options,
                             main_manager()->originalTimeAdjust);
     tt.new_search();
+    main_manager()->updates.onStart();
 
     // Whether the last PV sent to the GUI matches the final result
     bool uciPvSent = true;
@@ -757,7 +758,10 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
     accumulatorStack.push(dp);
 }
 
-void Search::Worker::do_null_move(Position& pos, StateInfo& st) { pos.do_null_move(st, tt); }
+void Search::Worker::do_null_move(Position& pos, StateInfo& st) {
+    pos.do_null_move(st);
+    prefetch(tt.first_entry(pos.key()));
+}
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
     pos.undo_move(move);

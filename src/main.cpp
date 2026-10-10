@@ -19,13 +19,13 @@
 
 #include <iostream>
 #include <memory>
+#include <utility>
 
-#include "bitboard.h"
+#include "attacks.h"
 #include "misc.h"
 #include "nnue/features/jieqi_threats.h"
 #include "position.h"
 #include "tune.h"
-#include "types.h"
 #include "uci.h"
 
 using namespace Maskfish;
@@ -33,13 +33,14 @@ using namespace Maskfish;
 int main(int argc, char* argv[]) {
     std::cout << engine_info() << std::endl;
 
-    Bitboards::init();
+    Attacks::init();
     Position::init();
 #ifdef JIEQI_NNUE_THREATS
     Eval::NNUE::Features::JieqiThreats::init();
 #endif
 
-    auto uci = std::make_unique<UCIEngine>(argc, argv);
+    auto cli = CommandLine(argc, argv);
+    auto uci = std::make_unique<UCIEngine>(std::move(cli));
 
     Tune::init(uci->engine_options());
 

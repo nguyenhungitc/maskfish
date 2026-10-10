@@ -1,7 +1,7 @@
 /*
   Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
-  Copyright (C) 2004-2026 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
   Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -279,7 +279,7 @@ class SharedMemoryBackend {
         const usize total_size = sizeof(T) + sizeof(IS_INITIALIZED_VALUE);
 
         // Try allocating with large pages first.
-        hMapFile = windows_try_with_large_page_priviliges(
+        hMapFile = windows_try_with_large_page_privileges(
           [&](usize largePageSize) {
               const usize total_size_aligned =
                 (total_size + largePageSize - 1) / largePageSize * largePageSize;

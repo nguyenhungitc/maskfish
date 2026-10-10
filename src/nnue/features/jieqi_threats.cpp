@@ -20,6 +20,7 @@
 // Definition of the JieqiThreats input features (see jieqi_threats.h)
 
 #include "jieqi_threats.h"
+#include "../../attacks.h"
 
 #include <algorithm>
 #include <cassert>
@@ -32,6 +33,8 @@
 #include "half_ka_v2_hm.h"
 
 namespace Maskfish::Eval::NNUE::Features {
+
+using namespace Maskfish::Attacks;
 
 namespace {
 
@@ -247,7 +250,7 @@ int JieqiThreats::physical_threats(const Position& pos, Threat* out) {
         const PieceType pt   = type_of(pc);
         const bool      dark = pos.is_dark(from);
         Bitboard        attacks =
-          pt == PAWN ? attacks_bb<PAWN>(from, color_of(pc)) : attacks_bb(pt, from, occupied);
+          pt == PAWN ? attacks_bb(PAWN, from, color_of(pc)) : attacks_bb(pt, from, occupied);
         if (dark && pt == ADVISOR)
             attacks &= Palace;  // a dark advisor must stay in the palace
         attacks &= occupied;

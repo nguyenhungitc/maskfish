@@ -11,6 +11,7 @@
 */
 
 #include "reveal.h"
+#include "attacks.h"
 
 #include <algorithm>
 #include <cassert>
@@ -20,6 +21,8 @@
 #include "position.h"
 
 namespace Maskfish::Reveal {
+
+using namespace Maskfish::Attacks;
 
 std::int64_t round_divide(std::int64_t numerator, std::int64_t denominator) {
     assert(denominator > 0);

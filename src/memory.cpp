@@ -1,7 +1,7 @@
 /*
   Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
-  Copyright (C) 2004-2026 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
   Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -105,7 +105,7 @@ void std_aligned_free(void* ptr) {
 
 static void* aligned_large_pages_alloc_windows([[maybe_unused]] usize allocSize) {
 
-    return windows_try_with_large_page_priviliges(
+    return windows_try_with_large_page_privileges(
       [&](usize largePageSize) {
           // Round up size to full pages and allocate
           allocSize = (allocSize + largePageSize - 1) & ~usize(largePageSize - 1);

@@ -28,7 +28,7 @@
 namespace Maskfish {
 
 class OptionsMap;
-enum Color : int8_t;
+enum Color : u8;
 
 namespace Search {
 struct LimitsType;

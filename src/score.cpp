@@ -20,8 +20,8 @@
 #include "score.h"
 
 #include <cassert>
-#include <cmath>
 #include <cstdlib>
+#include <cmath>
 
 #include "uci.h"
 

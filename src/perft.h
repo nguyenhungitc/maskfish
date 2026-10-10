@@ -38,11 +38,11 @@ namespace Maskfish::Benchmark {
 // this the dark piece would stay hidden on a non-starting square and the check
 // information of the child position would never be computed.
 template<bool Root>
-uint64_t perft(Position& pos, Depth depth) {
+u64 perft(Position& pos, Depth depth) {
 
     StateInfo st;
 
-    uint64_t   cnt, nodes = 0;
+    u64        cnt, nodes = 0;
     const bool leaf = (depth == 2);
 
     auto count = [&]() { return leaf ? MoveList<LEGAL>(pos).size() : perft<false>(pos, depth - 1); };
@@ -85,10 +85,10 @@ uint64_t perft(Position& pos, Depth depth) {
     return nodes;
 }
 
-inline uint64_t perft(const std::string& fen, Depth depth) {
-    StateListPtr states(new std::deque<StateInfo>(1));
-    Position     p;
-    p.set(fen, &states->back());
+inline u64 perft(const std::string& fen, Depth depth) {
+    StateInfo st;
+    Position  p;
+    p.set(fen, &st);
 
     // Move generation needs exactly one king per side (see Engine::set_position())
     if (p.count<KING>(WHITE) != 1 || p.count<KING>(BLACK) != 1)

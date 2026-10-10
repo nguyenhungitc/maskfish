@@ -20,12 +20,15 @@
 // Definition of input features HalfKAv2_hm of NNUE evaluation function
 
 #include "half_ka_v2_hm.h"
+#include "../../attacks.h"
 
 #include "../../position.h"
 #include "../../types.h"
 #include "../nnue_common.h"
 
 namespace Maskfish::Eval::NNUE::Features {
+
+using namespace Maskfish::Attacks;
 
 // Index of a feature for a given king position and another piece on some square
 template<Color Perspective>

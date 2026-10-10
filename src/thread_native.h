@@ -86,7 +86,7 @@ class NativeThread {
     pthread_t thread;
     bool      running_ = false;
 
-    static constexpr size_t TH_STACK_SIZE = 8 * 1024 * 1024;
+    static constexpr usize TH_STACK_SIZE = 8 * 1024 * 1024;
 
     void start(NativeThreadOptions options, ThreadCallableBase* func) {
         pthread_attr_t attr_storage, *attr = &attr_storage;

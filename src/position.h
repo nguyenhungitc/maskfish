@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "attacks.h"
 #include "bitboard.h"
 #include "nnue/features/half_ka_v2_hm.h"
 #include "types.h"
@@ -60,7 +61,7 @@ struct StateInfo {
     Bitboard   blockersForKing[COLOR_NB];
     Bitboard   pinners[COLOR_NB];
     Bitboard   checkSquares[PIECE_TYPE_NB];
-    bool       needSlowCheck;
+    bool       needFullCheck;
     Piece      capturedPiece;
     Move       move;
     bool       captureDark;
@@ -133,9 +134,12 @@ class Position {
 
     // Doing and undoing moves
     void       do_move(Move m, StateInfo& newSt, const TranspositionTable* tt);
-    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck, const TranspositionTable* tt);
+    DirtyPiece do_move(Move                      m,
+                       StateInfo&                newSt,
+                       bool                      givesCheck,
+                       const TranspositionTable* tt);
     void       undo_move(Move m);
-    void       do_null_move(StateInfo& newSt, const TranspositionTable& tt);
+    void       do_null_move(StateInfo& newSt);
     void       undo_null_move();
     Piece
     do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr, const TranspositionTable* tt = nullptr);
@@ -166,6 +170,9 @@ class Position {
     uint16_t chased(Color c);
     Value    major_material(Color c) const;
     Value    major_material() const;
+    // major_material() with each dark piece counted at the expected value of the
+    // rooks, cannons and knights of its owner's pool
+    Value    jieqi_major_material() const;
     // Expected value of a dark piece of the given color: the average value
     // of the pieces left in its pool
     Value dark_value(Color c) const;
@@ -177,9 +184,6 @@ class Position {
     // Value and capture history index of the piece captured by the last move
     Value     captured_value() const;
     PieceType captured_type() const;
-    // Major material (rooks, cannons, knights) counting each dark piece at the
-    // expected major value of a piece drawn from its owner's pool
-    Value    jieqi_major_material() const;
 #ifdef JIEQI_NNUE_ATT
     uint64_t mid_encoding(Color c) const { return midEncoding[c]; }
 #endif
@@ -213,7 +217,7 @@ class Position {
     Value                 detect_chases(int d, int ply = 0);
     bool                  chase_legal(Move m) const;
 
-    template<bool AfterMove>
+    template<bool AfterMove = false>
     Key adjust_key40(Key k) const;
 
     // Data members
@@ -291,9 +295,9 @@ inline Bitboard Position::attacks_by(Color c) const {
     Bitboard attackers = pieces(c, Pt);
     while (attackers)
         if (Pt == PAWN)
-            threats |= attacks_bb<PAWN>(pop_lsb(attackers), c);
+            threats |= Attacks::attacks_bb(PAWN, pop_lsb(attackers), c);
         else
-            threats |= attacks_bb<Pt>(pop_lsb(attackers), pieces());
+            threats |= Attacks::attacks_bb(Pt, pop_lsb(attackers), pieces());
     return threats;
 }
 
@@ -305,12 +309,12 @@ inline Bitboard Position::pinners(Color c) const { return st->pinners[c]; }
 
 inline Bitboard Position::check_squares(PieceType pt) const { return st->checkSquares[pt]; }
 
-inline Key Position::key() const { return adjust_key40<false>(st->key); }
+inline Key Position::key() const { return adjust_key40(st->key); }
 
 template<bool AfterMove>
 inline Key Position::adjust_key40(Key k) const {
     return (st->rule40 < 14 - AfterMove ? k : k ^ make_key((st->rule40 - (14 - AfterMove)) / 8))
-         ^ (filter[st->key] ? make_key(14) : 0);
+         ^ (filter[k] ? make_key(14) : 0);
 }
 
 inline Key Position::pawn_key() const { return st->pawnKey; }
@@ -352,6 +356,7 @@ inline Value Position::jieqi_major_material() const {
     }
     return total;
 }
+
 
 inline Value Position::dark_value(Color c) const {
     int count = 0, value = 0;

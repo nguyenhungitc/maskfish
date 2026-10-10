@@ -55,7 +55,7 @@ struct TTEntry {
     // Convert internal bitfields to external types
     TTData read() const {
         return TTData{Move(move16),           Value(value16),
-                      Value(eval16),          Depth(depth8 + DEPTH_ENTRY_OFFSET),
+                      Value(eval16),          Depth(depth8 + DEPTH_NONE),
                       Bound(genBound8 & 0x3), bool(genBound8 & 0x4)};
     }
 
@@ -96,7 +96,7 @@ static constexpr int GENERATION_CYCLE = 255 + GENERATION_DELTA;
 // mask to pull out generation number
 static constexpr int GENERATION_MASK = (0xFF << GENERATION_BITS) & 0xFF;
 
-// DEPTH_ENTRY_OFFSET exists because 1) we use `bool(depth8)` as the occupancy check, but
+// Depths are stored with the offset DEPTH_NONE because 1) we use `bool(depth8)` as the occupancy check, but
 // 2) we need to store negative depths for QS. (`depth8` is the only field with "spare bits":
 // we sacrifice the ability to store depths greater than 1<<8 less the offset, as asserted in `save`.)
 bool TTEntry::is_occupied() const { return bool(depth8); }
@@ -118,21 +118,21 @@ void TTEntry::save(Key     k,
         move16 = m;
 
     // Overwrite less valuable entries (cheapest checks first)
-    if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_ENTRY_OFFSET + 2 * pv > depth8 - 4
+    if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_NONE + 2 * pv > depth8 - 4
         || relative_age(generation8))
     {
-        assert(d > DEPTH_ENTRY_OFFSET);
-        assert(d < 256 + DEPTH_ENTRY_OFFSET);
+        assert(d > DEPTH_NONE);
+        assert(d < 256 + DEPTH_NONE);
 
         key16     = uint16_t(k);
-        depth8    = uint8_t(d - DEPTH_ENTRY_OFFSET);
+        depth8    = uint8_t(d - DEPTH_NONE);
         genBound8 = uint8_t(generation8 | uint8_t(pv) << 2 | b);
         value16   = int16_t(v);
         eval16    = int16_t(ev);
     }
     // Secondary aging. With DecisiveTTAging only for decisive values, which
     // matters for mate finding. The value may be corrupted by a racy write.
-    else if (depth8 + DEPTH_ENTRY_OFFSET >= 5 && Bound(genBound8 & 0x3) != BOUND_EXACT)
+    else if (depth8 + DEPTH_NONE >= 5 && Bound(genBound8 & 0x3) != BOUND_EXACT)
     {
         const Value v16 = value16;
         if (!decisiveAging || (std::abs(v16) < VALUE_INFINITE && is_decisive(v16)))
@@ -293,7 +293,7 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
             replace = &tte[i];
 
     return {false,
-            TTData{Move::none(), VALUE_NONE, VALUE_NONE, DEPTH_ENTRY_OFFSET, BOUND_NONE, false},
+            TTData{Move::none(), VALUE_NONE, VALUE_NONE, DEPTH_NONE, BOUND_NONE, false},
             TTWriter(replace, decisiveAging)};
 }
 

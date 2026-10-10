@@ -38,6 +38,6 @@ struct BenchmarkSetup {
 
 BenchmarkSetup setup_benchmark(std::istream&);
 
-}  // namespace Maskfish
+}  // namespace Maskfish::Benchmark
 
 #endif  // #ifndef BENCHMARK_H_INCLUDED
