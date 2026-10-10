@@ -166,6 +166,17 @@ class Position {
     uint16_t chased(Color c);
     Value    major_material(Color c) const;
     Value    major_material() const;
+    // Expected value of a dark piece of the given color: the average value
+    // of the pieces left in its pool
+    Value dark_value(Color c) const;
+    // Value of the piece on a square, a dark piece counting at dark_value()
+    Value piece_value(Square s) const;
+    // Index of a captured piece in the capture history: its type, or
+    // NO_PIECE_TYPE (unused otherwise) for a dark piece, whose type is unknown
+    PieceType capture_type(Square s) const;
+    // Value and capture history index of the piece captured by the last move
+    Value     captured_value() const;
+    PieceType captured_type() const;
     // Major material (rooks, cannons, knights) counting each dark piece at the
     // expected major value of a piece drawn from its owner's pool
     Value    jieqi_major_material() const;
@@ -340,6 +351,33 @@ inline Value Position::jieqi_major_material() const {
             total += dark * poolMajor / poolCount;
     }
     return total;
+}
+
+inline Value Position::dark_value(Color c) const {
+    int count = 0, value = 0;
+    for (PieceType pt = ROOK; pt < KING; ++pt)
+    {
+        const Piece pc = make_piece(c, pt);
+        count += restPieces[pc];
+        value += restPieces[pc] * PieceValue[pc];
+    }
+    return count ? Value(value / count) : VALUE_ZERO;
+}
+
+inline Value Position::piece_value(Square s) const {
+    return is_dark(s) ? dark_value(color_of(piece_on(s))) : PieceValue[piece_on(s)];
+}
+
+inline PieceType Position::capture_type(Square s) const {
+    return is_dark(s) ? NO_PIECE_TYPE : type_of(piece_on(s));
+}
+
+inline Value Position::captured_value() const {
+    return st->captureDark ? dark_value(color_of(st->capturedPiece)) : PieceValue[st->capturedPiece];
+}
+
+inline PieceType Position::captured_type() const {
+    return st->captureDark ? NO_PIECE_TYPE : type_of(st->capturedPiece);
 }
 
 inline const int& Position::rest_piece(Piece pc) const { return restPieces[pc]; }

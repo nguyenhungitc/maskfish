@@ -223,11 +223,10 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         const Square    to            = m.to_sq();
         const Piece     pc            = pos.moved_piece(m);
         const PieceType pt            = type_of(pc);
-        const Piece     capturedPiece = pos.piece_on(to);
 
         if constexpr (Type == CAPTURES)
-            m.value = (*captureHistory)[pc][to][type_of(capturedPiece)]
-                    + 7 * int(PieceValue[capturedPiece])
+            m.value = (*captureHistory)[pc][to][pos.capture_type(to)]
+                    + 7 * int(pos.piece_value(to))
                     + 1024
                         * bool((pt == CANNON
                                   ? pos.check_squares(pt) & ~line_bb(from, pos.king_square(~us))
@@ -273,7 +272,7 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         else  // Type == EVASIONS
         {
             if (pos.capture(m))
-                m.value = PieceValue[capturedPiece] + (1 << 28);
+                m.value = pos.piece_value(to) + (1 << 28);
             else
             {
                 m.value = (*mainHistory)[us][m.from_to()] + (*continuationHistory[0])[pc][to];

@@ -926,11 +926,20 @@ bool Position::see_ge(Move m, int threshold) const {
 
     assert(piece_on(from) != NO_PIECE);
 
-    int swap = PieceValue[piece_on(to)] - threshold;
+    // A dark piece counts at the average value of the pieces left in its
+    // owner's pool: that is what it is worth, as a captured piece and as a
+    // piece that will be revealed on 'to' and may be captured in turn.
+    const Value darkValue[COLOR_NB] = {pieces(WHITE, DARK) ? dark_value(WHITE) : VALUE_ZERO,
+                                       pieces(BLACK, DARK) ? dark_value(BLACK) : VALUE_ZERO};
+    auto value_on = [&](Square s, Value typeValue) {
+        return is_dark(s) ? darkValue[color_of(piece_on(s))] : typeValue;
+    };
+
+    int swap = value_on(to, PieceValue[piece_on(to)]) - threshold;
     if (swap < 0)
         return false;
 
-    swap = PieceValue[piece_on(from)] - swap;
+    swap = value_on(from, PieceValue[piece_on(from)]) - swap;
     if (swap <= 0)
         return true;
 
@@ -974,7 +983,7 @@ bool Position::see_ge(Move m, int threshold) const {
         // bitboard 'attackers' any protential attackers when it is removed.
         if ((bb = stmAttackers & pieces(PAWN)))
         {
-            if ((swap = PawnValue - swap) < res)
+            if ((swap = value_on(lsb(bb), PawnValue) - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
@@ -986,14 +995,14 @@ bool Position::see_ge(Move m, int threshold) const {
 
         else if ((bb = stmAttackers & pieces(BISHOP)))
         {
-            if ((swap = BishopValue - swap) < res)
+            if ((swap = value_on(lsb(bb), BishopValue) - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
         }
 
         else if ((bb = stmAttackers & pieces(ADVISOR)))
         {
-            if ((swap = AdvisorValue - swap) < res)
+            if ((swap = value_on(lsb(bb), AdvisorValue) - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
@@ -1003,7 +1012,7 @@ bool Position::see_ge(Move m, int threshold) const {
 
         else if ((bb = stmAttackers & pieces(CANNON)))
         {
-            if ((swap = CannonValue - swap) < res)
+            if ((swap = value_on(lsb(bb), CannonValue) - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
@@ -1013,14 +1022,17 @@ bool Position::see_ge(Move m, int threshold) const {
 
         else if ((bb = stmAttackers & pieces(KNIGHT)))
         {
-            if ((swap = KnightValue - swap) < res)
+            if ((swap = value_on(lsb(bb), KnightValue) - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
         }
 
         else if ((bb = stmAttackers & pieces(ROOK)))
         {
-            swap = RookValue - swap;
+            // (A revealed rook is the most valuable attacker, a dark piece
+            // on a rook square may be worth less than the previous one)
+            if ((swap = value_on(lsb(bb), RookValue) - swap) < res)
+                break;
             occupied ^= least_significant_square_bb(bb);
 
             nonCannons |=

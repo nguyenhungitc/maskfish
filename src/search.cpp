@@ -1319,15 +1319,14 @@ moves_loop:  // When in check, search starts here
 
             if (capture || givesCheck)
             {
-                Piece capturedPiece = pos.piece_on(move.to_sq());
-                int   captHist =
-                  thisThread->captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];
+                int captHist =
+                  thisThread->captureHistory[movedPiece][move.to_sq()][pos.capture_type(move.to_sq())];
 
                 // Futility pruning for captures
                 if (!givesCheck && lmrDepth < 18 && !ss->inCheck)
                 {
                     Value futilityValue = ss->staticEval + 307 + 365 * lmrDepth
-                                        + PieceValue[capturedPiece] + 105 * captHist / 491
+                                        + pos.piece_value(move.to_sq()) + 105 * captHist / 491
                                         + 275 * (pruningTweaks && move.to_sq() == prevSq);
                     if (futilityValue <= alpha)
                         continue;
@@ -1517,8 +1516,8 @@ moves_loop:  // When in check, search starts here
 
         if (capture)
             ss->statScore =
-              786 * int(PieceValue[pos.captured_piece()]) / 100
-              + thisThread->captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())]
+              786 * int(pos.captured_value()) / 100
+              + thisThread->captureHistory[movedPiece][move.to_sq()][pos.captured_type()]
               - 4998;
         else
             ss->statScore = 2 * thisThread->mainHistory[us][move.from_to()]
@@ -1808,9 +1807,8 @@ moves_loop:  // When in check, search starts here
     // Bonus for prior capture countermove that caused the fail low
     else if (priorCapture && prevSq != SQ_NONE)
     {
-        Piece capturedPiece = pos.captured_piece();
-        assert(capturedPiece != NO_PIECE);
-        thisThread->captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 958;
+        assert(pos.captured_piece() != NO_PIECE);
+        thisThread->captureHistory[pos.piece_on(prevSq)][prevSq][pos.captured_type()] << 958;
     }
 
     if (PvNode)
@@ -2027,7 +2025,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 if (moveCount > 2)
                     continue;
 
-                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+                Value futilityValue = futilityBase + pos.piece_value(move.to_sq());
 
                 // If static eval + value of piece we are going to capture is
                 // much lower than alpha, we can prune this move.
@@ -2054,8 +2052,12 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                      <= 2861)
                 continue;
 
-            // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -114))
+            // Do not search moves with bad enough SEE values. A move that
+            // reveals or captures a dark piece is a chance node of up to 6
+            // (36 for both) outcomes: search it only if it wins material
+            // on average, otherwise even exchanges of dark pieces make the
+            // quiescence search explode.
+            if (!pos.see_ge(move, pos.move_dark(move) || pos.is_dark(move.to_sq()) ? 1 : -114))
                 continue;
         }
 
@@ -2503,7 +2505,7 @@ void update_all_stats(const Position& pos,
     else
     {
         // Increase stats for the best move in case it was a capture move
-        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));
+        capturedPiece = pos.capture_type(bestMove.to_sq());
         captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1264 / 1024;
     }
 
@@ -2517,7 +2519,7 @@ void update_all_stats(const Position& pos,
     for (Move move : capturesSearched)
     {
         movedPiece    = pos.moved_piece(move);
-        capturedPiece = type_of(pos.piece_on(move.to_sq()));
+        capturedPiece = pos.capture_type(move.to_sq());
         captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1184 / 1024;
     }
 }
