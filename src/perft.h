@@ -53,17 +53,25 @@ uint64_t perft(Position& pos, Depth depth) {
             cnt = 1, nodes++;
         else
         {
+            [[maybe_unused]] const bool mayCheck = pos.gives_check(m);
+
             pos.do_move(m, st);
 
             if (pos.is_dark(m.to_sq()))
             {
+                [[maybe_unused]] bool anyCheck = false;
+
                 cnt = 0;
                 for (const auto& [pc, num] : pos.rest_pieces(~pos.side_to_move()))
                 {
                     Piece fromPc = pos.do_flip(m.to_sq(), pc);
+                    anyCheck |= bool(pos.checkers());
                     cnt += count();
                     pos.undo_flip(m.to_sq(), fromPc);
                 }
+
+                // gives_check() of a move of a dark piece: some reveal checks
+                assert(mayCheck == anyCheck);
             }
             else
                 cnt = count();

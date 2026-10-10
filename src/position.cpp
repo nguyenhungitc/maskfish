@@ -502,8 +502,26 @@ bool Position::gives_check(Move m) const {
 
     PieceType pt = type_of(moved_piece(m));
 
+    // A dark piece moves like the piece of its starting square, but gives a
+    // direct check as the piece it turns out to be: the move may give check
+    // if any kind of piece left in the mover's pool would check from 'to'.
+    // (The discovered checks below do not depend on the revealed piece.)
+    if (move_dark(m))
+    {
+        const Bitboard occupied = (pieces() ^ from) | to;
+        auto           inPool   = [&](PieceType t) { return restPieces[make_piece(sideToMove, t)] > 0; };
+
+        if ((inPool(ROOK) && (attacks_bb<ROOK>(ksq, occupied) & to))
+            || (inPool(CANNON) && (attacks_bb<CANNON>(ksq, occupied) & to))
+            || (inPool(KNIGHT) && (attacks_bb<KNIGHT_TO>(ksq, occupied) & to))
+            || (inPool(PAWN) && (attacks_bb<PAWN_TO>(ksq, sideToMove) & to))
+            || (inPool(ADVISOR) && (attacks_bb<ADVISOR>(ksq) & to))
+            || (inPool(BISHOP) && (attacks_bb<BISHOP>(ksq, occupied) & to)))
+            return true;
+    }
+
     // Is there a direct check?
-    if (pt == CANNON && aligned(from, to, ksq))
+    else if (pt == CANNON && aligned(from, to, ksq))
     {
         if (attacks_bb<CANNON>(to, (pieces() ^ from) | to) & ksq)
             return true;
