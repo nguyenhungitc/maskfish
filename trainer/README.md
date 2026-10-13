@@ -1,7 +1,7 @@
 # Jieqi NNUE trainer
 
 A PyTorch toolkit to train NNUE networks for the Jieqi engine
-[Maskfish](https://github.com/official-maskfish/maskfish), from scratch (no network exists yet) to a usable network, and to test changes
+[Maskfish](https://github.com/nguyenhungitc/maskfish), from scratch (no network exists yet) to a usable network, and to test changes
 with SPRT matches.
 
 The networks are trained for exactly the engine's architecture (`src/nnue` of
@@ -11,7 +11,8 @@ and the pool), a 2048 feature transformer with 16 PSQT buckets, and 16 layer
 stacks 2048 → 16 → 32 → 1. The engine reads an exported network **bit-exactly**
 as the trainer computes it (`verify.py` checks this).
 
-Part of the design follows the trainers of AB-JChess and nnue-pytorch; the
+Part of the design follows the trainers of AB-JChess and
+[nnue-pytorch](https://github.com/official-stockfish/nnue-pytorch) (Stockfish); the
 code is written specifically for this engine's feature set and file format.
 
 ## Contents
@@ -73,22 +74,22 @@ The engine has two things dedicated to the trainer: the UCI option `RawScore`
 
 ### 3.1. Build the engine
 
-The commands of this README assume that Maskfish is cloned next to this
-repository, so that the engine is `../maskfish/src/maskfish`:
+The trainer is the `trainer` directory of the Maskfish repository. The
+commands of this README are run from that directory, so that the engine is
+`../src/maskfish`:
 
 ```
-cd ..
-git clone https://github.com/official-maskfish/maskfish.git
+git clone https://github.com/nguyenhungitc/maskfish.git
 cd maskfish/src
 make -j build ARCH=x86-64-avx2
-cd ../../nnue-pytorch
+cd ../trainer
 ```
 
 - Choose `ARCH` for your CPU (`make help` lists them, e.g. `x86-64-bmi2`,
   `x86-64-avx512`, `apple-silicon`). When generating data on several
   different machines, build on each machine.
 - The build does not download any network (`make net` only checks for
-  `maskfish/src/maskfish.nnue`). This does not matter here: every script
+  `src/maskfish.nnue`). This does not matter here: every script
   passes the Jieqi network with the `EvalFile` option.
 
 ### 3.2. Install Python
@@ -113,7 +114,7 @@ not need a GPU, only `numpy` and `zstandard` (and `torch` to run `verify.py`).
 ### 3.3. Check that the trainer matches the engine
 
 ```
-python verify.py --engine ../maskfish/src/maskfish
+python verify.py --engine ../src/maskfish
 ```
 
 The result must be `N/N positions bit-exact with the engine`. **If it does not
@@ -124,13 +125,13 @@ differently (usually because the engine's architecture changed, see
 ### 3.4. Directory layout (suggestion)
 
 ```
-nnue-pytorch/
+trainer/
   nets/      networks selected at each generation: gen0.nnue, gen1.nnue, ...
   data/      text data (genN.txt, valN.txt) and prepared data
   runs/      training output: runs/genN/epoch_K.pt, epoch_K.nnue, last.pt
 ```
 
-These directories are in `.gitignore`.
+These directories are in the `.gitignore` of the repository.
 
 ## 4. Training workflow in detail
 
@@ -164,7 +165,7 @@ enough to generate meaningful first data. The command also writes
 ### Step 2. Generate data
 
 ```
-python gen_data.py --engine ../maskfish/src/maskfish --net nets/gen0.nnue \
+python gen_data.py --engine ../src/maskfish --net nets/gen0.nnue \
     --games 50000 --nodes 5000 --workers 15 --seed 100 --out data/gen0.txt
 ```
 
@@ -172,7 +173,7 @@ Also generate a small **validation set**, with another seed, to monitor
 training:
 
 ```
-python gen_data.py --engine ../maskfish/src/maskfish --net nets/gen0.nnue \
+python gen_data.py --engine ../src/maskfish --net nets/gen0.nnue \
     --games 1000 --nodes 5000 --workers 15 --seed 999 --out data/val0.txt
 ```
 
@@ -330,7 +331,7 @@ short, but keep `last.pt` and the `.nnue` files.
 ### Step 5. Check the exported network
 
 ```
-python verify.py --engine ../maskfish/src/maskfish \
+python verify.py --engine ../src/maskfish \
     --net runs/gen1/epoch_40.nnue --checkpoint runs/gen1/epoch_40.pt
 ```
 
@@ -343,7 +344,7 @@ model and the integer network; a few dozen internal units is normal.
 Play the last few epochs against the current network:
 
 ```
-python match.py --engine ../maskfish/src/maskfish \
+python match.py --engine ../src/maskfish \
     --net-a runs/gen1/epoch_40.nnue --net-b nets/gen0.nnue \
     --nodes 20000 --workers 15 --sprt 0 5
 ```
@@ -516,13 +517,13 @@ python prepare_data.py data/gen3_ab.txt --out data/train3_ab --score-scale <361/
 
 ```
 # against AB (use --movetime: the node counts of the two engines are not comparable)
-python match.py --engine-a ../maskfish/src/maskfish --net-a nets/genN.nnue \
+python match.py --engine-a ../src/maskfish --net-a nets/genN.nnue \
     --engine-b AB-JChess/src/AB-JChess --net-b AB-JChess/src/abjchess-20260911.nnue \
     --opt-b ChasingRule=github --movetime 1000 --workers 15
 
 # against the old branch (no --net-b needed)
-python match.py --engine-a ../maskfish/src/maskfish --net-a nets/genN.nnue \
-    --engine-b ../jieqi-old/src/PikaJieQi --movetime 1000 --workers 15
+python match.py --engine-a ../src/maskfish --net-a nets/genN.nnue \
+    --engine-b ../../jieqi-old/src/PikaJieQi --movetime 1000 --workers 15
 ```
 
 `--sprt` is not needed to estimate the Elo: leave it out and set `--pairs`.
@@ -550,7 +551,7 @@ The engine has experimental options (see the Maskfish README); test them one at 
 time with `match.py`, with the same network:
 
 ```
-python match.py --engine ../maskfish/src/maskfish --net-a nets/genN.nnue \
+python match.py --engine ../src/maskfish --net-a nets/genN.nnue \
     --opt-a TTPenalize=true --nodes 20000 --workers 15 --sprt 0 3
 ```
 
@@ -571,11 +572,11 @@ the two architectures, since the object files are not rebuilt
 automatically):
 
 ```
-cd ../maskfish/src
+cd ../src
 make clean && make -j build ARCH=x86-64-avx2 nnue=att && mv maskfish maskfish-att
 make clean && make -j build ARCH=x86-64-avx2
-cd ../../nnue-pytorch
-python verify.py --engine ../maskfish/src/maskfish-att --arch att
+cd ../trainer
+python verify.py --engine ../src/maskfish-att --arch att
 ```
 
 **Train** on the same text data, prepared again with `--arch att`:
@@ -586,7 +587,7 @@ python prepare_data.py data/gen0.txt data/gen1.txt --out data/train_att --arch a
 python prepare_data.py data/val1.txt --out data/val_att --arch att
 python train.py data/train_att --val data/val_att --out runs/att1 \
     --epochs 40 --epoch-size 10000000
-python verify.py --engine ../maskfish/src/maskfish-att --net runs/att1/epoch_40.nnue
+python verify.py --engine ../src/maskfish-att --net runs/att1/epoch_40.nnue
 ```
 
 `train.py` takes the architecture from the data; `--init-net`, `--resume`,
@@ -597,8 +598,8 @@ an error on a mismatch. `init_net.py` is only needed to generate data with the
 **Compare** with a regular network trained on **the same data** (to be fair):
 
 ```
-python match.py --engine-a ../maskfish/src/maskfish-att --net-a runs/att1/epoch_40.nnue \
-    --engine-b ../maskfish/src/maskfish --net-b nets/genN.nnue \
+python match.py --engine-a ../src/maskfish-att --net-a runs/att1/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue \
     --nodes 20000 --workers 15 --sprt 0 5
 ```
 
@@ -625,13 +626,13 @@ defended pieces of its own side:
 compatible** with the other builds. Build separately (remember `make clean`):
 
 ```
-cd ../maskfish/src
+cd ../src
 make clean && make -j build ARCH=x86-64-avx2 threats=yes && mv maskfish maskfish-thr
 make clean && make -j build ARCH=x86-64-avx2 threats=yes nnue=att && mv maskfish maskfish-att-thr
 make clean && make -j build ARCH=x86-64-avx2
-cd ../../nnue-pytorch
-python verify.py --engine ../maskfish/src/maskfish-thr --arch threats
-python verify.py --engine ../maskfish/src/maskfish-att-thr --arch att-threats
+cd ../trainer
+python verify.py --engine ../src/maskfish-thr --arch threats
+python verify.py --engine ../src/maskfish-att-thr --arch att-threats
 ```
 
 **Train** as for `att`: the same text data, prepared again with
@@ -643,7 +644,7 @@ python prepare_data.py data/gen0.txt data/gen1.txt --out data/train_thr --arch t
 python prepare_data.py data/val1.txt --out data/val_thr --arch threats
 python train.py data/train_thr --val data/val_thr --out runs/thr1 \
     --epochs 40 --epoch-size 10000000 --checkpoint-every 10
-python verify.py --engine ../maskfish/src/maskfish-thr --net runs/thr1/epoch_40.nnue \
+python verify.py --engine ../src/maskfish-thr --net runs/thr1/epoch_40.nnue \
     --checkpoint runs/thr1/epoch_40.pt
 ```
 
@@ -668,8 +669,8 @@ trained on the same data using `--movetime` (or at least check again with
 `--movetime` after winning with `--nodes`):
 
 ```
-python match.py --engine-a ../maskfish/src/maskfish-thr --net-a runs/thr1/epoch_40.nnue \
-    --engine-b ../maskfish/src/maskfish --net-b nets/genN.nnue \
+python match.py --engine-a ../src/maskfish-thr --net-a runs/thr1/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
@@ -695,15 +696,15 @@ the suffix `-l2` (`default-l2`, `att-l2`, `threats-l2`, `att-threats-l2`). The
 input features do not change, so **prepared data can be shared**.
 
 ```
-cd ../maskfish/src
+cd ../src
 make clean && make -j build ARCH=x86-64-avx2 layers=2 && mv maskfish maskfish-l2
 make clean && make -j build ARCH=x86-64-avx2 layers=2 threats=yes && mv maskfish maskfish-thr-l2
 make clean && make -j build ARCH=x86-64-avx2
-cd ../../nnue-pytorch
-python verify.py --engine ../maskfish/src/maskfish-l2 --arch default-l2
+cd ../trainer
+python verify.py --engine ../src/maskfish-l2 --arch default-l2
 python train.py data/train --val data/val --out runs/l2 --layers 2 \
     --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
-python verify.py --engine ../maskfish/src/maskfish-l2 --net runs/l2/epoch_40.nnue \
+python verify.py --engine ../src/maskfish-l2 --net runs/l2/epoch_40.nnue \
     --checkpoint runs/l2/epoch_40.pt
 ```
 
@@ -719,8 +720,8 @@ self-play positions, CPU, 15 epochs, so only indicative): validation loss
 Compare with `--movetime`:
 
 ```
-python match.py --engine-a ../maskfish/src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
-    --engine-b ../maskfish/src/maskfish --net-b nets/genN.nnue \
+python match.py --engine-a ../src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
@@ -775,7 +776,7 @@ Training speed depends on the GPU; run a small epoch first
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `verify.py` reports `MISMATCH` | The engine and the trainer do not use the same architecture. Use matching versions of Maskfish and nnue-pytorch and rebuild the engine; for `att` / `threats` remember `make clean` and the matching `--arch` |
+| `verify.py` reports `MISMATCH` | The engine and the trainer do not use the same architecture. Use the engine and the trainer of the same Maskfish commit and rebuild the engine; for `att` / `threats` remember `make clean` and the matching `--arch` |
 | The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att` and `layers=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
 | `no threat data (prepare the data again ...)` | The data was prepared by an old version of `prepare_data.py`; run it again with `--arch threats` |
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |

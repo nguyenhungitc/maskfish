@@ -154,11 +154,12 @@ void Network<Arch, Transformer>::verify(std::string                             
                                "including the directory name, to the network file.";
             std::string msg4 =
               "A Jieqi network (default name " + std::string(evalFile.defaultName)
-              + ") can be trained with https://github.com/official-maskfish/nnue-pytorch";
+              + ") can be trained with the trainer in the trainer/ directory of "
+                  "https://github.com/nguyenhungitc/maskfish";
             std::string msg5 = "The engine will be terminated now.";
             if (oldVersionFile)
                 msg3 = "The network file has an old format (16-bit weights): convert it with "
-                       "serialize.py --upgrade (nnue-pytorch).";
+                       "trainer/serialize.py --upgrade.";
 
             std::string msg = "ERROR: " + msg1 + '\n' + "ERROR: " + msg2 + '\n' + "ERROR: " + msg3
                             + '\n' + "ERROR: " + msg4 + '\n' + "ERROR: " + msg5 + '\n';

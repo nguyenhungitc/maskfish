@@ -11,7 +11,7 @@ result: 1 / 0 / -1 = win / draw / loss for the side to move.
 Positions in check and positions whose best move is a capture are skipped
 (their static evaluation is not meaningful), like in other NNUE trainers.
 
-    python gen_data.py --engine ../maskfish/src/maskfish --net current.nnue \
+    python gen_data.py --engine ../src/maskfish --net current.nnue \
         --games 1000 --nodes 5000 --workers 8 --out data/gen1.txt \
         [--opt ChanceScaling=400 ...] [--seed 1]
 

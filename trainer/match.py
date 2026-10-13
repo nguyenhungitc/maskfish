@@ -1,11 +1,11 @@
 """Plays Jieqi games between two engines / networks / option sets, with an
 SPRT, to decide whether a change is an improvement.
 
-    python match.py --engine ../maskfish/src/maskfish \
+    python match.py --engine ../src/maskfish \
         --net-a runs/gen2/epoch_100.nnue --net-b nets/gen1.nnue \
         --nodes 20000 --workers 15 --sprt 0 5
 
-    python match.py --engine ../maskfish/src/maskfish --net-a nets/gen1.nnue \
+    python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
         --opt-a TTPenalize=true --nodes 20000 --sprt 0 3
 
 A is the version being tested, B the reference (by default B uses the same

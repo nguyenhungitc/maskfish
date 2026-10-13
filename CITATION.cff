@@ -9,8 +9,8 @@ message: >-
 type: software
 authors:
   - name: The Maskfish developers (see AUTHORS file)
-repository-code: 'https://github.com/official-maskfish/maskfish'
-url: 'https://github.com/official-maskfish/maskfish'
+repository-code: 'https://github.com/nguyenhungitc/maskfish'
+url: 'https://github.com/nguyenhungitc/maskfish'
 abstract: Maskfish is a free and strong UCI jieqi engine.
 keywords:
   - jieqi

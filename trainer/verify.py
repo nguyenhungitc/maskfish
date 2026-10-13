@@ -1,7 +1,7 @@
 """Checks that a network exported by serialize.py is read by the engine exactly
 as the trainer computes it.
 
-    python verify.py --engine ../maskfish/src/maskfish [--net out.nnue] [--positions 200]
+    python verify.py --engine ../src/maskfish [--net out.nnue] [--positions 200]
 
 Without --net, a randomly initialized model is exported to a temporary file.
 For each position (random Jieqi games played with real hidden identities),

@@ -139,7 +139,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("ChanceBranchDepth", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
-    // with SPRT (match.py --opt-a Name=true, nnue-pytorch).
+    // with SPRT (trainer/match.py --opt-a Name=true).
     // Continuation correction history also from the move 4 plies back.
     options.add("ContCorr4Ply", Option(false));
     // On a multi-cut, penalize the ttMove in ttMoveHistory and use the cut
@@ -225,7 +225,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
     // Score -> win rate scale used to average chance nodes (0 = built-in
-    // 360.83524). fit_scaling.py (nnue-pytorch) fits it from self-play data.
+    // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));
     // Risk preference of the side causing a chance event, in percent of the
     // standard deviation of the outcomes' win rates: > 0 avoids uncertain

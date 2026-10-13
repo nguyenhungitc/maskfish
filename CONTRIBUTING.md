@@ -63,8 +63,8 @@ Maskfish needs a Jieqi network, and the network is where a lot of the strength
 will come from. You can help with:
 
 - **Network training and data.** Self-play data generation, training, export
-  and verification are done with
-  [nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch). Better
+  and verification are done with the
+  [trainer](./trainer/) of this repository. Better
   data, better training settings and better architectures are all welcome.
 - **Feature design.** The current feature set (`HalfKAv2_hm` plus dark-piece
   and pool features) is a first attempt. Ideas for representing hidden
@@ -94,7 +94,7 @@ one so that we don't duplicate work.
    `HiddenCaptureModel`, `ChanceRiskAversion`, `JieqiMaterial`, ...). Each one
    should be proven by an SPRT test or removed. Options that fail should be
    deleted, not kept as dead code.
-3. **Fit `ChanceScaling`** with `fit_scaling.py` from nnue-pytorch and report
+3. **Fit `ChanceScaling`** with `trainer/fit_scaling.py` and report
    the value you get.
 4. **A shared testing setup.** Maskfish does not have a distributed testing
    framework like Fishtest yet. A simple, reliable way for volunteers to donate
@@ -139,7 +139,7 @@ welcome in the issue tracker too.
 
 - **Functional changes** (search, evaluation, move generation) must be tested
   against the current version of Maskfish, for example with an SPRT test run
-  with `match.py` of [nnue-pytorch][nnue-pytorch-link]. Include the test
+  with [`trainer/match.py`][trainer-link]. Include the test
   results and the new bench in the pull request description.
 - **Changes to move generation or to `Position`** must keep the `go perft`
   counts checked by `tests/perft.sh` unchanged.
@@ -204,5 +204,5 @@ more details.
 
 Thank you for contributing to Maskfish and helping us make it even better!
 
-[issue-tracker-link]: https://github.com/official-maskfish/maskfish/issues
-[nnue-pytorch-link]: https://github.com/official-maskfish/nnue-pytorch
+[issue-tracker-link]: https://github.com/nguyenhungitc/maskfish/issues
+[trainer-link]: ./trainer/match.py

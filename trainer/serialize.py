@@ -231,7 +231,7 @@ def quantize(model) -> dict:
     return q
 
 
-def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with nnue-pytorch"):
+def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with the Maskfish trainer"):
     buf = io.BytesIO()
     desc = description.encode("utf-8")
     buf.write(struct.pack("<III", VERSION, network_hash(), len(desc)))
@@ -446,7 +446,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source")
     ap.add_argument("target")
-    ap.add_argument("--description", default="Jieqi NNUE trained with nnue-pytorch")
+    ap.add_argument("--description", default="Jieqi NNUE trained with the Maskfish trainer")
     ap.add_argument("--to-checkpoint", action="store_true",
                     help="convert a .nnue file into a checkpoint to continue training")
     ap.add_argument("--upgrade", action="store_true",

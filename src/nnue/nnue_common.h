@@ -60,7 +60,7 @@ using ThreatWeightType = std::int8_t;
 using IndexType        = std::uint32_t;
 
 // Version of the evaluation file (0x7AF32F20: 16-bit feature transformer
-// weights, which serialize.py --upgrade of nnue-pytorch converts)
+// weights, which trainer/serialize.py --upgrade converts)
 constexpr std::uint32_t Version    = 0x7AF32F21u;
 constexpr std::uint32_t OldVersion = 0x7AF32F20u;
 

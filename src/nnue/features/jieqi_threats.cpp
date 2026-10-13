@@ -103,7 +103,7 @@ bool class_square(int cls, int s) {
 
 // Every square the class could attack from s on some board, as a bitset over
 // squares (sliders on an empty board, cannons with a screen next to them).
-// Written with plain loops, like jieqi_features.py of nnue-pytorch, so that both
+// Written with plain loops, like trainer/jieqi_features.py, so that both
 // enumerate exactly the same features.
 void empty_targets(int cls, int s, bool out[SQUARE_NB]) {
     std::fill(out, out + SQUARE_NB, false);

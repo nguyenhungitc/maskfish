@@ -1,5 +1,5 @@
 <div align="center">
-<img src="https://github.com/official-maskfish.png" width="120" alt="Maskfish logo">
+<img src="https://github.com/nguyenhungitc.png" width="120" alt="Maskfish logo">
 <h3>Maskfish</h3>
 Luck is a skill too.
 <br>
@@ -139,7 +139,7 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 | `TTPenalize` | `false` | Lowers by one the depth of a TT entry that is deep enough but whose bound cannot produce a cutoff, so it is replaced sooner. |
 | `ChanceBranchDepth` | `false` | In a reveal, the outcomes after the most likely one are searched one ply shallower. |
 | `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of the value of the piece that starts on its square). |
-| `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with `fit_scaling.py` of [nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch). |
+| `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with [`trainer/fit_scaling.py`](trainer/fit_scaling.py). |
 | `ChanceRiskAversion` | `0` | Risk preference, in percent of the standard deviation of the outcomes, of the side whose move causes a chance event: positive avoids uncertain reveals/captures, negative seeks them. |
 
 The bonus is in internal score units and clamped to -192..192. Setting all
@@ -155,7 +155,7 @@ default and described next to their definition in `src/engine.cpp`:
 `ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
 `CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
 `RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory` and
-`SharedHistory`. Test them with `match.py --opt-a Name=true` of nnue-pytorch; the ones
+`SharedHistory`. Test them with `trainer/match.py --opt-a Name=true`; the ones
 that fail should be removed rather than kept as dead options.
 
 ### Debugging commands
@@ -167,7 +167,7 @@ It does not need a network.
 `evalraw` prints the raw network output (PSQT and layer parts, in internal
 units) and the layer stack used. The option `RawScore` makes `info ... score cp`
 report internal units instead of normalized centipawns. Both are used by the
-trainer ([nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch)).
+[trainer](trainer/).
 
 ## Network
 
@@ -182,9 +182,10 @@ the first `go`.
 
 ### Training a network
 
-The trainer for Maskfish's network is a separate repository,
-[nnue-pytorch](https://github.com/official-maskfish/nnue-pytorch): a PyTorch trainer (self-play data generation,
-training, export, and a bit-exact check against the engine). See its README.
+The trainer for Maskfish's networks is in the [`trainer`](trainer/) directory of
+this repository: a PyTorch toolkit (self-play data generation, training,
+export, and a bit-exact check against the engine). See
+[`trainer/README.md`](trainer/README.md).
 
 ## Compiling
 
@@ -220,7 +221,7 @@ compatible with the default one, and rejected by a default build):
   canonical orientation (dark pieces count as the kind of their square).
 
 Both ideas come from Pikafish (xiangqi) and are also used by AB-JChess. Train
-such a network with `--arch att` in nnue-pytorch, and compare it with a default
+such a network with `--arch att` in the trainer, and compare it with a default
 network trained on the same data before adopting it.
 
 `make -j build threats=yes` (possibly with `nnue=att`) adds **threat
@@ -230,7 +231,7 @@ on the board, 92711 features (not those of the kings), where a dark piece attack
 piece of its starting square. The feature transformer has 1024 outputs
 instead of 2048. The engine is about a third slower and needs about 90 MB
 more memory for the network. Train such a network with `--arch threats` (or
-`att-threats`); see section 7.3 of the nnue-pytorch README.
+`att-threats`); see section 7.3 of the [trainer README](trainer/README.md).
 
 `make -j build layers=2` (combinable with the options above) uses the layer
 stacks of Pikafish's "Update nnue-architecture": the first layer has 32
@@ -238,7 +239,7 @@ outputs, all of them activated, the second layer gets a squared activation
 too, the last layer is fed by all the activations of both, and the direct
 term is the difference of the last two outputs of the first layer. The engine
 is about 10% slower. Train such a network with `train.py --layers 2` (section
-7.4 of the nnue-pytorch README); it can start from the feature transformer of a
+7.4 of the [trainer README](trainer/README.md)); it can start from the feature transformer of a
 network with the current layer stacks.
 
 `make -j build psqt=no` (combinable with the options above) builds the engine
@@ -246,9 +247,10 @@ for a network **without PSQT outputs**, as Pikafish's SFNNv17: the feature
 transformer keeps only its L1 outputs and the evaluation is the layer-stack
 output alone. Such networks have a different hash (`0x5E0D0000` is xored into
 the feature-transformer hash), so they are rejected by a build with PSQT and
-vice versa. Train them with `train.py --no-psqt` (architecture names get a
-`-nopsqt` suffix; see section 7.5 of the nnue-pytorch README, also about the
-quantization). The default build keeps the PSQT outputs.
+vice versa. The trainer in `trainer/` does not support this architecture yet
+(it has no `--no-psqt` option and always exports PSQT weights), so no such
+network can be trained with it for now. The default build keeps the PSQT
+outputs.
 
 ## Contributing
 
