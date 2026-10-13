@@ -300,10 +300,16 @@ inline Bitboard Position::attacks_by(Color c) const {
     Bitboard threats   = 0;
     Bitboard attackers = pieces(c, Pt);
     while (attackers)
-        if (Pt == PAWN)
-            threats |= Attacks::attacks_bb(PAWN, pop_lsb(attackers), c);
+    {
+        const Square s = pop_lsb(attackers);
+        if constexpr (Pt == PAWN)
+            threats |= Attacks::attacks_bb(PAWN, s, c);
+        else if constexpr (Pt == ADVISOR)
+            // A dark advisor must stay in the palace
+            threats |= Attacks::attacks_bb(ADVISOR, s) & (is_dark(s) ? Palace : ~Bitboard(0));
         else
-            threats |= Attacks::attacks_bb(Pt, pop_lsb(attackers), pieces());
+            threats |= Attacks::attacks_bb(Pt, s, pieces());
+    }
     return threats;
 }
 

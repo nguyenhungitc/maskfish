@@ -415,19 +415,23 @@ void Position::update_blockers() const {
 // Slider attacks use the occupied bitboard to indicate occupancy.
 Bitboard Position::attackers_to(Square s, Bitboard occupied) const {
 
+    // A dark advisor must stay in the palace: it attacks no square outside
+    const Bitboard advisors = Palace & s ? pieces(ADVISOR) : pieces(ADVISOR) & ~pieces(DARK);
+
     return (attacks_bb(PAWN_TO, s, WHITE) & pieces(WHITE, PAWN))
          | (attacks_bb(PAWN_TO, s, BLACK) & pieces(BLACK, PAWN))
          | (attacks_bb(KNIGHT_TO, s, occupied) & pieces(KNIGHT))
          | (attacks_bb(ROOK, s, occupied) & pieces(ROOK))
          | (attacks_bb(CANNON, s, occupied) & pieces(CANNON))
          | (attacks_bb(BISHOP, s, occupied) & pieces(BISHOP))
-         | (attacks_bb(ADVISOR, s) & pieces(ADVISOR)) | (attacks_bb(KING, s) & pieces(KING));
+         | (attacks_bb(ADVISOR, s) & advisors) | (attacks_bb(KING, s) & pieces(KING));
 }
 
 
 // Computes a bitboard of all pieces of a given color
 // which gives check to a given square. Slider attacks use the occupied bitboard
-// to indicate occupancy.
+// to indicate occupancy. The square is one of a king, in the palace: dark
+// advisors need no special care (see attackers_to()).
 Bitboard Position::checkers_to(Color c, Square s, Bitboard occupied) const {
 
     return ((attacks_bb(PAWN_TO, s, c) & pieces(PAWN))
@@ -1209,6 +1213,10 @@ uint16_t Position::chased(Color c) {
         Square    from         = pop_lsb(attackers);
         PieceType attackerType = type_of(piece_on(from));
         Bitboard  attacks      = attacks_bb(attackerType, from, pieces());
+
+        // A dark advisor must stay in the palace
+        if (attackerType == ADVISOR && is_dark(from))
+            attacks &= Palace;
 
         // Restrict to pinners if pinned, otherwise exclude attacks on unpromoted pawns and checks
         if (blockers_for_king(sideToMove) & from)
