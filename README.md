@@ -1,12 +1,3 @@
-<div align="center">
-<img src="https://github.com/nguyenhungitc.png" width="120" alt="Maskfish logo">
-<h3>Maskfish</h3>
-Luck is a skill too.
-<br>
-<br>
-<br>
-</div>
-
 ## Overview
 
 Maskfish adapts Pikafish, a free UCI xiangqi engine derived
