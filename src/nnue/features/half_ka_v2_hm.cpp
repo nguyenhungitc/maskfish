@@ -119,6 +119,9 @@ void HalfKAv2_hm::append_changed_indices(
 
     if (dp.remove_sq != SQ_NONE)
         removed.push_back(make_index<Perspective>(dp.remove_sq, dp.remove_pc, bucket, mirror));
+
+    if (dp.rest_remove_pc != NO_PIECE)
+        removed.push_back(make_dark_rest_index<Perspective>(dp.rest_remove_pc, bucket));
 }
 
 // Explicit template instantiations

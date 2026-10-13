@@ -358,7 +358,11 @@ void AccumulatorStack::forward_update_incremental(
 
     for (std::size_t next = begin + 1; next < size; next++)
     {
-        if (next + 1 < size)
+        // A capture that removes a piece from the pool (hidden capture
+        // model) is updated on its own: the double update is limited to 5
+        // removed features.
+        if (next + 1 < size && accumulators[next].dirtyPiece.rest_remove_pc == NO_PIECE
+            && accumulators[next + 1].dirtyPiece.rest_remove_pc == NO_PIECE)
         {
             DirtyPiece& dp1 = accumulators[next].dirtyPiece;
             DirtyPiece& dp2 = accumulators[next + 1].dirtyPiece;
@@ -584,7 +588,9 @@ void update_accumulator_incremental(
     // feature set's update cost calculation to be correct and never allow
     // updates with more added/removed features than MaxActiveDimensions.
     // In this case, the maximum size of both feature addition and removal
-    // is 2, since we are incrementally updating one move at a time.
+    // is 2, since we are incrementally updating one move at a time. (Jieqi: a
+    // dark piece that captures a dark piece, is revealed, and whose capture
+    // teaches the identity of the captured piece removes 4 features.)
     FeatureSet::IndexList removed, added;
     if constexpr (Forward)
         FeatureSet::append_changed_indices<Perspective>(bucket, mirror, target_state.dirtyPiece,
@@ -593,16 +599,16 @@ void update_accumulator_incremental(
         FeatureSet::append_changed_indices<Perspective>(bucket, mirror, computed.dirtyPiece, added,
                                                         removed);
 
-    assert(added.size() == 1 || added.size() == 2 || added.size() == 3);
-    assert(removed.size() == 1 || removed.size() == 2 || removed.size() == 3);
+    assert(added.size() >= 1 && added.size() <= 4);
+    assert(removed.size() >= 1 && removed.size() <= 4);
     assert((Forward && added.size() <= removed.size())
            || (!Forward && added.size() >= removed.size()));
 
     // Workaround compiler warning for uninitialized variables, replicated on
     // profile builds on windows with gcc 14.2.0.
     // TODO remove once unneeded
-    sf_assume(added.size() == 1 || added.size() == 2 || added.size() == 3);
-    sf_assume(removed.size() == 1 || removed.size() == 2 || removed.size() == 3);
+    sf_assume(added.size() >= 1 && added.size() <= 4);
+    sf_assume(removed.size() >= 1 && removed.size() <= 4);
 
     auto updateContext =
       make_accumulator_update_context<Perspective>(featureTransformer, computed, target_state);
@@ -625,9 +631,19 @@ void update_accumulator_incremental(
     {
         updateContext.template apply<Add, Add, Sub>(added[0], added[1], removed[0]);
     }
+    else if (Forward && added.size() == 1 && removed.size() == 4)
+    {
+        updateContext.template apply<Add, Sub, Sub, Sub, Sub>(added[0], removed[0], removed[1],
+                                                              removed[2], removed[3]);
+    }
     else if (!Forward && removed.size() == 1 && added.size() == 3)
     {
         updateContext.template apply<Add, Add, Add, Sub>(added[0], added[1], added[2], removed[0]);
+    }
+    else if (!Forward && removed.size() == 1 && added.size() == 4)
+    {
+        updateContext.template apply<Add, Add, Add, Add, Sub>(added[0], added[1], added[2],
+                                                              added[3], removed[0]);
     }
     else
     {

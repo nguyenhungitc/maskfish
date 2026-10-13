@@ -299,6 +299,10 @@ struct DirtyPiece {
     Square remove_sq, add_sq;
     Piece  remove_pc, add_pc;
 
+    // A piece taken out of the pool of unrevealed pieces (the identity of a
+    // captured dark piece, learned by the capturer), or NO_PIECE
+    Piece rest_remove_pc;
+
     bool requires_refresh[2];
 };
 

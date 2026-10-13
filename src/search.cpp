@@ -2381,10 +2381,12 @@ Value Search::Worker::hidden_capture_search(
         return v;
     }
 
-    // The pool features of the NNUE are only rebuilt on a full refresh, so
-    // mark the capture as requiring one for both perspectives.
+    // The capture also takes the piece out of the pool: one more feature
+    // removed by the incremental update of the NNUE accumulator. (When the
+    // parent searches the capture again, rest_remove_pc still holds the last
+    // outcome of the previous call: every outcome sets it.)
     DirtyPiece dp = accumulatorStack.latest().dirtyPiece;
-    dp.requires_refresh[WHITE] = dp.requires_refresh[BLACK] = true;
+    assert(dp.remove_sq != SQ_NONE);
 
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
@@ -2394,6 +2396,7 @@ Value Search::Worker::hidden_capture_search(
         branchReduction.restore();
         accumulatorStack.pop();
         pos.remove_rest_piece(piece);
+        dp.rest_remove_pc = piece;
         accumulatorStack.push(dp);
 
         const Value value = isQsearch ? qsearch<nodeType>(pos, ss, a, b)

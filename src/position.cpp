@@ -727,6 +727,7 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     dp.from   = from;
     dp.to     = moveDark ? SQ_NONE : to;
     dp.add_sq = SQ_NONE;
+    dp.rest_remove_pc = NO_PIECE;
 
     assert(color_of(pc) == us);
     assert(captured == NO_PIECE || color_of(captured) == them);
