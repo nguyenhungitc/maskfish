@@ -38,8 +38,6 @@
 
 namespace Maskfish {
 
-class TranspositionTable;
-
 // StateInfo struct stores information needed to restore a Position object to
 // its previous state when we retract a move. Whenever a move is made on the
 // board (by calling Position::do_move), a StateInfo object must be passed.
@@ -139,16 +137,12 @@ class Position {
     bool  move_dark(Move m) const;
 
     // Doing and undoing moves
-    void       do_move(Move m, StateInfo& newSt, const TranspositionTable* tt);
-    DirtyPiece do_move(Move                      m,
-                       StateInfo&                newSt,
-                       bool                      givesCheck,
-                       const TranspositionTable* tt);
+    void       do_move(Move m, StateInfo& newSt);
+    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck);
     void       undo_move(Move m);
     void       do_null_move(StateInfo& newSt);
     void       undo_null_move();
-    Piece
-    do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr, const TranspositionTable* tt = nullptr);
+    Piece do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr);
     void undo_flip(Square s, Piece fromPc);
 
     // Take one piece out of / put it back into the pool of unrevealed pieces,
@@ -164,6 +158,7 @@ class Position {
     // Accessing hash keys
     Key key() const;
     Key prefetch_key(Move m) const;
+    Key flip_key(Square s, Piece pc) const;
     Key pawn_key() const;
     Key minor_piece_key() const;
     Key non_pawn_key(Color c) const;
@@ -498,8 +493,8 @@ inline void Position::move_piece(Square from, Square to) {
 #endif
 }
 
-inline void Position::do_move(Move m, StateInfo& newSt, const TranspositionTable* tt = nullptr) {
-    do_move(m, newSt, gives_check(m), tt);
+inline void Position::do_move(Move m, StateInfo& newSt) {
+    do_move(m, newSt, gives_check(m));
 }
 
 inline StateInfo* Position::state() const { return st; }

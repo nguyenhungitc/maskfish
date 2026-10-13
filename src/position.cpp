@@ -34,7 +34,6 @@
 #include "bitboard.h"
 #include "misc.h"
 #include "movegen.h"
-#include "tt.h"
 #include "uci.h"
 
 using std::string;
@@ -563,7 +562,7 @@ bool Position::gives_check(Move m) const {
 }
 
 
-Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionTable* tt) {
+Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp) {
 
     assert(is_ok(s) && is_dark(s));
     assert(!check_info_valid());  // Called right after the move of the dark piece
@@ -613,9 +612,6 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionT
         if (type_of(pc) != KING && (type_of(pc) & 1))
             st->majorMaterial[us] += PieceValue[pc];
     }
-
-    if (tt)
-        prefetch(tt->first_entry(key()));
 
     // Update king attacks used for fast check detection
     set_check_info();
@@ -697,12 +693,9 @@ void Position::restore_rest_piece(Piece pc) {
 // Makes a move, and saves all information necessary
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.
-// If a pointer to the TT table is passed, the entry for the new position
-// will be prefetched, and likewise for the shared histories.
-DirtyPiece Position::do_move(Move                      m,
-                             StateInfo&                newSt,
-                             bool                      givesCheck,
-                             const TranspositionTable* tt) {
+// The search prefetches the TT entry of the new position itself (the TT key
+// depends on the observer, see Search::observer_tt_key()).
+DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -810,11 +803,9 @@ DirtyPiece Position::do_move(Move                      m,
     // Update hash key
     k ^= moveDark ? Zobrist::psq[DARK_PIECE][from] : Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
 
-    // Update the key with the final value, and prefetch the TT entry as early
-    // as possible (the key of a dark move is completed by the reveal)
+    // Update the key with the final value (the key of a dark move is
+    // completed by the reveal)
     st->key = k;
-    if (!moveDark && tt)
-        prefetch(tt->first_entry(key()));
 
     // If the moving piece is a pawn, update pawn hash key.
     if (type_of(pc) == PAWN)
@@ -882,6 +873,16 @@ Key Position::prefetch_key(Move m) const {
         return k ^ Zobrist::psq[is_dark(to) ? DARK_PIECE : captured][to];
 
     return adjust_key40<true>(k);
+}
+
+
+// Key of the position after do_flip(s, pc), as returned by key(), to
+// prefetch its TT entry before the reveal is made. Exact: a reveal changes
+// neither the rule 40 counter nor the repetition filter.
+Key Position::flip_key(Square s, Piece pc) const {
+    assert(is_dark(s) && color_of(pc) == ~sideToMove && restPieces[pc] > 0);
+
+    return adjust_key40(st->key ^ Zobrist::psq[pc][s] ^ Zobrist::rest[pc][restPieces[pc] - 1]);
 }
 
 

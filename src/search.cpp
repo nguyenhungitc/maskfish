@@ -749,9 +749,9 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
     // Prefetch the TT entry of the next position as soon as the move is known
     // (a move of a dark piece is completed by the reveal: no prefetch)
     if (!pos.move_dark(move))
-        prefetch(tt.first_entry(pos.prefetch_key(move)));
+        prefetch(tt.first_entry(observer_tt_key(pos.prefetch_key(move), rootObserver)));
 
-    DirtyPiece dp = pos.do_move(move, st, givesCheck, &tt);
+    DirtyPiece dp = pos.do_move(move, st, givesCheck);
     // Preferable over fetch_add to avoid locking instructions (only this
     // thread writes its node count)
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
@@ -760,7 +760,7 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st) {
     pos.do_null_move(st);
-    prefetch(tt.first_entry(pos.key()));
+    prefetch(tt.first_entry(observer_tt_key(pos.key(), rootObserver)));
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -2437,10 +2437,15 @@ Value Search::Worker::flip_search(
         const Piece piece = restPieces[i].first;
 
         branchReduction.restore();
+        // Prefetch the TT entry of the outcome as early as possible
+        const Key flipKey = pos.flip_key(flipSq, piece);
+        prefetch(tt.first_entry(observer_tt_key(flipKey, rootObserver)));
+
         DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();
-        const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp, &tt);
+        const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp);
         accumulatorStack.push(dp);
+        assert(pos.key() == flipKey);
 
         // Optionally search the less likely outcomes one ply shallower
         const Value value =
@@ -2770,7 +2775,7 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
     if (pv[0] == Move::none() || pos.move_dark(pv[0]))
         return false;
 
-    pos.do_move(pv[0], st, &tt);
+    pos.do_move(pv[0], st);
 
     // No ponder move if the best move ends the game (e.g. a draw by repetition)
     Value result;

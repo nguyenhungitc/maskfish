@@ -192,11 +192,13 @@ struct SharedState {
 
 class Worker;
 
-// TT key for a position searched for the given observer. Only the low 16 bits
-// (stored in the TT entry) change, so the cluster, and the prefetch done by
-// Position::do_move(), stay (almost always) the same.
+// TT key for a position searched for the given observer (the side whose
+// knowledge of the pool the search models, see HiddenCaptureModel). All 64
+// bits change, so that the entries of the two observers fall in different
+// clusters instead of competing for the slots of the same one. The search
+// prefetches TT entries with this key (Position does not know the observer).
 inline Key observer_tt_key(Key positionKey, Color observer) {
-    return observer == WHITE ? positionKey : positionKey ^ Key(0x9E37);
+    return observer == WHITE ? positionKey : positionKey ^ Key(0xA3B195354A39B70DULL);
 }
 
 // Null Object Pattern, implement a common interface for the SearchManagers.
