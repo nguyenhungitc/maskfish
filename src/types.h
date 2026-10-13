@@ -124,7 +124,10 @@ constexpr bool Is64Bit = false;
 using Key      = u64;
 using Bitboard = u128;
 
-constexpr int MAX_MOVES = 128;
+// Jieqi has more moves than xiangqi: revealed advisors and bishops leave their
+// area, and a dark piece on a rook, cannon or knight square moves like one in
+// addition to the revealed pieces of that kind (e.g. up to four rook movers)
+constexpr int MAX_MOVES = 256;
 
 // Maximum number of pieces of one kind in the pool of unrevealed pieces
 // (5 pawns; 2 of every other kind, the king is never hidden)

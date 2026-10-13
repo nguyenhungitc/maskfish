@@ -198,6 +198,8 @@ class Position {
 
     // Position consistency check, for debugging
     bool pos_is_ok() const;
+    // Whether the position can be searched (kings, piece counts, pool, side not
+    // to move not in check), with the reason when it cannot
     bool pool_is_consistent(std::string* reason = nullptr) const;
     bool is_playable() const;
     void flip();

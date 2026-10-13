@@ -278,7 +278,10 @@ size_t ThreadPool::num_threads() const { return threads.size(); }
 
 // Wakes up main thread waiting in idle_loop() and returns immediately.
 // Main thread will wake up other threads and start the search.
-void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::LimitsType limits) {
+void ThreadPool::start_thinking(Position&          pos,
+                                StateListPtr&      states,
+                                Search::LimitsType limits,
+                                bool               searchable) {
 
     main_thread()->wait_for_search_finished();
 
@@ -289,10 +292,10 @@ void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::Lim
 
     Search::RootMoves rootMoves;
 
-    // A board that cannot be played (see Position::is_playable(), reported as
-    // invalid by Engine::set_position()) is not searched: no root moves,
-    // "bestmove (none)"
-    if (pos.is_playable())
+    // A board that cannot be played (see Position::pool_is_consistent()), or a
+    // position set up with an invalid move (searchable is false, see
+    // Engine::set_position()), is not searched: no root moves, "bestmove (none)"
+    if (searchable && pos.is_playable())
     {
         const auto legalmoves = MoveList<LEGAL>(pos);
 

@@ -63,10 +63,13 @@ xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w R2A2C2P5N2B2r2a2c2
   still unknown, as `<letter><digit>` pairs, e.g. `R2A2C2P5N2B2r2a2c2p5n2b2`.
   The pool also contains captured dark pieces whose identity was never
   reported. Each side needs at least as many pieces in its pool as it has dark
-  pieces on the board; otherwise the engine prints
-  `info string Invalid position: ...`. A board without exactly one king per
-  side is not searched at all (`go` answers `bestmove (none)`) and the moves
-  that follow the FEN are ignored.
+  pieces on the board.
+* The position is checked: exactly one king per side, in its palace; for every
+  kind of piece, the revealed pieces on the board plus the pool do not exceed
+  the initial number (2 rooks, 5 pawns, ...); the pool condition above; and the
+  side not to move is not in check. Otherwise the engine prints
+  `info string Invalid position: ...`, ignores the moves that follow the FEN,
+  and does not search (`go` answers `bestmove (none)`).
 * No-capture counter in plies, and the move number.
 
 `position startpos` uses the FEN above.
@@ -90,7 +93,9 @@ corresponding pool. The identity of a captured dark piece is optional because
 the owner of that piece may not be told what it was.
 
 If a move is illegal or its letters are invalid, the engine prints
-`info string Invalid move ...` and ignores that move and all following ones.
+`info string Invalid move ...`, ignores that move and all following ones, and
+does not search the position (`go` answers `bestmove (none)`): searching the
+position before the invalid move would return a move for the wrong side.
 
 Examples:
 

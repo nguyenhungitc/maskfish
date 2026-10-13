@@ -74,7 +74,7 @@ class Engine {
     void wait_for_search_finished();
     // set a new position, moves are in UCI format
     // Moves of dark pieces carry the revealed piece (see README). Invalid input
-    // is reported with "info string" and the rest of the moves is ignored.
+    // is reported with "info string" and the position is not searched.
     void set_position(const std::string& fen, const std::vector<std::string>& moves);
 
     // modifiers
@@ -125,6 +125,10 @@ class Engine {
 
     Position     pos;
     StateListPtr states;
+    // False after a 'position' command with an invalid position or move: 'go'
+    // then answers "bestmove (none)" instead of searching a position that is
+    // not the one the GUI meant (or that the engine cannot handle)
+    bool positionValid = true;
 
     OptionsMap                                        options;
     ThreadPool                                        threads;

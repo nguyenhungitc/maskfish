@@ -155,8 +155,12 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 
     unsigned char      token;
     size_t             idx;
-    Square             sq = SQ_A9;
     std::istringstream ss(fenStr);
+
+    // Current rank and file of the board field, tracked as plain ints so that
+    // a malformed field (too many squares in a rank, too many ranks) can never
+    // wrap around the 8-bit Square type or place a piece on an occupied square
+    int rank = RANK_9, file = FILE_A;
 
     std::memset(this, 0, sizeof(Position));
 #ifdef JIEQI_NNUE_ATT
@@ -172,16 +176,25 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
     while ((ss >> token) && !isspace(token))
     {
         if (isdigit(token))
-            sq += (token - '0') * EAST;  // Advance the given number of files
+            file = std::min(file + (token - '0'), int(FILE_NB));  // Advance the given number of files
 
         else if (token == '/')
-            sq += 2 * SOUTH;
+        {
+            --rank;
+            file = FILE_A;
+        }
 
-        else if ((idx = PieceToChar.find(token)) != string::npos)
+        else if ((idx = PieceToChar.find(token)) != string::npos && idx != 0)
         {
             // Ignore anything that would be placed outside the board
-            if (!is_ok(sq))
+            if (rank < RANK_0 || rank > RANK_9 || file < FILE_A || file > FILE_I)
+            {
+                ++file;
                 continue;
+            }
+
+            const Square sq = make_square(File(file), Rank(rank));
+            ++file;
 
             if (tolower(token) == 'x')
             {
@@ -191,17 +204,13 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
                 const char start = DarkPieces[sq];
                 if (start == '.' || tolower(start) == 'k'
                     || bool(isupper(start)) != (token == 'X'))
-                {
-                    ++sq;  // Treat the invalid dark piece as an empty square
-                    continue;
-                }
+                    continue;  // Treat the invalid dark piece as an empty square
                 idx = PieceToChar.find(start);
                 byTypeBB[DARK] |= sq;
             }
             put_piece(Piece(idx), sq);
             if (type_of(Piece(idx)) == KING)
                 kingSquare[color_of(Piece(idx))] = sq;
-            ++sq;
         }
     }
 
@@ -228,6 +237,7 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 
     // 4-5. Halfmove clock and fullmove number
     ss >> std::skipws >> st->rule40 >> gamePly;
+    st->rule40 = std::max(st->rule40, 0);
 
     // Convert from fullmove starting from 1 to gamePly starting from 0,
     // handle also common incorrect FEN with fullmove = 0.
@@ -235,8 +245,8 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 
     set_state();
 
-    // A board that cannot be played (see is_playable()) is reported as invalid
-    // by Engine::set_position() (see pool_is_consistent()) instead of asserting.
+    // A board that cannot be played (see pool_is_consistent()) is reported as
+    // invalid by Engine::set_position() instead of asserting.
     assert(!is_playable() || pos_is_ok());
 
     return *this;
@@ -737,7 +747,7 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     Piece  captured = piece_on(to);
     bool   moveDark = move_dark(m);
 
-    DirtyPiece dp;
+    DirtyPiece dp{};  // add_pc/remove_pc are only set when used: no indeterminate copies
     dp.pc     = moveDark ? DARK_PIECE : pc;
     dp.from   = from;
     dp.to     = moveDark ? SQ_NONE : to;
@@ -1432,32 +1442,37 @@ void Position::flip() {
 }
 
 
-// Checks the pool of unrevealed pieces against the dark pieces on the board:
-// every dark piece must have at least one candidate in its owner's pool, and
-// no kind of piece can exceed its initial number. Positions that fail this
-// check cannot be searched meaningfully (a dark piece could not be revealed).
+// Checks that the position is one that move generation, the search and the
+// network can handle, and reports what is wrong otherwise:
+//  - exactly one king per side, in its own palace;
+//  - for every kind of piece, the revealed pieces on the board plus the pieces
+//    of that kind in the pool do not exceed the initial number (2 rooks, 5
+//    pawns, ...). Every piece is either revealed and on the board, captured, or
+//    still in the pool, so this holds in any real game. It also bounds the
+//    number of pieces of a side by 16, which the fixed-size tables rely on
+//    (NNUE feature lists, layer stack buckets, move lists);
+//  - every dark piece has at least one candidate in its owner's pool;
+//  - the side that has just moved has not left its king in check (the side to
+//    move could capture it, which do_move() does not support).
+// Positions that fail this check are not searched (see Engine::set_position()).
 bool Position::pool_is_consistent(std::string* reason) const {
 
     constexpr int MaxCount[PIECE_TYPE_NB] = {0, 2, 2, 2, 5, 2, 2, 0};
 
-    // The board must hold exactly one king of each color (FEN validation)
-    for (Color c : {WHITE, BLACK})
-        if (count<KING>(c) != 1)
-        {
-            if (reason)
-                *reason = std::string(c == WHITE ? "white" : "black")
-                        + " does not have exactly one king";
-            return false;
-        }
-
-    // The side that has just moved cannot have left its king in check: the
-    // side to move could capture it (this also covers facing kings)
-    if (!is_playable())
-    {
+    auto fail = [&](std::string why) {
         if (reason)
-            *reason = std::string(sideToMove == WHITE ? "black" : "white")
-                    + " (not to move) is in check";
+            *reason = std::move(why);
         return false;
+    };
+    auto side = [](Color c) { return std::string(c == WHITE ? "white" : "black"); };
+
+    for (Color c : {WHITE, BLACK})
+    {
+        if (count<KING>(c) != 1)
+            return fail(side(c) + " does not have exactly one king");
+
+        if (!(Palace & HalfBB[c] & king_square(c)))
+            return fail(side(c) + " king is outside its palace");
     }
 
     for (Color c : {WHITE, BLACK})
@@ -1465,37 +1480,34 @@ bool Position::pool_is_consistent(std::string* reason) const {
         int pool = 0;
         for (PieceType pt = ROOK; pt < KING; ++pt)
         {
-            int n = restPieces[make_piece(c, pt)];
+            const Piece pc       = make_piece(c, pt);
+            const int   n        = restPieces[pc];
+            const int   revealed = popcount(pieces(c, pt) & ~pieces(DARK));
+
             if (n < 0 || n > MaxCount[pt])
-            {
-                if (reason)
-                    *reason = std::string("too many pieces of kind '")
-                            + PieceToChar[make_piece(c, pt)] + "' in the pool";
-                return false;
-            }
+                return fail(std::string("too many pieces of kind '") + PieceToChar[pc]
+                            + "' in the pool");
+
+            if (revealed + n > MaxCount[pt])
+                return fail(std::string("too many pieces of kind '") + PieceToChar[pc]
+                            + "' on the board and in the pool");
+
             pool += n;
         }
 
         if (pool < popcount(pieces(c) & pieces(DARK)))
-        {
-            if (reason)
-                *reason = std::string(c == WHITE ? "white" : "black")
-                        + " has more dark pieces on the board than pieces in its pool";
-            return false;
-        }
+            return fail(side(c) + " has more dark pieces on the board than pieces in its pool");
     }
+
+    if (checkers_to(sideToMove, king_square(~sideToMove)))
+        return fail(side(~sideToMove) + " (not to move) is in check");
 
     return true;
 }
 
 
-// Whether move generation and search are defined: exactly one king per side,
-// and the side not to move is not in check (otherwise its king could be
-// captured, which do_move() does not support).
-bool Position::is_playable() const {
-    return count<KING>(WHITE) == 1 && count<KING>(BLACK) == 1
-        && !checkers_to(sideToMove, king_square(~sideToMove));
-}
+// Whether move generation and search are defined (see pool_is_consistent())
+bool Position::is_playable() const { return pool_is_consistent(); }
 
 
 // Performs some consistency checks for the position object

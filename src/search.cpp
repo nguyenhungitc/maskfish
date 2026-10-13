@@ -2382,9 +2382,8 @@ Value Search::Worker::hidden_capture_search(
     }
 
     // The capture also takes the piece out of the pool: one more feature
-    // removed by the incremental update of the NNUE accumulator. (When the
-    // parent searches the capture again, rest_remove_pc still holds the last
-    // outcome of the previous call: every outcome sets it.)
+    // removed by the incremental update of the NNUE accumulator (every outcome
+    // sets rest_remove_pc, which is cleared again at the end)
     DirtyPiece dp = accumulatorStack.latest().dirtyPiece;
     assert(dp.remove_sq != SQ_NONE);
 
@@ -2408,6 +2407,12 @@ Value Search::Worker::hidden_capture_search(
 
     const Value value =
       chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
+
+    // Leave the capture as the parent made it: its pool is restored, so the
+    // top of the accumulator stack must not remove a piece from it any more
+    accumulatorStack.pop();
+    dp.rest_remove_pc = NO_PIECE;
+    accumulatorStack.push(dp);
 
     (ss - 1)->capturedDark = true;
     return value;
@@ -2461,7 +2466,15 @@ Value Search::Worker::flip_search(
         return value;
     };
 
-    return chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
+    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
+
+    // Leave the move of the dark piece as the parent made it, without the
+    // reveal (and the refresh flags) of the last outcome: a second search of
+    // the same move (e.g. after LMR) starts again from it
+    accumulatorStack.pop();
+    accumulatorStack.push(baseDp);
+
+    return value;
 }
 
 

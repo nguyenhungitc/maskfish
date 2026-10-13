@@ -249,9 +249,14 @@ u64 Engine::perft(const std::string& fen, Depth depth) { return Benchmark::perft
 
 void Engine::go(Search::LimitsType& limits) {
     assert(limits.perft == 0);
-    verify_networks();
 
-    threads.start_thinking(pos, states, limits);
+    // An invalid position is not searched (no root moves): it needs no network
+    if (positionValid)
+        verify_networks();
+    else
+        sync_cout << "info string Invalid position, not searched" << sync_endl;
+
+    threads.start_thinking(pos, states, limits, positionValid);
 }
 void Engine::stop() { threads.stop = true; }
 
@@ -292,16 +297,16 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
     // Drop the old state and create a new one
     states = StateListPtr(new std::deque<StateInfo>(1));
     pos.set(fen, &states->back());
+    positionValid = true;
 
+    // A position that fails this check may not be handled by move generation,
+    // the search or the network (e.g. too many pieces): ignore the moves, and
+    // 'go' will not search
     if (std::string reason; !pos.pool_is_consistent(&reason))
     {
         sync_cout << "info string Invalid position: " << reason << sync_endl;
-
-        // Without exactly one king per side, or with the side not to move in
-        // check, move generation is not defined: ignore the moves (and 'go'
-        // will not search, see start_thinking())
-        if (!pos.is_playable())
-            return;
+        positionValid = false;
+        return;
     }
 
     // Parses one character naming a revealed piece of color c, which must still
@@ -329,7 +334,8 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
         if (m == Move::none())
         {
             sync_cout << "info string Invalid move " << move
-                      << ": illegal move, ignoring this and the following moves" << sync_endl;
+                      << ": illegal move, the position will not be searched" << sync_endl;
+            positionValid = false;
             break;
         }
 
@@ -359,7 +365,8 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
         if (!error.empty())
         {
             sync_cout << "info string Invalid move " << move << ": " << error
-                      << ", ignoring this and the following moves" << sync_endl;
+                      << ", the position will not be searched" << sync_endl;
+            positionValid = false;
             break;
         }
 
@@ -489,6 +496,18 @@ void Engine::trace_eval() const {
     Position     p;
     p.set(pos.fen(), &trace_states->back());
 
+    if (!positionValid)
+    {
+        sync_cout << "info string Invalid position, not evaluated" << sync_endl;
+        return;
+    }
+
+    if (std::string reason; !p.pool_is_consistent(&reason))
+    {
+        sync_cout << "info string Invalid position: " << reason << sync_endl;
+        return;
+    }
+
     verify_networks();
 
     sync_cout << "\n" << Eval::trace(p, *networks) << sync_endl;
@@ -501,6 +520,19 @@ void Engine::eval_raw() const {
     StateListPtr evalStates(new std::deque<StateInfo>(1));
     Position     p;
     p.set(pos.fen(), &evalStates->back());
+
+    if (!positionValid)
+    {
+        sync_cout << "info string Invalid position, not evaluated" << sync_endl;
+        return;
+    }
+
+    // The network needs a valid position (at most 16 pieces per side, ...)
+    if (std::string reason; !p.pool_is_consistent(&reason))
+    {
+        sync_cout << "info string Invalid position: " << reason << sync_endl;
+        return;
+    }
 
     verify_networks();
 
