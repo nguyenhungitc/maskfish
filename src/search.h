@@ -80,6 +80,11 @@ struct Stack {
     int                         quietMoveStreak;
     bool                        capturedDark;  // currentMove captured a dark piece
     bool                        followPV;      // on the PV of the previous iteration
+    // The value last returned by search()/qsearch() at this ply derives from
+    // the estimate of a chance node (see Worker::chance_node()). If it lies
+    // within the caller's window, it is not exact and must not be stored as
+    // BOUND_EXACT.
+    bool estimated;
 };
 
 
@@ -465,7 +470,8 @@ class Worker {
 
     // Searches the outcomes of a chance node, see search.cpp
     template<typename SearchOutcome>
-    Value chance_node(const int*      counts,
+    Value chance_node(Stack*          ss,
+                      const int*      counts,
                       int             n,
                       int             total,
                       Value           alpha,

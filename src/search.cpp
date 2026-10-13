@@ -812,6 +812,9 @@ Value Search::Worker::search(
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
 
+    // Set again below if the value returned derives from a chance estimate
+    ss->estimated = false;
+
     // UCI option SeekMate: when the root score is high enough (relative to the
     // root depth) to suggest a forced mate, prune and extend less to find it.
     // Do not tune these values; they are not intended for playing strength.
@@ -859,6 +862,7 @@ Value Search::Worker::search(
     bool  givesCheck, priorCapture;
     bool  improving = false, opponentWorsening = false;
     bool  capture, ttCapture;
+    bool  bestEstimated = false;  // bestValue derives from a chance estimate
     int   priorReduction;
     Piece movedPiece;
 
@@ -1720,7 +1724,8 @@ moves_loop:  // When in check, search starts here
 
         if (value + inc > bestValue)
         {
-            bestValue = value;
+            bestValue     = value;
+            bestEstimated = (ss + 1)->estimated;
 
             if (value + inc > alpha)
             {
@@ -1823,11 +1828,17 @@ moves_loop:  // When in check, search starts here
     if (bestValue <= alpha)
         ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
 
+    // An exact value (PV node, within the window) that derives from the
+    // estimate of a chance node is not proven: report it to the parent, and
+    // do not let it produce TT cutoffs (its move is still worth storing).
+    ss->estimated = PvNode && bestMove && bestValue < beta && bestEstimated;
+
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
     if (!excludedMove && !(rootNode && thisThread->pvIdx))
         ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), ss->ttPv,
                        bestValue >= beta    ? BOUND_LOWER
+                       : ss->estimated      ? BOUND_NONE
                        : PvNode && bestMove ? BOUND_EXACT
                                             : BOUND_UPPER,
                        moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6), bestMove,
@@ -1863,6 +1874,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     static_assert(nodeType != Root);
     constexpr bool PvNode = nodeType == PV;
 
+    // Set again below if the value returned derives from a chance estimate
+    ss->estimated = false;
+
     // Dive into the hidden capture chance node (see search())
     if (hiddenCaptureModel && (ss - 1)->capturedDark && ~pos.side_to_move() == rootObserver)
     {
@@ -1887,6 +1901,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     Move  move, bestMove;
     Value bestValue, value, futilityBase;
     bool  pvHit, givesCheck, capture;
+    bool  bestEstimated = false;  // bestValue derives from a chance estimate
     int   moveCount;
 
     // Step 1. Initialize node
@@ -2087,7 +2102,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // Step 8. Check for a new best move
         if (value > bestValue)
         {
-            bestValue = value;
+            bestValue     = value;
+            bestEstimated = (ss + 1)->estimated;
 
             if (value > alpha)
             {
@@ -2123,8 +2139,15 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Save gathered info in transposition table. The static evaluation
     // is saved as it was before adjustment by correction history.
+    // A value within the window that derives from a chance estimate is not a
+    // proven bound (see search())
+    ss->estimated = PvNode && bestMove && bestValue < beta && bestEstimated;
+
     ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
-                   bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,
+                   bestValue >= beta ? BOUND_LOWER
+                   : ss->estimated   ? BOUND_NONE
+                                     : BOUND_UPPER,
+                   DEPTH_QS, bestMove,
                    unadjustedStaticEval, tt.generation());
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
@@ -2216,18 +2239,30 @@ Value Search::Worker::aggregate_chance(
 // the values returned is only an estimate: it is kept within the proven
 // bounds. (Searching such outcomes again until the result is exact multiplies
 // the size of the tree by 20 to 35 at depths 10-12, even in PV nodes only.)
+// Such an estimate is flagged in ss->estimated, so that the callers do not
+// store it, or a value derived from it, as BOUND_EXACT. Every outcome is
+// searched at ss: the flag of an outcome is read right after its search.
 template<typename SearchOutcome>
-Value Search::Worker::chance_node(
-  const int* counts, int n, int total, Value alpha, Value beta, SearchOutcome&& searchOutcome) {
+Value Search::Worker::chance_node(Stack*          ss,
+                                  const int*      counts,
+                                  int             n,
+                                  int             total,
+                                  Value           alpha,
+                                  Value           beta,
+                                  SearchOutcome&& searchOutcome) {
 
     assert(n > 0 && n <= Position::MaxRestPieceTypes && total > 0);
 
+    // A single outcome: its value, and its flag, are those of the node
     if (n == 1)
         return searchOutcome(0, alpha, beta);
 
     std::array<Value, Position::MaxRestPieceTypes> lo, hi, values;
     lo.fill(-VALUE_MATE);
     hi.fill(VALUE_MATE);
+
+    // Some outcome returned, within the window, a value that is an estimate
+    bool outcomeEstimated = false;
 
     for (int i = 0; i < n; ++i)
     {
@@ -2236,28 +2271,46 @@ Value Search::Worker::chance_node(
         // The search was stopped: the remaining outcomes would only return
         // meaningless values, and the caller discards this result anyway.
         if (threads.stop.load(std::memory_order_relaxed))
+        {
+            ss->estimated = false;
             return VALUE_ZERO;
+        }
 
         if (v <= alpha)
             hi[i] = v;
         else if (v >= beta)
             lo[i] = v;
         else
+        {
             lo[i] = hi[i] = v;
+            outcomeEstimated |= ss->estimated;
+        }
 
+        // Bounds proven by the outcomes (outside the window: never exact)
         const Value upper = aggregate_chance(hi.data(), counts, n, total, ChanceBound::Upper);
         if (upper <= alpha)
+        {
+            ss->estimated = false;
             return upper;
+        }
 
         const Value lower = aggregate_chance(lo.data(), counts, n, total, ChanceBound::Lower);
         if (lower >= beta)
+        {
+            ss->estimated = false;
             return lower;
+        }
 
         if (i == n - 1)
+        {
+            // Exact only if every outcome was exact; otherwise an estimate
+            // within the proven bounds
+            ss->estimated = outcomeEstimated || lower != upper;
             return lower == upper
                    ? lower
                    : std::clamp(aggregate_chance(values.data(), counts, n, total, ChanceBound::Exact),
                                 lower, upper);
+        }
     }
 
     return VALUE_ZERO;  // Unreachable
@@ -2350,7 +2403,8 @@ Value Search::Worker::hidden_capture_search(
         return value;
     };
 
-    const Value value = chance_node(counts.data(), restCount, total, alpha, beta, searchOutcome);
+    const Value value =
+      chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
 
     (ss - 1)->capturedDark = true;
     return value;
@@ -2399,7 +2453,7 @@ Value Search::Worker::flip_search(
         return value;
     };
 
-    return chance_node(counts.data(), restCount, total, alpha, beta, searchOutcome);
+    return chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
 }
 
 
