@@ -442,6 +442,7 @@ bool Position::legal(Move m) const {
 
     assert(color_of(moved_piece(m)) == us);
     assert(piece_on(king_square(us)) == make_piece(us, KING));
+    assert(check_info_valid());
 
     // If the moving piece is a dark advisor, make sure the destination square
     // is within the palace
@@ -565,6 +566,7 @@ bool Position::gives_check(Move m) const {
 Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionTable* tt) {
 
     assert(is_ok(s) && is_dark(s));
+    assert(!check_info_valid());  // Called right after the move of the dark piece
 
     Color us     = ~sideToMove;
     Color them   = ~us;
@@ -591,8 +593,10 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, const TranspositionT
     byTypeBB[DARK] ^= s;
     restPieces[pc]--;
 
-    // Recalculate checkersBB
+    // Recalculate checkersBB, then the rest of the check info (below): from
+    // now on it is valid again
     st->checkersBB = checkers_to(us, king_square(them));
+    set_reveal_pending(false);
 
     // Update hash key
     st->key ^= Zobrist::psq[pc][s] ^ Zobrist::rest[pc][restPieces[pc]];
@@ -659,6 +663,13 @@ void Position::undo_flip(Square s, Piece fromPc) {
             st->majorMaterial[us] -= PieceValue[pc];
     }
 
+    // Back to the state left by do_move() for a move of a dark piece: no
+    // checkers known, and the check info, computed for the revealed piece,
+    // is not valid any more. The caller must call do_flip() (next outcome)
+    // or undo_move() before anything reads it (asserted in debug builds).
+    st->checkersBB = Bitboard(0);
+    set_reveal_pending(true);
+
     assert(pos_is_ok());
 }
 
@@ -695,6 +706,7 @@ DirtyPiece Position::do_move(Move                      m,
 
     assert(m.is_ok());
     assert(&newSt != st);
+    assert(check_info_valid());  // A pending reveal must be done first
 
     // Update the bloom filter
     ++filter[st->key];
@@ -830,7 +842,9 @@ DirtyPiece Position::do_move(Move                      m,
 
     sideToMove = ~sideToMove;
 
-    // Update king attacks used for fast check detection
+    // Update king attacks used for fast check detection. After a move of a
+    // dark piece, the check info is only computed by do_flip().
+    set_reveal_pending(moveDark);
     if (!moveDark)
         set_check_info();
     else

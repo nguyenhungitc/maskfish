@@ -65,6 +65,12 @@ struct StateInfo {
     Piece      capturedPiece;
     Move       move;
     bool       captureDark;
+#ifndef NDEBUG
+    // A dark piece has moved and do_flip() has not revealed it yet: the check
+    // info (checkersBB, blockersForKing, pinners, checkSquares, needFullCheck)
+    // is not valid. Debug builds only, see Position::check_info_valid().
+    bool revealPending;
+#endif
 };
 
 
@@ -221,6 +227,10 @@ class Position {
     template<bool AfterMove = false>
     Key adjust_key40(Key k) const;
 
+    // False between the move of a dark piece and its reveal (debug builds)
+    bool check_info_valid() const;
+    void set_reveal_pending(bool pending);
+
     // Data members
     Piece      board[SQUARE_NB];
     Bitboard   byTypeBB[PIECE_TYPE_NB + 1];
@@ -302,13 +312,39 @@ inline Bitboard Position::attacks_by(Color c) const {
     return threats;
 }
 
-inline Bitboard Position::checkers() const { return st->checkersBB; }
+inline bool Position::check_info_valid() const {
+#ifndef NDEBUG
+    return !st->revealPending;
+#else
+    return true;
+#endif
+}
 
-inline Bitboard Position::blockers_for_king(Color c) const { return st->blockersForKing[c]; }
+inline void Position::set_reveal_pending([[maybe_unused]] bool pending) {
+#ifndef NDEBUG
+    st->revealPending = pending;
+#endif
+}
 
-inline Bitboard Position::pinners(Color c) const { return st->pinners[c]; }
+inline Bitboard Position::checkers() const {
+    assert(check_info_valid());
+    return st->checkersBB;
+}
 
-inline Bitboard Position::check_squares(PieceType pt) const { return st->checkSquares[pt]; }
+inline Bitboard Position::blockers_for_king(Color c) const {
+    assert(check_info_valid());
+    return st->blockersForKing[c];
+}
+
+inline Bitboard Position::pinners(Color c) const {
+    assert(check_info_valid());
+    return st->pinners[c];
+}
+
+inline Bitboard Position::check_squares(PieceType pt) const {
+    assert(check_info_valid());
+    return st->checkSquares[pt];
+}
 
 inline Key Position::key() const { return adjust_key40(st->key); }
 
