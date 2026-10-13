@@ -298,7 +298,18 @@ void Position::set_state() const {
 
         st->key ^= Zobrist::psq[is_dark(s) ? DARK_PIECE : pc][s];
 
-        if (pt == PAWN)
+        // A dark piece is of unknown kind: it is not part of the pawn or minor
+        // piece structure, only of the non-pawn pieces of its side, with its
+        // own key. (Its material counts at the value of the piece that starts
+        // on its square, see also jieqi_major_material().)
+        if (is_dark(s))
+        {
+            st->nonPawnKey[color_of(pc)] ^= Zobrist::psq[DARK_PIECE][s];
+            if (pt & 1)
+                st->majorMaterial[color_of(pc)] += PieceValue[pc];
+        }
+
+        else if (pt == PAWN)
             st->pawnKey ^= Zobrist::psq[pc][s];
 
         else
@@ -764,8 +775,15 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
         st->captureDark = is_dark(to);
 
         // If the captured piece is a pawn, update pawn hash key, otherwise
-        // update major material.
-        if (type_of(captured) == PAWN)
+        // update major material. A dark piece only has a non-pawn key.
+        if (st->captureDark)
+        {
+            st->nonPawnKey[them] ^= Zobrist::psq[DARK_PIECE][capsq];
+            if (type_of(captured) & 1)
+                st->majorMaterial[them] -= PieceValue[captured];
+        }
+
+        else if (type_of(captured) == PAWN)
             st->pawnKey ^= Zobrist::psq[captured][capsq];
 
         else
@@ -808,18 +826,22 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     // completed by the reveal)
     st->key = k;
 
-    // If the moving piece is a pawn, update pawn hash key.
-    if (type_of(pc) == PAWN)
-        st->pawnKey ^= Zobrist::psq[pc][from] ^ (moveDark ? 0 : Zobrist::psq[pc][to]);
+    // If the moving piece is a pawn, update pawn hash key. A dark piece
+    // leaves its square: do_flip() adds the revealed piece on 'to'.
+    if (moveDark)
+    {
+        st->nonPawnKey[us] ^= Zobrist::psq[DARK_PIECE][from];
+        if (type_of(pc) & 1)
+            st->majorMaterial[us] -= PieceValue[pc];
+    }
+    else if (type_of(pc) == PAWN)
+        st->pawnKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
     else
     {
-        st->nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ (moveDark ? 0 : Zobrist::psq[pc][to]);
+        st->nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
 
         if (type_of(pc) == KNIGHT || type_of(pc) == CANNON)
-            st->minorPieceKey ^= Zobrist::psq[pc][from] ^ (moveDark ? 0 : Zobrist::psq[pc][to]);
-
-        if (moveDark && type_of(pc) != KING && (type_of(pc) & 1))
-            st->majorMaterial[us] -= PieceValue[pc];
+            st->minorPieceKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
     }
 
     // Move the piece.
