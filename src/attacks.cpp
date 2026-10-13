@@ -65,7 +65,7 @@ void init() {
     {
         for (Square s2 = SQ_A0; s2 <= SQ_I9; ++s2)
         {
-            if (PseudoAttacks[ROOK][s1] & s2)
+            if (attacks_bb(ROOK, s1) & s2)
             {
                 LineBB[s1][s2] = (attacks_bb(ROOK, s1) & attacks_bb(ROOK, s2)) | s1 | s2;
                 BetweenBB[s1][s2] =
@@ -73,12 +73,12 @@ void init() {
                 RayPassBB[s1][s2] = attacks_bb(CANNON, s1, square_bb(s2));
             }
 
-            if (PseudoAttacks[KNIGHT][s1] & s2)
+            if (attacks_bb(KNIGHT, s1) & s2)
                 BetweenBB[s1][s2] |= lame_leaper_path<KNIGHT_TO>(Direction(s2 - s1), s1);
 
             // Jieqi: bishops are not confined to their half of the board, a
             // check can be blocked on the bishop's eye
-            if (PseudoAttacks[BISHOP][s1] & s2)
+            if (attacks_bb(BISHOP, s1) & s2)
                 BetweenBB[s1][s2] |= lame_leaper_path<BISHOP>(Direction(s2 - s1), s1);
 
             BetweenBB[s1][s2] |= s2;

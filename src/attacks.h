@@ -208,10 +208,12 @@ constexpr Bitboard lame_leaper_path(Square s) {
     for (const auto& d : get_directions<pt>())
         b |= lame_leaper_path<pt>(d, s);
 
-    // Jieqi: revealed bishops may cross the river
     return b;
 }
 
+// Attacks of a knight or a bishop, blocked on the leg or the eye. Unlike
+// xiangqi, bishops are not masked by the river: in Jieqi revealed bishops
+// may cross it (and a dark bishop never leaves its starting square).
 template<PieceType pt>
 constexpr Bitboard lame_leaper_attack(Square s, Bitboard occupied) {
     Bitboard b = 0;
@@ -224,54 +226,66 @@ constexpr Bitboard lame_leaper_attack(Square s, Bitboard occupied) {
     return b;
 }
 
-inline constexpr auto PseudoAttacks = [] {
-    std::array<std::array<Bitboard, SQUARE_NB>, PIECE_TYPE_NB + 3> table{};
+// Attacks of the pieces on an empty board, by kind of table (instead of rows
+// of one table indexed by piece types and offsets from them).
+struct PseudoAttackTables {
+    using Table = std::array<Bitboard, SQUARE_NB>;
+
+    // Indexed by piece type: ROOK, ADVISOR, KNIGHT, BISHOP and KING (in the
+    // palace only). The rows of the other piece types stay empty: cannon
+    // attacks depend on the occupancy, pawn attacks on the color.
+    std::array<Table, PIECE_TYPE_NB> byType{};
+
+    std::array<Table, COLOR_NB> pawn{};               // Squares a pawn of the color attacks
+    std::array<Table, COLOR_NB> pawnTo{};             // Squares from which such a pawn attacks
+    Table                       unconstrainedKing{};  // King steps, ignoring the palace
+};
+
+inline constexpr PseudoAttackTables PseudoAttacks = [] {
+    PseudoAttackTables t{};
 
     for (Square s1 = SQ_A0; s1 <= SQ_I9; ++s1)
     {
-        table[NO_PIECE_TYPE][s1] = pawn_attacks_bb<WHITE>(s1);
-        table[PAWN][s1]          = pawn_attacks_bb<BLACK>(s1);
+        t.pawn[WHITE][s1]   = pawn_attacks_bb<WHITE>(s1);
+        t.pawn[BLACK][s1]   = pawn_attacks_bb<BLACK>(s1);
+        t.pawnTo[WHITE][s1] = pawn_attacks_to_bb<WHITE>(s1);
+        t.pawnTo[BLACK][s1] = pawn_attacks_to_bb<BLACK>(s1);
 
-        table[PAWN_TO - 1][s1] = pawn_attacks_to_bb<WHITE>(s1);
-        table[PAWN_TO][s1]     = pawn_attacks_to_bb<BLACK>(s1);
+        t.byType[ROOK][s1]   = sliding_attack<ROOK>(s1, 0);
+        t.byType[BISHOP][s1] = lame_leaper_attack<BISHOP>(s1, 0);
+        t.byType[KNIGHT][s1] = lame_leaper_attack<KNIGHT>(s1, 0);
 
-        table[ROOK][s1]   = sliding_attack<ROOK>(s1, 0);
-        table[BISHOP][s1] = lame_leaper_attack<BISHOP>(s1, 0);
-        table[KNIGHT][s1] = lame_leaper_attack<KNIGHT>(s1, 0);
-
-        // Only generate pseudo attacks in the palace squares for king. Jieqi:
-        // revealed advisors may leave the palace (a dark advisor may not, see
-        // Position::legal()).
+        // The king stays in the palace (its table is empty outside it).
         for (int step : {NORTH, SOUTH, WEST, EAST})
         {
             if (Palace & s1)
-                table[KING][s1] |= safe_destination(s1, step) & Palace;
-            // Unconstrained king
-            table[KING + 3][s1] |= safe_destination(s1, step);
+                t.byType[KING][s1] |= safe_destination(s1, step) & Palace;
+            t.unconstrainedKing[s1] |= safe_destination(s1, step);
         }
 
+        // Jieqi: revealed advisors may leave the palace. A dark advisor may
+        // not: see Position::legal(), attackers_to() and attacks_by().
         for (int step : {NORTH_WEST, NORTH_EAST, SOUTH_WEST, SOUTH_EAST})
-        {
-            table[ADVISOR][s1] |= safe_destination(s1, step);
-            // Unconstrained advisor
-            table[ADVISOR + 1][s1] |= safe_destination(s1, step);
-        }
+            t.byType[ADVISOR][s1] |= safe_destination(s1, step);
     }
 
-    return table;
+    return t;
 }();
 
 // Returns the pseudo attacks of the given piece type
-// assuming an empty board.
+// assuming an empty board. Pawns (PAWN, PAWN_TO) need the color. A cannon
+// attacks nothing on an empty board: use the version with the occupancy.
 sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Color c = COLOR_NB) {
 
-    assert(pt != KNIGHT_TO && ((pt != PAWN && pt != PAWN_TO) || c < COLOR_NB) && is_ok(s));
-    if (pt != PAWN && pt != PAWN_TO)
-        return PseudoAttacks[pt][s];
-    else if (pt == PAWN)
-        return PseudoAttacks[c == WHITE ? NO_PIECE_TYPE : PAWN][s];
-    else  // if (pt == PAWN_TO)
-        return PseudoAttacks[c == WHITE ? PAWN_TO - 1 : PAWN_TO][s];
+    assert(is_ok(s));
+    if (pt == PAWN || pt == PAWN_TO)
+    {
+        assert(c == WHITE || c == BLACK);
+        return pt == PAWN ? PseudoAttacks.pawn[c][s] : PseudoAttacks.pawnTo[c][s];
+    }
+
+    assert(pt == ROOK || pt == ADVISOR || pt == KNIGHT || pt == BISHOP || pt == KING);
+    return PseudoAttacks.byType[pt][s];
 }
 
 // Returns the attacks by the given piece
@@ -290,23 +304,17 @@ sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Bitboard occupied) 
     case KNIGHT_TO :
         return magic(s, pt).attack_bb(occupied);
     default :
-        return PseudoAttacks[pt][s];
+        assert(pt == ADVISOR || pt == KING);
+        return PseudoAttacks.byType[pt][s];
     }
 }
 
+// Steps of a king or an advisor ignoring the palace. (Advisors are not
+// confined to the palace in Jieqi, so they are their usual attacks.)
 sf_always_inline Bitboard unconstrained_attacks_bb(PieceType pt, Square s) {
 
     assert((pt == KING || pt == ADVISOR) && is_ok(s));
-
-    switch (pt)
-    {
-    case KING :
-        return PseudoAttacks[KING + 3][s];
-    case ADVISOR :
-        return PseudoAttacks[ADVISOR + 1][s];
-    default :
-        return PseudoAttacks[pt][s];
-    }
+    return pt == KING ? PseudoAttacks.unconstrainedKing[s] : PseudoAttacks.byType[ADVISOR][s];
 }
 
 }  // namespace Maskfish::Attacks

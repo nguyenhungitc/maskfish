@@ -185,7 +185,12 @@ constexpr Value BishopValue  = 218;
 
 // clang-format off
 enum PieceType : u8 {
-    NO_PIECE_TYPE, ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING, DARK, KNIGHT_TO = 8, PAWN_TO,
+    NO_PIECE_TYPE, ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING,
+    // Not piece types:
+    // - DARK indexes the bitboard of the dark pieces (Position::byTypeBB),
+    // - KNIGHT_TO and PAWN_TO are for attacks_bb() only: the squares from which
+    //   a knight (resp. a pawn) attacks a square.
+    DARK, KNIGHT_TO, PAWN_TO,
     ALL_PIECES = 0,
     PIECE_TYPE_NB = 8
 };
@@ -197,6 +202,17 @@ enum Piece : u8 {
     DARK_PIECE, PIECE_NB = DARK_PIECE
 };
 // clang-format on
+
+// Assumptions on the values of the enums above
+static_assert(KING < PIECE_TYPE_NB && PIECE_TYPE_NB == 8,
+              "a piece is (color << 3) + type, see make_piece()");
+static_assert(DARK == PIECE_TYPE_NB, "byTypeBB[PIECE_TYPE_NB + 1] holds the dark pieces");
+static_assert(KNIGHT_TO > DARK && PAWN_TO > DARK, "attack types index no bitboard");
+static_assert(DARK_PIECE == PIECE_NB, "arrays of PIECE_NB pieces exclude the dark piece");
+// Position::majorMaterial counts the pieces whose type is odd (but the king)
+static_assert((ROOK & 1) && (CANNON & 1) && (KNIGHT & 1) && !(ADVISOR & 1) && !(PAWN & 1)
+                && !(BISHOP & 1),
+              "major pieces are the ones of odd type");
 
 constexpr Value PieceValue[PIECE_NB] = {VALUE_ZERO, RookValue,   AdvisorValue, CannonValue,
                                         PawnValue,  KnightValue, BishopValue,  VALUE_ZERO,
