@@ -297,9 +297,10 @@ void Engine::set_position(const std::string& fen, const std::vector<std::string>
     {
         sync_cout << "info string Invalid position: " << reason << sync_endl;
 
-        // Without exactly one king per side, move generation is not defined:
-        // ignore the moves (and 'go' will not search, see start_thinking())
-        if (pos.count<KING>(WHITE) != 1 || pos.count<KING>(BLACK) != 1)
+        // Without exactly one king per side, or with the side not to move in
+        // check, move generation is not defined: ignore the moves (and 'go'
+        // will not search, see start_thinking())
+        if (!pos.is_playable())
             return;
     }
 

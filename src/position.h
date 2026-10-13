@@ -198,6 +198,7 @@ class Position {
     // Position consistency check, for debugging
     bool pos_is_ok() const;
     bool pool_is_consistent(std::string* reason = nullptr) const;
+    bool is_playable() const;
     void flip();
 
     StateInfo* state() const;

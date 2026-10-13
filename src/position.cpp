@@ -236,9 +236,9 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 
     set_state();
 
-    // A board without exactly one king per side is reported as invalid by
-    // Engine::set_position() (see pool_is_consistent()) instead of asserting.
-    assert(count<KING>(WHITE) != 1 || count<KING>(BLACK) != 1 || pos_is_ok());
+    // A board that cannot be played (see is_playable()) is reported as invalid
+    // by Engine::set_position() (see pool_is_consistent()) instead of asserting.
+    assert(!is_playable() || pos_is_ok());
 
     return *this;
 }
@@ -1404,6 +1404,16 @@ bool Position::pool_is_consistent(std::string* reason) const {
             return false;
         }
 
+    // The side that has just moved cannot have left its king in check: the
+    // side to move could capture it (this also covers facing kings)
+    if (!is_playable())
+    {
+        if (reason)
+            *reason = std::string(sideToMove == WHITE ? "black" : "white")
+                    + " (not to move) is in check";
+        return false;
+    }
+
     for (Color c : {WHITE, BLACK})
     {
         int pool = 0;
@@ -1430,6 +1440,15 @@ bool Position::pool_is_consistent(std::string* reason) const {
     }
 
     return true;
+}
+
+
+// Whether move generation and search are defined: exactly one king per side,
+// and the side not to move is not in check (otherwise its king could be
+// captured, which do_move() does not support).
+bool Position::is_playable() const {
+    return count<KING>(WHITE) == 1 && count<KING>(BLACK) == 1
+        && !checkers_to(sideToMove, king_square(~sideToMove));
 }
 
 

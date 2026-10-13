@@ -289,9 +289,10 @@ void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::Lim
 
     Search::RootMoves rootMoves;
 
-    // A board without exactly one king per side (reported as invalid by
-    // Engine::set_position()) is not searched: no root moves, "bestmove (none)"
-    if (pos.count<KING>(WHITE) == 1 && pos.count<KING>(BLACK) == 1)
+    // A board that cannot be played (see Position::is_playable(), reported as
+    // invalid by Engine::set_position()) is not searched: no root moves,
+    // "bestmove (none)"
+    if (pos.is_playable())
     {
         const auto legalmoves = MoveList<LEGAL>(pos);
 

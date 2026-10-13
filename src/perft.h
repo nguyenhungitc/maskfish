@@ -90,8 +90,8 @@ inline u64 perft(const std::string& fen, Depth depth) {
     Position  p;
     p.set(fen, &st);
 
-    // Move generation needs exactly one king per side (see Engine::set_position())
-    if (p.count<KING>(WHITE) != 1 || p.count<KING>(BLACK) != 1)
+    // Move generation needs a playable board (see Position::is_playable())
+    if (!p.is_playable())
         return 0;
 
     return perft<true>(p, depth);
