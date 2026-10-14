@@ -20,6 +20,8 @@
 #     ./pipeline.sh --test-telegram
 #
 #  Cấu hình: trainer/pipeline.env (copy từ pipeline.env.example) hoặc --config.
+#  Tham số phần cứng để trống sẽ tự chọn theo máy (hw_probe.py): số worker theo
+#  CPU/RAM, shard theo RAM, batch chạy thử trên GPU, checkpoint theo đĩa trống.
 # =============================================================================
 set -uo pipefail
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
@@ -81,6 +83,10 @@ if [[ -n "$CONFIG" ]]; then
 fi
 
 NCPU=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+# Các tham số phụ thuộc phần cứng: để trống = tự chọn theo máy ở bước "Kiểm tra môi trường"
+AUTO_VARS=(GEN_WORKERS MATCH_WORKERS PREP_WORKERS SHARD_SIZE BATCH_SIZE CHECKPOINT_EVERY TRAIN_THREADS)
+declare -A USERSET=()
+for _v in "${AUTO_VARS[@]}"; do [[ -n "${!_v:-}" ]] && USERSET[$_v]=1; done
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then PYTHON="$SCRIPT_DIR/.venv/bin/python"; else PYTHON=python3; fi
 fi
@@ -92,7 +98,7 @@ fi
 : "${SHARD_SIZE:=2000000}"; : "${MAX_SCORE:=10000}"; : "${SCORE_SCALE:=1.0}"; : "${PREP_WORKERS:=}"
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
-: "${CHECKPOINT_EVERY:=1}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
+: "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -264,21 +270,131 @@ for m in '$mods'.split():
     importlib.import_module(m)
 print('python', sys.version.split()[0], 'OK:', '$mods')
 " || fail "Thiếu gói Python — chạy: $PYTHON -m pip install -r requirements.txt" || return 1
-  if [[ "$MODE" != "gen" ]]; then
-    local cuda
-    cuda=$("$PYTHON" -c "import torch;print(torch.cuda.is_available(), torch.__version__, torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-')" 2>&1 | tail -n 1)
-    echo "torch: $cuda" | tee -a "$CUR_LOG"
-    info "torch: $(html_escape "$cuda")"
-    if [[ "$cuda" != True* && "$REQUIRE_GPU" == 1 && "${DEVICE:-}" != cpu ]]; then
-      fail "Không có CUDA. Cài torch bản CUDA, hoặc đặt REQUIRE_GPU=0 / DEVICE=cpu để train bằng CPU (rất chậm)" || return 1
-    fi
-  fi
   if [[ "$MODE" != train ]] && (( GEN > 0 )) && [[ ! -f "$NET_CUR" ]]; then
     fail "Chưa có net hiện tại $NET_CUR (copy net vào thư mục nets/ trước khi sinh data)" || return 1
   fi
-  local avail; avail=$(df -Pk . | awk 'NR==2{printf "%.0f", $4/1048576}')
-  info "Đĩa trống: ${avail} GB · CPU: ${NCPU} · mode: ${MODE}"
-  (( avail < 5 )) && echo "Cảnh báo: dưới 5 GB đĩa trống" | tee -a "$CUR_LOG"
+  autotune
+}
+
+gb() { awk -v m="$1" 'BEGIN{printf "%.1f", m/1024}'; }
+src() { [[ -n "${USERSET[$1]:-}" ]] && printf ' (cấu hình)' || printf ''; }
+
+# Dò CPU / RAM / đĩa / GPU rồi chọn các tham số AUTO_VARS mà người dùng để trống
+autotune() {
+  declare -A HW=()
+  local probe=() k v
+  [[ "$MODE" != gen && -z "${USERSET[BATCH_SIZE]:-}" && "$DEVICE" != cpu ]] && (( ! DRY_RUN )) && probe=(--probe-batch)
+  local target=$BATCH_TARGET; [[ -n "${USERSET[BATCH_SIZE]:-}" ]] && target=$BATCH_SIZE
+  echo "\$ $PYTHON hw_probe.py --arch $ARCH_FULL --batch $target ${probe[*]}" >> "$CUR_LOG"
+  while IFS='=' read -r k v; do
+    case "$k" in
+      HW_CPUS|HW_RAM_TOTAL_MB|HW_RAM_AVAIL_MB|HW_DISK_FREE_MB|HW_CUDA|HW_GPU_COUNT|HW_GPU_INDEX|\
+      HW_GPU_TOTAL_MB|HW_GPU_FREE_MB|HW_BATCH_FIT|HW_BATCH_PEAK_MB)
+        [[ "$v" =~ ^[0-9]+$ ]] && HW[${k#HW_}]=$v ;;
+      HW_GPU_NAME|HW_TORCH) HW[${k#HW_}]=${v//[^A-Za-z0-9_.+-]/} ;;
+    esac
+    echo "$k=$v" >> "$CUR_LOG"
+  done < <("$PYTHON" "$SCRIPT_DIR/hw_probe.py" --arch "$ARCH_FULL" --batch "$target" --path "$SCRIPT_DIR" "${probe[@]}" 2>>"$CUR_LOG")
+
+  local cpus=${HW[CPUS]:-$NCPU}
+  local ram=${HW[RAM_TOTAL_MB]:-0} avail=${HW[RAM_AVAIL_MB]:-0}
+  local disk=${HW[DISK_FREE_MB]:-$(df -Pk . | awk 'NR==2{print int($4/1024)}')}
+  (( avail > 0 )) || avail=4096
+  NCPU=$cpus
+
+  # RAM cho 1 engine (net + hash + tiến trình python) và cho 1 vị trí đã prepare
+  local eng_mb bpp ck_mb nnue_mb
+  case "$NNUE_ARCH" in
+    default)     eng_mb=200; bpp=260; ck_mb=190;  nnue_mb=8 ;;
+    att)         eng_mb=300; bpp=260; ck_mb=750;  nnue_mb=30 ;;
+    threats)     eng_mb=450; bpp=350; ck_mb=1300; nnue_mb=60 ;;
+    att-threats) eng_mb=600; bpp=350; ck_mb=1900; nnue_mb=80 ;;
+  esac
+  (( LAYERS == 2 )) && ck_mb=$(( ck_mb * 11 / 10 ))
+  local base=$(( cpus > 1 ? cpus - 1 : 1 )) cap
+  if [[ -z "${USERSET[GEN_WORKERS]:-}" ]]; then
+    cap=$(( avail * 85 / 100 / eng_mb )); GEN_WORKERS=$(( base < cap ? base : cap )); (( GEN_WORKERS < 1 )) && GEN_WORKERS=1
+  fi
+  if [[ -z "${USERSET[MATCH_WORKERS]:-}" ]]; then   # mỗi worker = 2 engine
+    cap=$(( avail * 85 / 100 / (2 * eng_mb) )); MATCH_WORKERS=$(( base < cap ? base : cap )); (( MATCH_WORKERS < 1 )) && MATCH_WORKERS=1
+  fi
+  if [[ -z "${USERSET[SHARD_SIZE]:-}" ]]; then      # README: RAM ≈ 2 × bpp × shard_size
+    SHARD_SIZE=$(( avail * 40 / 100 * 1048576 / (2 * bpp) / 100000 * 100000 ))
+    (( SHARD_SIZE > 2000000 )) && SHARD_SIZE=2000000; (( SHARD_SIZE < 100000 )) && SHARD_SIZE=100000
+  fi
+  if [[ -z "${USERSET[PREP_WORKERS]:-}" ]]; then
+    local shard_mb=$(( SHARD_SIZE * 2 * bpp / 1048576 ))
+    PREP_WORKERS=$(( (avail - shard_mb) / 250 )); (( PREP_WORKERS > cpus )) && PREP_WORKERS=$cpus; (( PREP_WORKERS < 1 )) && PREP_WORKERS=1
+  fi
+
+  # GPU
+  local gpu_txt="không có"
+  if [[ "${HW[CUDA]:-0}" == 1 && -n "${HW[GPU_NAME]:-}" ]]; then
+    gpu_txt="${HW[GPU_NAME]//_/ } (#${HW[GPU_INDEX]:-0}) $(gb "${HW[GPU_TOTAL_MB]:-0}") GB, trống $(gb "${HW[GPU_FREE_MB]:-0}") GB"
+    (( ${HW[GPU_COUNT]:-1} > 1 )) && gpu_txt+=" · ${HW[GPU_COUNT]} GPU, chọn GPU trống nhất"
+    if (( ${HW[GPU_COUNT]:-1} > 1 )) && [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+      export CUDA_VISIBLE_DEVICES=${HW[GPU_INDEX]:-0}
+    fi
+    if (( ${HW[GPU_FREE_MB]:-0} * 10 < ${HW[GPU_TOTAL_MB]:-0} * 7 )); then
+      info "⚠ GPU đang bị tiến trình khác chiếm $(gb $(( ${HW[GPU_TOTAL_MB]} - ${HW[GPU_FREE_MB]} ))) GB"
+    fi
+  fi
+  if [[ "$MODE" != gen ]]; then
+    if [[ "${HW[CUDA]:-0}" != 1 && "$DEVICE" != cpu ]]; then
+      if [[ "$REQUIRE_GPU" == 1 ]]; then
+        fail "Không có CUDA. Cài torch bản CUDA, hoặc đặt REQUIRE_GPU=0 / DEVICE=cpu để train bằng CPU (rất chậm)" || return 1
+      fi
+      DEVICE=cpu
+    fi
+    local batch_txt
+    if [[ -n "${USERSET[BATCH_SIZE]:-}" ]]; then
+      batch_txt="$BATCH_SIZE (cấu hình)"
+    elif [[ "$DEVICE" == cpu ]]; then
+      BATCH_SIZE=$BATCH_TARGET; batch_txt="$BATCH_SIZE (CPU)"
+    elif [[ -n "${HW[BATCH_FIT]:-}" ]]; then
+      (( ${HW[BATCH_FIT]} > 0 )) || fail "GPU không đủ bộ nhớ để train kể cả với batch 1024" || return 1
+      BATCH_SIZE=${HW[BATCH_FIT]}
+      batch_txt="$BATCH_SIZE (đã chạy thử trên GPU, đỉnh $(gb "${HW[BATCH_PEAK_MB]:-0}") GB)"
+      (( BATCH_SIZE < BATCH_TARGET )) && batch_txt+=" ⚠ nhỏ hơn mặc định $BATCH_TARGET vì thiếu VRAM"
+    else
+      BATCH_SIZE=$BATCH_TARGET; batch_txt="$BATCH_SIZE (không đo được)"
+    fi
+    if [[ -z "${USERSET[TRAIN_THREADS]:-}" ]]; then
+      if [[ "$DEVICE" == cpu ]]; then TRAIN_THREADS=$cpus; else TRAIN_THREADS=0; fi
+    fi
+
+    # Đĩa: data (nếu sẽ sinh) + .nnue mỗi epoch + checkpoint → chọn CHECKPOINT_EVERY vừa đĩa
+    local pos=0; [[ "$MODE" == full ]] && pos=$(( (GAMES + VAL_GAMES) * 80 ))
+    local data_mb=$(( pos * (100 + bpp) / 1048576 ))
+    local budget=$(( (disk - data_mb) / 2 - EPOCHS * nnue_mb - ck_mb ))   # dùng tối đa ~nửa đĩa còn lại
+    if [[ -z "${USERSET[CHECKPOINT_EVERY]:-}" ]]; then
+      local ce n
+      CHECKPOINT_EVERY=""
+      for ce in 1 2 5 10 20 "$EPOCHS"; do
+        n=$(( (EPOCHS + ce - 1) / ce ))
+        if (( n * ck_mb <= budget )); then CHECKPOINT_EVERY=$ce; break; fi
+      done
+      [[ -n "$CHECKPOINT_EVERY" ]] || fail "Không đủ đĩa: cần ~$(gb $(( data_mb + EPOCHS * nnue_mb + 3 * ck_mb ))) GB, còn $(gb "$disk") GB" || return 1
+    fi
+    info "Train: device ${DEVICE:-cuda} · batch ${batch_txt} · checkpoint mỗi ${CHECKPOINT_EVERY} epoch$(src CHECKPOINT_EVERY) (~$(gb "$ck_mb") GB/cái)$( (( TRAIN_THREADS > 0 )) && printf ' · %s luồng CPU' "$TRAIN_THREADS")"
+  else
+    local pos=$(( (GAMES + VAL_GAMES) * 80 )) need
+    need=$(( pos * 100 / 1048576 )); (( NO_PREPARE )) || need=$(( pos * (100 + bpp) / 1048576 ))
+    (( need < disk )) || fail "Không đủ đĩa cho data: cần ~$(gb "$need") GB, còn $(gb "$disk") GB" || return 1
+  fi
+
+  info "Máy: ${cpus} CPU · RAM $(gb "$ram") GB (trống $(gb "$avail")) · đĩa trống $(gb "$disk") GB"
+  info "GPU: $(html_escape "$gpu_txt")${HW[TORCH]:+ · torch ${HW[TORCH]}}"
+  if [[ "$MODE" != train ]]; then
+    info "Sinh data: ${GEN_WORKERS} worker$(src GEN_WORKERS) · prepare: ${PREP_WORKERS} worker$(src PREP_WORKERS), shard $(fmt_num "$SHARD_SIZE")$(src SHARD_SIZE)"
+  else
+    info "Prepare (nếu cần): ${PREP_WORKERS} worker$(src PREP_WORKERS), shard $(fmt_num "$SHARD_SIZE")$(src SHARD_SIZE)"
+  fi
+  [[ "$MODE" != gen ]] && (( ! SKIP_MATCH )) && info "SPRT: ${MATCH_WORKERS} worker$(src MATCH_WORKERS)"
+  local line; for line in "GEN_WORKERS=$GEN_WORKERS" "MATCH_WORKERS=$MATCH_WORKERS" "PREP_WORKERS=$PREP_WORKERS" \
+      "SHARD_SIZE=$SHARD_SIZE" "BATCH_SIZE=$BATCH_SIZE" "CHECKPOINT_EVERY=$CHECKPOINT_EVERY" "TRAIN_THREADS=$TRAIN_THREADS" "DEVICE=$DEVICE"; do
+    echo "chọn: $line" >> "$CUR_LOG"
+  done
   return 0
 }
 
@@ -451,6 +567,7 @@ s_train() {
         --lr "$LR" --gamma "$GAMMA" --lambda "$LAMBDA" --scaling "$SCALING"
         --layers "$LAYERS" --checkpoint-every "$CHECKPOINT_EVERY")
   [[ -n "$DEVICE" ]] && cmd+=(--device "$DEVICE")
+  (( TRAIN_THREADS > 0 )) && cmd+=(--threads "$TRAIN_THREADS")
   if [[ -f "$RUN_DIR/last.pt" && $NO_RESUME == 0 ]]; then
     cmd+=(--resume "$RUN_DIR/last.pt"); info "Tiếp tục từ $(html_escape "$RUN_DIR/last.pt") (epoch ${done_ep})"
   elif (( GEN > 0 )) && [[ "$INIT_FROM_CURRENT" == 1 ]]; then
@@ -568,7 +685,7 @@ case "$MODE" in
   train) MODE_TXT="CHỈ TRAIN" ;;
 esac
 tg_send "🚀 ${NAME_TAG} · Bắt đầu pipeline: <b>${MODE_TXT}</b>
-net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata: %s ván + %s val, %s nodes, %s workers, seed %s' "$GAMES" "$VAL_GAMES" "$NODES" "$GEN_WORKERS" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
+net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata: %s ván + %s val, %s nodes, seed %s' "$GAMES" "$VAL_GAMES" "$NODES" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
 
 step "Kiểm tra môi trường" s_preflight
 step "Build engine" s_build
