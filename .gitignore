@@ -26,6 +26,6 @@ trainer/runs/
 trainer/nets/
 trainer/AB-JChess/
 
-# pipeline.sh (chứa token Telegram) và log
+# pipeline.sh config (holds the Telegram token) and logs
 trainer/pipeline.env
 trainer/logs/
