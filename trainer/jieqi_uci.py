@@ -91,9 +91,20 @@ class Engine:
         return best, score, mate
 
     def evalraw(self) -> tuple[int, int, int]:
+        """(psqt, positional, layer stack) of the raw network output."""
+        return self.evalraw_full()[:3]
+
+    def evalraw_full(self) -> tuple[int, int, int, int | None]:
+        """(psqt, positional, layer stack, final): final is the static evaluation
+        after the scaling of evaluate() (None in check, or for an engine whose
+        evalraw does not print it)."""
         self.send("evalraw")
-        line = self.wait_for("evalraw")[-1].split()
-        return int(line[2]), int(line[4]), int(line[6])
+        t = self.wait_for("evalraw")[-1].split()
+        t = t[:t.index("fen")] if "fen" in t else t
+        fields = dict(zip(t[1::2], t[2::2]))        # name value name value ...
+        final = fields.get("final")
+        return (int(fields["psqt"]), int(fields["positional"]), int(fields["bucket"]),
+                int(final) if final not in (None, "none") else None)
 
     def quit(self):
         try:

@@ -44,6 +44,7 @@ code is written specifically for this engine's feature set and file format.
 | `serialize.py` | Writes / reads `.nnue` files, converts `.nnue` into a checkpoint |
 | `jieqi_features.py` | Input features, a copy of Maskfish's `src/nnue/features/half_ka_v2_hm` |
 | `model.py` | PyTorch model and weight clipping |
+| `eval_scale.py` | The scaling of the engine's `evaluate()`, applied to the network output in the loss |
 | `jieqi_uci.py` | Helpers to drive the engine over UCI |
 
 The engine has two things dedicated to the trainer: the UCI option `RawScore`
@@ -117,9 +118,11 @@ not need a GPU, only `numpy` and `zstandard` (and `torch` to run `verify.py`).
 python verify.py --engine ../src/maskfish
 ```
 
-The result must be `N/N positions bit-exact with the engine`. **If it does not
-match, do not train**: the engine and the trainer understand the network
-differently (usually because the engine's architecture changed, see
+The result must be `N/N positions bit-exact with the engine`, followed by
+`evaluate() scaling: N/N positions bit-exact` (the scaling that the loss
+applies, see step 4). **If it does not match, do not train**: the engine and
+the trainer understand the network differently (usually because the engine's
+architecture changed, see
 [section 11](#11-when-the-engines-network-architecture-changes)).
 
 ### 3.4. Directory layout (suggestion)
@@ -240,6 +243,7 @@ and the file `data/train0.arch` holding the architecture.
 | `--score-scale` | 1.0 | Multiply the scores by this factor, to convert another engine's scores to internal units ([section 6](#6-using-other-engines-ab-jchess-and-the-old-branch)) |
 | `--workers` | cores | Number of FEN parsing processes |
 | `--arch` | `default` | `att` for the experimental architecture ([section 7.2](#72-the-att-architecture)) |
+| `--jieqi-material` | off | The data was generated with the engine option `JieqiMaterial=true` (store the material `evaluate()` then uses) |
 
 Every shard is shuffled before it is written; during training every batch
 comes from a random shard, so the data is mixed across shards.
@@ -281,11 +285,28 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--output-lr-scale` | 0.1 | Learning rate of the output layer, relative to `--lr` |
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
+| `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
 
 The loss is that of nnue-pytorch: the network's score and the data score are
 both converted to a win probability with `sigmoid(score / scaling)`, the
 target is `lambda × probability from the score + (1 − lambda) × game result`,
 and the loss is the mean of `|prediction − target|^2.5`.
+
+**The network's score is taken after the engine's `evaluate()` scaling.** The
+data scores are search scores, made of `evaluate()` values, and `evaluate()`
+is not the raw network output: it multiplies it by `(18560 + material) /
+33331` (at most about 0.85 with the material of Jieqi), damps it by the
+"complexity" `|psqt − positional|` and by the 40-move counter. A network
+trained to output the search scores directly would be scaled down again by
+the engine, and every generation would learn a smaller scale than the
+previous one (measured with the material network: search scores are 0.5–0.85
+times its raw output). The trainer therefore applies the same function
+(`eval_scale.py`) to the network output before the loss, using the material
+and 40-move counter that `prepare_data.py` stores with every position; the
+exported network is unchanged, and `verify.py` checks that the function is
+the engine's, bit for bit. Data prepared before this change has no material:
+prepare it again from the text files (`pipeline.sh` does it automatically),
+or train with `--no-eval-scale`.
 
 **Training-only techniques** (ideas from nnue-pytorch and AB-JChess). They do
 not change the network format: at export, the virtual parts are added into
@@ -750,8 +771,10 @@ sources can be added if it uses this format and internal units (`RawScore`).
 
 - `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
   to move and of the other side, padded with the padding index;
-- `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`;
-- `PREFIX.arch`: architecture name.
+- `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
+  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4);
+- `PREFIX.arch`: architecture name;
+- `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 
 With the `threats` / `att-threats` architectures every shard also has (about
 90 bytes per position):
@@ -788,6 +811,8 @@ Training speed depends on the GPU; run a small epoch first
 | The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att` and `layers=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
 | `no threat data (prepare the data again ...)` | The data was prepared by an old version of `prepare_data.py`; run it again with `--arch threats` |
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |
+| `the train data has no material / rule40` | The data was prepared before the loss used the `evaluate()` scaling: run `prepare_data.py` again on the text files (or train with `--no-eval-scale`) |
+| `SCALE MISMATCH` in `verify.py` | `eval_scale.py` no longer matches `src/evaluate.cpp` (constants or material): update it |
 | `incompatible network for arch ...` | A network of the wrong architecture was given to `--init-net` / `serialize.py`; the message gives the file's real architecture |
 | `prepare_data.py` runs out of RAM | Lower `--shard-size` (e.g. 500000) |
 | `train.py` runs out of GPU memory | Lower `--batch-size` (e.g. 8192); the `att` architecture needs more |
@@ -803,9 +828,11 @@ Training speed depends on the GPU; run a small epoch first
 
 `jieqi_features.py` (the feature sets, `ARCHS`), `model.py` and the constants
 at the top of `serialize.py` (hash, sizes, quantization factors) describe the
-engine. After any change in Maskfish's `src/nnue`, update these files and run
-`verify.py` for every architecture until it is bit-exact. Prepared data must
-be created again; text data can still be used.
+engine; `eval_scale.py` describes `Eval::evaluate()` (`src/evaluate.cpp`) and
+must follow any change of its constants or of `major_material()`. After any
+change in Maskfish's `src/nnue`, update these files and run `verify.py` for
+every architecture until it is bit-exact. Prepared data must be created again;
+text data can still be used.
 
 For the architectures with threats, the "Threat features" part of
 `jieqi_features.py` must list the features in exactly the order of

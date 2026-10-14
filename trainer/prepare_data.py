@@ -3,9 +3,14 @@ train.py reads directly (memory-mapped, no parsing during training).
 
     python prepare_data.py data/gen1.txt data/gen2.txt --out data/train [--arch att]
     -> data/train-00000.features.npy  int16 (N, 2, 64): stm / nstm feature indices
-       data/train-00000.meta.npy      (N,) records: bucket, result, score
+       data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40
        data/train-00001.* ...         one pair of files per shard
        data/train.arch                architecture of the features
+       data/train.material            "major" or "jieqi" (see --jieqi-material)
+
+material and rule40 are the inputs of the scaling that the engine's evaluate()
+applies to the network output (see eval_scale.py); train.py applies the same
+scaling before comparing the network with the data scores.
 
 The threat architectures (--arch threats / att-threats) also write, per shard:
        data/train-00000.threats.npy   uint32 (T,): threat feature indices of all
@@ -33,17 +38,20 @@ import os
 
 import numpy as np
 
+import eval_scale as E
 import jieqi_features as F
 
-META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16)])
+META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
+                       ("material", np.int16), ("rule40", np.uint8)])
 CHUNK_LINES = 16384
 
 
-def _init_worker(arch: str, max_score: int, score_scale: float):
-    global _MAX_SCORE, _SCORE_SCALE
+def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: bool):
+    global _MAX_SCORE, _SCORE_SCALE, _JIEQI_MATERIAL
     F.set_arch(arch)
     _MAX_SCORE = max_score
     _SCORE_SCALE = score_scale
+    _JIEQI_MATERIAL = jieqi_material
 
 
 def parse_chunk(lines: list[str]):
@@ -59,16 +67,21 @@ def parse_chunk(lines: list[str]):
             score, result = int(round(float(score) * _SCORE_SCALE)), int(float(result))
             if abs(score) > _MAX_SCORE or result not in (-1, 0, 1):
                 continue
-            s, o, b, _ = F.fen_to_features(fen)
+            pos = F.parse_fen(fen)
+            stm = pos.side_to_move
+            s, o = F.active_features(pos, stm), F.active_features(pos, 1 - stm)
+            b = F.layer_stack_bucket(pos)
             if len(s) > F.MAX_ACTIVE or len(o) > F.MAX_ACTIVE:
                 continue
+            material, rule40 = E.position_scale_inputs(pos, _JIEQI_MATERIAL)
             if F.THREATS:
-                ts, to = F.fen_to_threats(fen)
+                phys = F.physical_threats(pos)
+                ts, to = F.active_threats(pos, stm, phys), F.active_threats(pos, 1 - stm, phys)
         except Exception:
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
-        meta[n] = (b, result, max(-32000, min(32000, score)))
+        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255))
         if F.THREATS:
             counts[n] = (len(ts), len(to))
             threats.append(ts)
@@ -129,6 +142,9 @@ def main():
     ap.add_argument("--workers", type=int, default=mp.cpu_count())
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
+    ap.add_argument("--jieqi-material", action="store_true",
+                    help="the data was generated with the engine option JieqiMaterial=true: "
+                         "store the material evaluate() then uses (default: major_material)")
     args = ap.parse_args()
     F.set_arch(args.arch)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -137,7 +153,8 @@ def main():
     shard, buf_f, buf_m, buf_t, buffered = 0, [], [], [], 0
     total_in = total_out = 0
     with mp.Pool(args.workers, initializer=_init_worker,
-                 initargs=(args.arch, args.max_score, args.score_scale)) as pool:
+                 initargs=(args.arch, args.max_score, args.score_scale,
+                           args.jieqi_material)) as pool:
         for feats, meta, thr, n_in in pool.imap(parse_chunk, read_chunks(args.inputs)):
             total_in += n_in
             buf_f.append(feats)
@@ -154,6 +171,8 @@ def main():
 
     with open(args.out + ".arch", "w") as f:
         f.write(F.feature_arch(args.arch) + "\n")   # the layer stacks do not matter
+    with open(args.out + ".material", "w") as f:
+        f.write(("jieqi" if args.jieqi_material else "major") + "\n")
     print(f"{total_out} positions ({total_in - total_out} skipped) in {shard} shard(s) -> {args.out}-*.npy")
 
 

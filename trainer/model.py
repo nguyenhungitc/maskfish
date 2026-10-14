@@ -271,7 +271,15 @@ class NNUE(nn.Module):
         """stm_idx / nstm_idx: (n, MAX_ACTIVE) feature indices padded with
         PAD_INDEX. threats (threat architectures): (indices, offsets) of the 2n
         bags of threat features (stm, nstm, stm, nstm, ...). Returns the
-        evaluation for the side to move, network units."""
+        evaluation for the side to move, network units (psqt + positional)."""
+        psqt, positional = self.forward_parts(stm_idx, nstm_idx, buckets, threats)
+        return psqt + positional
+
+    def forward_parts(self, stm_idx: torch.Tensor, nstm_idx: torch.Tensor,
+                      buckets: torch.Tensor, threats=None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Like forward(), but returns the two parts of the network output
+        separately, (psqt, positional), each (n, 1) in network units: the
+        engine's evaluate() scaling needs both (see eval_scale.py)."""
         L1 = self.l1_size
         stm = self.transform(stm_idx) + self.ft_bias
         nstm = self.transform(nstm_idx) + self.ft_bias
@@ -291,7 +299,7 @@ class NNUE(nn.Module):
         h = L1 // 2
         x = torch.cat([s[:, :h] * s[:, h:], o[:, :h] * o[:, h:]], dim=1) * (127.0 / 128.0)
 
-        return self.stacks(x, buckets) + psqt
+        return psqt, self.stacks(x, buckets)
 
     def clip_weights(self):
         self.stacks.clip_weights()

@@ -541,9 +541,18 @@ void Engine::eval_raw() const {
     auto caches       = std::make_unique<Eval::NNUE::AccumulatorCaches>(*networks);
     auto [psqt, positional] = networks->big.evaluate(p, *accumulators, &caches->big);
 
+    // Static evaluation after the scaling of Eval::evaluate() (optimism 0, the
+    // JieqiMaterial option as set): what the search scores, and so the training
+    // data, are made of. The trainer applies the same scaling to the network
+    // output when it computes the loss (trainer/eval_scale.py).
+    std::string finalEval = "none";  // evaluate() is not defined in check
+    if (!p.checkers())
+        finalEval = std::to_string(int(Eval::evaluate(*networks, p, *accumulators, *caches,
+                                                      VALUE_ZERO, bool(options["JieqiMaterial"]))));
+
     sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
-              << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " fen " << p.fen()
-              << sync_endl;
+              << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " final " << finalEval
+              << " fen " << p.fen() << sync_endl;
 }
 
 const OptionsMap& Engine::get_options() const { return options; }

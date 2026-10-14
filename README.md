@@ -161,9 +161,10 @@ that fail should be removed rather than kept as dead options.
 one child per kind of piece left in the mover's pool (each kind counted once).
 It does not need a network.
 `evalraw` prints the raw network output (PSQT and layer parts, in internal
-units) and the layer stack used. The option `RawScore` makes `info ... score cp`
-report internal units instead of normalized centipawns. Both are used by the
-[trainer](trainer/).
+units), the layer stack used, and `final`: the static evaluation after the
+scaling of `evaluate()` (optimism 0; `none` in check). The option `RawScore`
+makes `info ... score cp` report internal units instead of normalized
+centipawns. Both are used by the [trainer](trainer/).
 
 ## Network
 

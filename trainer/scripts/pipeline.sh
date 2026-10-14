@@ -488,17 +488,24 @@ s_fit() {   # informational only, never fails the pipeline
 # prepare one text file → one prefix; $3=1 forces a redo
 prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
   local txt="$1" prefix="$2" force="$3"
-  if [[ -f "${prefix}.arch" && "$force" == 0 ]]; then
+  # ".material" is written since the shards hold material / rule40 (evaluate() scaling in the loss)
+  if [[ -f "${prefix}.arch" && -f "${prefix}.material" && "$force" == 0 ]]; then
     echo "Already prepared: $prefix" | tee -a "$CUR_LOG"; return 0
   fi
+  if [[ -f "${prefix}.arch" && ! -f "${prefix}.material" ]]; then
+    echo "Prepared by an older prepare_data.py (no material / rule40): preparing again" | tee -a "$CUR_LOG"
+    force=1
+  fi
   if [[ "$force" == 1 ]] && (( ! DRY_RUN )); then
-    rm -f "${prefix}".arch "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
+    rm -f "${prefix}".arch "${prefix}".material "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
   fi
   local inputs=("$txt") s
   for s in "${txt}".salvage-*; do [[ -s "$s" ]] && inputs+=("$s"); done
   local cmd=("$PYTHON" -u prepare_data.py "${inputs[@]}" --out "$prefix" --arch "$NNUE_ARCH"
              --shard-size "$SHARD_SIZE" --max-score "$MAX_SCORE" --score-scale "$SCORE_SCALE")
   [[ -n "$PREP_WORKERS" ]] && cmd+=(--workers "$PREP_WORKERS")
+  # data generated with JieqiMaterial=true: evaluate() uses jieqi_major_material()
+  [[ " $GEN_OPTS " =~ [[:space:]]JieqiMaterial=(true|1)[[:space:]] ]] && cmd+=(--jieqi-material)
   run "$CUR_LOG" "${cmd[@]}" || return 1
   (( DRY_RUN )) && return 0
   [[ -f "${prefix}.arch" ]] || fail "prepare finished but ${prefix}.arch is missing" || return 1
@@ -712,7 +719,7 @@ else
     for txt in data/${LP}gen${k}.txt data/${LP}gen${k}_*.txt data/${LP}val${GEN}.txt data/${LP}val${GEN}_*.txt; do
       [[ -s "$txt" ]] || continue
       b=$(basename "$txt" .txt); b="${b/#${LP}gen/${LP}train}"
-      [[ -f "$PREP_DIR/$b.arch" ]] || missing=1
+      [[ -f "$PREP_DIR/$b.arch" && -f "$PREP_DIR/$b.material" ]] || missing=1
     done
   done
   (( missing )) && step "Prepare missing data" s_prepare

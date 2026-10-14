@@ -20,6 +20,14 @@ target mixes the search score and the game result with --lambda:
     target = lambda * sigmoid(score / scaling) + (1 - lambda) * (result + 1) / 2
     loss   = mean(|sigmoid(s / scaling) - target| ^ 2.5)
 
+s is the network output after the scaling of the engine's evaluate() (the
+data scores are search scores, made of evaluate() values; see eval_scale.py):
+    s = evaluate(psqt, positional, material, rule40)
+so that, once exported, the engine's evaluation of the network matches the
+scores it was trained on, and the scale of the evaluation does not shrink
+from one generation to the next. --no-eval-scale compares the raw network
+output instead (the behaviour of older versions of the trainer).
+
 Training-only techniques (ideas from nnue-pytorch / AB-JChess, none of them
 changes the exported network format):
 * virtual input features and a shared fc0 part (see model.py), on by
@@ -42,6 +50,7 @@ import time
 import numpy as np
 import torch
 
+import eval_scale as E
 import jieqi_features as F
 import serialize as S
 from model import NNUE, NNUE2SCORE
@@ -85,6 +94,17 @@ class Data:
                     self.shards.append((f, m))
                     self.threats.append(thr)
         self.sizes = np.array([len(m) for _, m in self.shards], dtype=np.int64)
+        # material / rule40 for the evaluate() scaling (prepare_data.py since that change)
+        self.has_scale = all("material" in m.dtype.names and "rule40" in m.dtype.names
+                             for _, m in self.shards)
+        kinds = set()
+        for prefix in prefixes:
+            try:
+                with open(prefix + ".material") as fm:
+                    kinds.add(fm.read().strip())
+            except FileNotFoundError:
+                kinds.add("none")
+        self.material_kinds = sorted(kinds)
         self.n = int(self.sizes.sum())
         if self.n == 0:
             raise SystemExit("empty data set")
@@ -140,15 +160,33 @@ class Data:
             np.cumsum(counts[a:b].reshape(-1)[:-1], out=off[1:])
             threats = (torch.from_numpy(idx).to(device, non_blocking=True),
                        torch.from_numpy(off).to(device, non_blocking=True))
+        material = rule40 = None
+        if self.has_scale:
+            material = torch.from_numpy(m["material"].astype(np.float32)).to(device)
+            rule40 = torch.from_numpy(m["rule40"].astype(np.float32)).to(device)
         return (f[:, 0].to(device, non_blocking=True), f[:, 1].to(device, non_blocking=True),
                 torch.from_numpy(m["bucket"].astype(np.int64)).to(device),
                 torch.from_numpy(m["score"].astype(np.float32)).to(device),
-                torch.from_numpy(m["result"].astype(np.float32)).to(device), threats)
+                torch.from_numpy(m["result"].astype(np.float32)).to(device), threats,
+                material, rule40)
 
 
-def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None):
-    stm, nstm, bucket, score, result, threats = batch
-    out = model(stm, nstm, bucket, threats).squeeze(1) * NNUE2SCORE
+def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
+    """Score of the model for a batch, internal units: after the engine's
+    evaluate() scaling when the batch has material / rule40 and eval_scale is
+    on, otherwise the raw network output."""
+    stm, nstm, bucket, _, _, threats = batch[:6]
+    material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
+    if eval_scale and material is not None:
+        psqt, positional = model.forward_parts(stm, nstm, bucket, threats)
+        return E.evaluate_float(psqt.squeeze(1) * NNUE2SCORE, positional.squeeze(1) * NNUE2SCORE,
+                                material, rule40)
+    return model(stm, nstm, bucket, threats).squeeze(1) * NNUE2SCORE
+
+
+def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True):
+    bucket, score, result = batch[2], batch[3], batch[4]
+    out = model_score(model, batch, eval_scale)
     q = torch.sigmoid(out / scaling)
     p = torch.sigmoid(score / scaling)
     target = lam * p + (1.0 - lam) * (result + 1.0) * 0.5
@@ -205,6 +243,10 @@ def main():
     ap.add_argument("--stack-balance", type=float, default=0.0, metavar="CAP",
                     help="weight samples by inverse layer stack frequency, capped at CAP "
                          "(e.g. 8); 0 = off")
+    ap.add_argument("--no-eval-scale", action="store_true",
+                    help="compare the raw network output with the data scores, without the "
+                         "engine's evaluate() scaling (old behaviour; the scale of the "
+                         "evaluation then shrinks from one generation to the next)")
     args = ap.parse_args()
 
     if args.threads:
@@ -218,6 +260,18 @@ def main():
     val = Data(args.val) if args.val else None
     if val and val.arch != train.arch:
         raise SystemExit(f"train data is arch '{train.arch}' but validation data is '{val.arch}'")
+    eval_scale = not args.no_eval_scale
+    if eval_scale:
+        for name, d in (("train", train), ("validation", val)):
+            if d is not None and not d.has_scale:
+                raise SystemExit(f"the {name} data has no material / rule40 (prepared by an older "
+                                 "prepare_data.py): prepare it again from the text files, or "
+                                 "train with --no-eval-scale")
+        kinds = sorted(set(train.material_kinds) | set(val.material_kinds if val else []))
+        if len(kinds) > 1:
+            print(f"warning: data prepared with different material settings {kinds}", flush=True)
+    print("loss on: " + ("evaluate() scaling of the network output" if eval_scale
+                         else "raw network output"), flush=True)
     F.set_arch(F.with_layers(train.arch, args.layers))
     init_q, init_ft_only = None, False
     if args.init_net:
@@ -282,7 +336,7 @@ def main():
         t0, total = time.time(), 0.0
         for i, batch in enumerate(train.batches(args.batch_size, steps, rng, device)):
             opt.zero_grad(set_to_none=True)
-            loss = loss_fn(model, batch, args.scaling, args.lam, stack_weights)
+            loss = loss_fn(model, batch, args.scaling, args.lam, stack_weights, eval_scale)
             loss.backward()
             opt.step()
             model.clip_weights()
@@ -297,7 +351,8 @@ def main():
             vl, vn = 0.0, 0
             with torch.no_grad():
                 for n, batch in val.sequential(args.batch_size, 1_000_000, device):
-                    vl += loss_fn(model, batch, args.scaling, args.lam).item() * n
+                    vl += loss_fn(model, batch, args.scaling, args.lam,
+                                  eval_scale=eval_scale).item() * n
                     vn += n
             msg += f", val loss {vl / max(1, vn):.6f}"
         msg += f", lr {sched.get_last_lr()[0]:.2e}, {time.time() - t0:.0f}s"

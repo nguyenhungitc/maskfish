@@ -45,6 +45,8 @@ PS_NB = 14 * SQUARE_NB              # 1260
 NUM_KING_BUCKETS = 6
 MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62
 
+MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (types.h)
+
 NUM_PSQT_BUCKETS = 16
 NUM_LAYER_STACKS = 16
 
@@ -329,7 +331,7 @@ def parse_fen(fen: str) -> JieqiPosition:
         while i + 1 < len(tok):
             idx = PIECE_TO_CHAR.find(tok[i])
             if 0 < idx < 16 and type_of(idx) not in (0, KING) and tok[i + 1].isdigit():
-                pos.rest[idx] = min(int(tok[i + 1]), 15)
+                pos.rest[idx] = min(int(tok[i + 1]), MAX_REST_COUNT)
             i += 2
     if len(parts) > 3:
         pos.rule40 = int(parts[3])

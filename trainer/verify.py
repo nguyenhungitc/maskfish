@@ -4,9 +4,13 @@ as the trainer computes it.
     python verify.py --engine ../src/maskfish [--net out.nnue] [--positions 200]
 
 Without --net, a randomly initialized model is exported to a temporary file.
-For each position (random Jieqi games played with real hidden identities),
-it compares the engine's `evalraw` output with:
+For each position (random Jieqi games played with real hidden identities, seen
+from the side to move as gen_data.py writes them: the identity of a captured
+dark piece is known to its capturer only), it compares the engine's `evalraw`
+output with:
   * the bit-exact integer reference (serialize.quantized_eval): must be equal;
+  * the evaluate() scaling of that output (eval_scale.evaluate_int, the
+    function train.py applies in the loss): must be equal to the engine's;
   * the float PyTorch model: must be close (quantization error only).
 """
 
@@ -17,28 +21,35 @@ import os
 import random
 import tempfile
 
+import eval_scale as E
 import jieqi_features as F
 import jieqi_uci as U
 import serialize as S
 
 
 def random_positions(engine: U.Engine, count: int, seed: int) -> list[str]:
+    """Positions of random games, each from the view of its side to move (pools
+    then also hold captured dark pieces of unknown identity, as in the data).
+    Captures are preferred half of the time to reach every layer stack."""
     rng = random.Random(seed)
     fens = []
     while len(fens) < count:
         ids = U.HiddenIdentities(rng)
-        moves = []
-        for _ in range(rng.randint(0, 120)):
-            engine.set_position(moves)
+        views: tuple[list[str], list[str]] = ([], [])
+        full_info = rng.random() < 0.3
+        for ply in range(rng.randint(0, 160)):
+            engine.set_position(views[ply % 2])
             fen, in_check = engine.board_info()
             if not in_check:
                 fens.append(fen)
             legal = engine.legal_moves()
-            if not legal:
+            if not legal or len(fens) >= count:
                 break
-            moves.append(ids.annotate(rng.choice(legal)))
-            if len(fens) >= count:
-                break
+            captures = [m for m in legal if U.is_capture(fen, m)]
+            move = rng.choice(captures if captures and rng.random() < 0.5 else legal)
+            white_view, black_view = U.annotate_views(ids, move, full_info)
+            views[0].append(white_view)
+            views[1].append(black_view)
     return fens
 
 
@@ -51,6 +62,8 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS),
                     help="architecture of the random test network (ignored with --net)")
+    ap.add_argument("--jieqi-material", action="store_true",
+                    help="check the evaluate() scaling with the engine option JieqiMaterial=true")
     args = ap.parse_args()
     F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
     print(f"arch {F.ARCH}")
@@ -90,19 +103,31 @@ def main():
         S.write_nnue(q, tmp.name, "verify")
         net = tmp.name
 
-    engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net)})
+    engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net),
+                                    "JieqiMaterial": str(args.jieqi_material).lower()})
     fens = random_positions(engine, args.positions, args.seed)
 
-    exact, worst = 0, 0.0
+    exact, worst, scaled, no_final = 0, 0.0, 0, 0
     for fen in fens:
         engine.send(f"position fen {fen}")
-        e_psqt, e_pos, e_bucket = engine.evalraw()
+        e_psqt, e_pos, e_bucket, e_final = engine.evalraw_full()
         r_psqt, r_pos, r_bucket = S.quantized_eval(q, fen)
-        if (e_psqt, e_pos, e_bucket) == (r_psqt, r_pos, r_bucket):
-            exact += 1
-        else:
+        ok = (e_psqt, e_pos, e_bucket) == (r_psqt, r_pos, r_bucket)
+        if not ok:
             print("MISMATCH", fen, "engine", (e_psqt, e_pos, e_bucket),
                   "reference", (r_psqt, r_pos, r_bucket))
+        if e_final is None:
+            no_final += 1
+        else:
+            material, rule40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40)
+            if r_final == e_final:
+                scaled += 1
+            else:
+                ok = False
+                print("SCALE MISMATCH", fen, "engine evaluate()", e_final, "reference", r_final,
+                      f"(material {material}, rule40 {rule40})")
+        exact += ok
         if model is not None:
             s, n, b, _ = F.fen_to_features(fen)
             pad = lambda l: l + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(l))
@@ -116,6 +141,11 @@ def main():
         os.unlink(tmp.name)
 
     print(f"{exact}/{len(fens)} positions bit-exact with the engine")
+    if no_final == len(fens):
+        print("warning: the engine does not print the evaluate() value in evalraw "
+              "(older engine): the scaling used in the loss was not checked")
+    else:
+        print(f"evaluate() scaling: {scaled}/{len(fens) - no_final} positions bit-exact")
     if model is not None:
         print(f"largest float/quantized difference: {worst:.1f} internal units")
     raise SystemExit(0 if exact == len(fens) else 1)
