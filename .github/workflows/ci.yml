@@ -1,7 +1,8 @@
 # Builds the engine and runs the tests that need no network: perft
 # (regression values of the move generator) and invalid inputs. The sanitizer
 # job also checks gives_check() for every move of a dark piece (debug build).
-# Runs only for the pro branch: pushes to it and pull requests into it.
+# Runs only for the pro branch (pushes to it and pull requests into it), and
+# only when the change touches src/ or trainer/.
 # The runner image is pinned (not ubuntu-latest), so that a new compiler or
 # sanitizer runtime only comes with a deliberate change of this file.
 name: CI
@@ -9,8 +10,14 @@ name: CI
 on:
   push:
     branches: [pro]
+    paths:
+      - "src/**"
+      - "trainer/**"
   pull_request:
     branches: [pro]
+    paths:
+      - "src/**"
+      - "trainer/**"
 
 jobs:
   release:
