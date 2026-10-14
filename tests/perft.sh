@@ -2,6 +2,7 @@
 # Verify perft numbers of the Jieqi move generator.
 #
 # Run from the src directory, after building: ../tests/perft.sh
+# PERFT_QUICK=1 skips the long start position test (slow sanitizer builds).
 # 'go perft' does not need a network. In a debug build (make build debug=yes)
 # it also checks gives_check() for every move of a dark piece.
 #
@@ -36,7 +37,9 @@ run_test() {
 
 # Start position: every move reveals a piece
 run_test "startpos" 3 2593799
-run_test "startpos" 4 538328131
+if [ -z "$PERFT_QUICK" ]; then
+  run_test "startpos" 4 538328131
+fi
 
 # Middle game and endgame positions with dark pieces (from the benchmark)
 run_test "fen x1xxkxxxx/9/c6x1/2x6/a3r1n1p/R1P3A2/4X3X/1X2B1AX1/4P4/1C2KXX1X w R1A0C1P3N1B1r0a1c1p4n1b2 1 8" 3 963202

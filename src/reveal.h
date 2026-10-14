@@ -69,6 +69,8 @@ struct Window {
 };
 
 Value  apply_bonus(Value rawValue, int bonus);
+// Inverse of apply_bonus() (up to the clamping): the raw value of an adjusted one
+Value  remove_bonus(Value adjustedValue, int bonus);
 Value  first_raw(Value adjustedThreshold, int bonus);
 Window child_window(Value alpha, Value beta, int bonus);
 

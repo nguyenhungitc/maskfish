@@ -140,6 +140,14 @@ Value apply_bonus(Value rawValue, int bonus) {
                             int(VALUE_MATE_IN_MAX_PLY) - 1));
 }
 
+Value remove_bonus(Value adjustedValue, int bonus) {
+    if (is_decisive(adjustedValue))
+        return adjustedValue;
+
+    return Value(std::clamp(int(adjustedValue) - bonus, int(VALUE_MATED_IN_MAX_PLY) + 1,
+                            int(VALUE_MATE_IN_MAX_PLY) - 1));
+}
+
 // Smallest raw (unadjusted) value whose adjusted value reaches the threshold.
 Value first_raw(Value adjustedThreshold, int bonus) {
     constexpr int Lower  = VALUE_MATED_IN_MAX_PLY;

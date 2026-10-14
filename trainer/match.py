@@ -21,8 +21,9 @@ public; when a dark piece is captured, the capturer is told its identity but
 its owner is not (use --full-info to tell both).
 
 Games end by mate / no legal move, by adjudication (mate score, or both
-sides agreeing that |score| >= --adjudicate for 4 moves each), or as a draw
-after 80 plies without capture (the 40-move rule) or --max-plies.
+sides agreeing that |score| >= --adjudicate for 4 moves each), on the third
+occurrence of a position (perpetual check loses, otherwise a draw), or as a
+draw after 80 plies without capture (the 40-move rule) or --max-plies.
 """
 
 from __future__ import annotations
@@ -41,23 +42,6 @@ import jieqi_uci as U
 
 
 # ---------------------------------------------------------------- games
-
-def annotate_views(ids: U.HiddenIdentities, move: str, full_info: bool) -> tuple[str, str]:
-    """Move as sent to the white engine and to the black engine. The reveal
-    of the moving piece is public; the identity of a captured dark piece is
-    only given to the capturer (unless full_info)."""
-    frm, to = U.square_from_uci(move[0:2]), U.square_from_uci(move[2:4])
-    reveal = ids.hidden.pop(frm) if frm in ids.hidden else ""
-    captured = ids.hidden.pop(to) if to in ids.hidden else ""
-    base = move[:4] + reveal
-    if not captured:
-        return base, base
-    with_id = base + captured
-    if full_info:
-        return with_id, with_id
-    capturer = F.WHITE if captured.islower() else F.BLACK
-    return (with_id, base) if capturer == F.WHITE else (base, with_id)
-
 
 def make_opening(engine: U.Engine, rng: random.Random, plies: int):
     """Random legal opening moves (raw engine moves) and the identities."""
@@ -87,11 +71,15 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
 
     last_scores = {F.WHITE: [], F.BLACK: []}   # from white's point of view
     no_capture = 0
+    repetitions = U.RepetitionTracker()
     for ply in range(args.max_plies):
         stm = ply % 2
         eng = engines[stm]
         eng.set_position(views[stm])
-        fen, _ = eng.board_info()
+        fen, in_check = eng.board_info()
+        result = repetitions.push(fen, in_check)
+        if result is not None:
+            return result
         if ply < len(opening):
             move = opening[ply]
             score, mate = None, False
@@ -100,7 +88,7 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
             if move in ("(none)", "0000"):
                 return -1 if stm == F.WHITE else 1
         capture = U.is_capture(fen, move)
-        w, b = annotate_views(ids, move, args.full_info)
+        w, b = U.annotate_views(ids, move, args.full_info)
         views[0].append(w)
         views[1].append(b)
 

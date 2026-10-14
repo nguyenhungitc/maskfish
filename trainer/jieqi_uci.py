@@ -130,6 +130,59 @@ class HiddenIdentities:
         return move[:4] + suffix
 
 
+def annotate_views(ids: HiddenIdentities, move: str, full_info: bool = False) -> tuple[str, str]:
+    """Engine move -> (move as sent to the white side, move as sent to the black
+    side). Updates the identities. The reveal of the moving piece is public;
+    the identity of a captured dark piece is only given to the capturer (to
+    both with full_info), as in a real game: its owner never learns it."""
+    frm, to = square_from_uci(move[0:2]), square_from_uci(move[2:4])
+    reveal = ids.hidden.pop(frm) if frm in ids.hidden else ""
+    captured = ids.hidden.pop(to) if to in ids.hidden else ""
+    base = move[:4] + reveal
+    if not captured:
+        return base, base
+    with_id = base + captured
+    if full_info:
+        return with_id, with_id
+    capturer = F.WHITE if captured.islower() else F.BLACK
+    return (with_id, base) if capturer == F.WHITE else (base, with_id)
+
+
+class RepetitionTracker:
+    """Ends a game when a position occurs for the third time. Perpetual check
+    loses, as in the engine (Position::rule_judge()): if one side gave check
+    with every move of the last cycle and the other did not, the checking side
+    loses; otherwise the game is drawn. (Perpetual chase is not detected here:
+    such games are drawn.)"""
+
+    def __init__(self):
+        self.keys: list[str] = []
+        self.checks: list[bool] = []
+
+    def push(self, fen: str, in_check: bool) -> int | None:
+        """Position reached (FEN from either side's view, whether the side to
+        move is in check). Returns None, or the result for white (+1 / 0 / -1)
+        when the position occurs for the third time."""
+        # Board and side to move: the same in both views (pools may differ)
+        key = " ".join(fen.split()[:2])
+        self.keys.append(key)
+        self.checks.append(in_check)
+        seen = [i for i, k in enumerate(self.keys) if k == key]
+        if len(seen) < 3:
+            return None
+        start, end = seen[-2], len(self.keys) - 1
+        always_checks = {F.WHITE: True, F.BLACK: True}
+        for i in range(start, end):     # the move played in position i ...
+            mover = F.WHITE if self.keys[i].endswith(" w") else F.BLACK
+            if not self.checks[i + 1]:  # ... gave check if position i + 1 is in check
+                always_checks[mover] = False
+        if always_checks[F.WHITE] and not always_checks[F.BLACK]:
+            return -1
+        if always_checks[F.BLACK] and not always_checks[F.WHITE]:
+            return 1
+        return 0
+
+
 def is_capture(fen: str, move: str) -> bool:
     pos = F.parse_fen(fen)
     return bool(pos.board[square_from_uci(move[2:4])])

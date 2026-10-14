@@ -1,0 +1,56 @@
+# Builds the engine and runs the tests that need no network: perft
+# (regression values of the move generator) and invalid inputs. The sanitizer
+# job also checks gives_check() for every move of a dark piece (debug build).
+# Runs only for the pro branch: pushes to it and pull requests into it.
+name: CI
+
+on:
+  push:
+    branches: [pro]
+  pull_request:
+    branches: [pro]
+
+jobs:
+  release:
+    name: Release build, perft, invalid input
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: src
+        run: make -j"$(nproc)" build ARCH=x86-64-avx2
+      - name: Perft
+        working-directory: src
+        run: ../tests/perft.sh
+      - name: Invalid input
+        working-directory: src
+        run: ../tests/invalid_input.sh
+
+  sanitizers:
+    name: Debug build with ASan and UBSan
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: halt_on_error=1:detect_leaks=0
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: src
+        run: make -j"$(nproc)" build ARCH=x86-64-avx2 debug=yes sanitize="address undefined"
+      - name: Perft (asserts gives_check() on every reveal)
+        working-directory: src
+        run: PERFT_QUICK=1 ../tests/perft.sh
+      - name: Invalid input
+        working-directory: src
+        run: ../tests/invalid_input.sh
+
+  trainer:
+    name: Trainer scripts compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile
+        run: python -m py_compile trainer/*.py

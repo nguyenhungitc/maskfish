@@ -67,6 +67,10 @@ struct Stack {
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
     int                         ply;
     Move                        currentMove;
+    // Piece of currentMove as the histories index it: the piece that moved,
+    // for a dark piece the kind of its starting square (what the move picker
+    // sees before the reveal), not the piece revealed on the target square
+    Piece                       movedPiece;
     Move                        excludedMove;
     Value                       staticEval;
     int                         statScore;
@@ -146,6 +150,9 @@ struct RootMove {
     // previous iteration (it was one of the MultiPV lines)
     bool              previousScoreExact = false;
     int               selDepth           = 0;
+    // Safe reveal bonus of the move itself (see Reveal::move_bonus()): part of
+    // score, which the search compares, but not of the score sent to the GUI
+    int               revealBonus        = 0;
     std::vector<Move> pv, previousPV;
 };
 

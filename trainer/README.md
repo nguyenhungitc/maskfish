@@ -191,6 +191,7 @@ Main parameters:
 | `--max-plies` | 400 | Games longer than this (in plies) are drawn |
 | `--adjudicate` | 3000 | A game is won when \|score\| ≥ this threshold for 8 plies in a row |
 | `--opt` | | Extra UCI options for the engine, e.g. `--opt ChanceScaling=400` |
+| `--full-info` | off | Tell both sides the identity of a captured dark piece (by default only the capturer knows it, as in a real game) |
 
 Good to know:
 
@@ -198,6 +199,13 @@ Good to know:
   for the side to move; the result is 1 / 0 / −1 (win / draw / loss) for the
   side to move. Positions in check and positions whose best move is a capture
   are skipped.
+- The FEN is the side to move's view: the identity of a dark piece it lost
+  is unknown to it (the piece stays in its pool), as when the engine plays.
+- The safe reveal bonus (`RevealQuiet*` options) is disabled during data
+  generation: it is a preference of the search between moves, and would
+  otherwise be part of the scores the network learns. `--opt` can set it.
+- A game ends on the third occurrence of a position: perpetual check loses,
+  other repetitions are drawn.
 - The identities of the dark pieces are really drawn at random for every
   game. Since one engine plays both sides, both sides know the identity of
   every captured dark piece.

@@ -370,6 +370,11 @@ bool Search::Worker::iterative_deepening() {
     int    delta, iterIdx                        = 0;
     int    failHighRecovery                      = 0;  // UCI option FailHighRecovery
 
+    // The search adds the safe reveal bonus to the value of a quiet move of a
+    // dark piece: keep it out of the score reported for the root moves
+    for (RootMove& rm : rootMoves)
+        rm.revealBonus = Reveal::move_bonus(rootPos, rm.pv[0], revealQuiet);
+
     // Allocate stack with extra size to allow access from (ss - 7) to (ss + 2):
     // (ss - 7) is needed for update_continuation_histories(ss - 1) which accesses (ss - 6),
     // (ss + 2) is needed for initialization of cutOffCnt.
@@ -1036,7 +1041,7 @@ Value Search::Worker::search(
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount <= 2 && !priorCapture)
-                update_continuation_histories(*this, ss - 1, pos.piece_on(prevSq), prevSq, -2387);
+                update_continuation_histories(*this, ss - 1, (ss - 1)->movedPiece, prevSq, -2387);
         }
 
         // Partial workaround for the graph history interaction problem
@@ -1087,8 +1092,8 @@ Value Search::Worker::search(
     {
         int bonus = std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus * 1269 / 1024;
-        if (type_of(pos.piece_on(prevSq)) != PAWN)
-            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
+        if (type_of((ss - 1)->movedPiece) != PAWN)
+            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][(ss - 1)->movedPiece][prevSq]
               << bonus * 1267 / 1024;
     }
 
@@ -1134,6 +1139,7 @@ Value Search::Worker::search(
         Depth R = 7 + depth / 3 + (pruningTweaks ? std::max((ss->staticEval - beta) / 256, 0) : 0);
 
         ss->currentMove                   = Move::null();
+        ss->movedPiece                    = NO_PIECE;
         ss->continuationHistory           = &thisThread->continuationHistory[0][0][NO_PIECE][0];
         ss->continuationCorrectionHistory = &thisThread->continuationCorrectionHistory[NO_PIECE][0];
 
@@ -1217,6 +1223,7 @@ Value Search::Worker::search(
             do_move(pos, move, st);
 
             ss->currentMove = move;
+            ss->movedPiece  = movedPiece;
             ss->continuationHistory =
               &this->continuationHistory[ss->inCheck][true][movedPiece][move.to_sq()];
             ss->continuationCorrectionHistory =
@@ -1483,6 +1490,7 @@ moves_loop:  // When in check, search starts here
 
         // Update the current move (this must be done after singular extension search)
         ss->currentMove = move;
+        ss->movedPiece  = movedPiece;
         ss->continuationHistory =
           &thisThread->continuationHistory[ss->inCheck][capture][movedPiece][move.to_sq()];
         ss->continuationCorrectionHistory =
@@ -1802,14 +1810,14 @@ moves_loop:  // When in check, search starts here
         // are close to the int range: compute the largest one in 64 bits.
         const int scaledBonus = std::min(153 * depth - 93, 2290) * bonusScale;
 
-        update_continuation_histories(*thisThread, ss - 1, pos.piece_on(prevSq), prevSq,
+        update_continuation_histories(*thisThread, ss - 1, (ss - 1)->movedPiece, prevSq,
                                       scaledBonus * 384 / 32768);
 
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()]
           << scaledBonus * 221 / 32768;
 
-        if (type_of(pos.piece_on(prevSq)) != PAWN)
-            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
+        if (type_of((ss - 1)->movedPiece) != PAWN)
+            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][(ss - 1)->movedPiece][prevSq]
               << int(std::int64_t(scaledBonus) * 1001 / 32768);
     }
 
@@ -1817,7 +1825,7 @@ moves_loop:  // When in check, search starts here
     else if (priorCapture && prevSq != SQ_NONE)
     {
         assert(pos.captured_piece() != NO_PIECE);
-        thisThread->captureHistory[pos.piece_on(prevSq)][prevSq][pos.captured_type()] << 958;
+        thisThread->captureHistory[(ss - 1)->movedPiece][prevSq][pos.captured_type()] << 958;
     }
 
     if (PvNode)
@@ -2089,6 +2097,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
         // Update the current move
         ss->currentMove = move;
+        ss->movedPiece  = movedPiece;
         ss->continuationHistory =
           &thisThread->continuationHistory[ss->inCheck][capture][movedPiece][move.to_sq()];
         ss->continuationCorrectionHistory =
@@ -2591,7 +2600,7 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
-        update_continuation_histories(workerThread, ss - 1, pos.piece_on(prevSq), prevSq,
+        update_continuation_histories(workerThread, ss - 1, (ss - 1)->movedPiece, prevSq,
                                       -malus * 681 / 1024);
 
     // Decrease stats for all non-best capture moves
@@ -2719,8 +2728,9 @@ void SearchManager::pv(const Search::Worker&     worker,
         Depth d = usePreviousScore ? std::max(1, depth - 1) : depth;
         Value v = usePreviousScore ? rootMoves[i].previousScore : rootMoves[i].uciScore;
 
-        if (v == -VALUE_INFINITE)
-            v = VALUE_ZERO;
+        // The root move's own reveal bonus is a preference of the search, not
+        // part of the value of the position (bounds are shifted the same way)
+        v = v == -VALUE_INFINITE ? VALUE_ZERO : Reveal::remove_bonus(v, rootMoves[i].revealBonus);
 
         std::string pv;
         Position    tempPos;

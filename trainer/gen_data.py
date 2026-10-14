@@ -16,14 +16,21 @@ Positions in check and positions whose best move is a capture are skipped
         [--opt ChanceScaling=400 ...] [--seed 1]
 
 Notes
-* The engine searches every position with the same instance, so both sides
-  see the identity of every captured dark piece (the "owner does not know"
-  case is not modelled in the data).
+* Each side only knows what it would know in a real game: the engine searches
+  every position from the side to move's view, where the identity of a
+  captured dark piece is known to its capturer only (its owner keeps it in the
+  pool). The FEN written is that view. --full-info tells both sides.
+* The safe reveal bonus of the search (RevealQuiet* options) is a preference
+  between moves, not part of the value of a position: it is disabled while
+  generating data, so that it is not learned by the network. Pass e.g.
+  --opt RevealQuietBase=-12 RevealQuietSafety=24 RevealQuietHighValue=-12 to
+  keep the engine's defaults.
 * The first plies (--random-plies) are random legal moves for diversity; they
   are not written.
 * Games are adjudicated: |score| >= --adjudicate for 8 plies in a row, a
-  mate score, no legal move (loss), 80 plies without capture (the 40-move rule) or --max-plies
-  (draw).
+  mate score, no legal move (loss), the third occurrence of a position
+  (perpetual check loses, otherwise a draw), 80 plies without capture (the
+  40-move rule) or --max-plies (draw).
 """
 
 from __future__ import annotations
@@ -39,7 +46,8 @@ import jieqi_uci as U
 
 def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int, int]]:
     ids = U.HiddenIdentities(rng)
-    moves: list[str] = []
+    views: tuple[list[str], list[str]] = ([], [])   # moves as known by white / black
+    repetitions = U.RepetitionTracker()
     records: list[tuple[str, int, int]] = []   # (fen, score, side to move)
     random_plies = rng.randint(args.random_plies_min, args.random_plies)
     result_white = 0       # +1 white wins, -1 black wins, 0 draw
@@ -47,9 +55,14 @@ def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int
     no_capture = 0
 
     for ply in range(args.max_plies):
-        engine.set_position(moves)
+        engine.set_position(views[ply % 2])        # the view of the side to move
         fen, in_check = engine.board_info()
         stm = 1 if fen.split()[1] == "w" else -1
+
+        repeated = repetitions.push(fen, in_check)
+        if repeated is not None:
+            result_white = repeated
+            break
 
         if ply < random_plies:
             legal = engine.legal_moves()
@@ -74,7 +87,9 @@ def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int
                     break
 
         no_capture = 0 if U.is_capture(fen, move) else no_capture + 1
-        moves.append(ids.annotate(move))
+        white_view, black_view = U.annotate_views(ids, move, args.full_info)
+        views[0].append(white_view)
+        views[1].append(black_view)
         if no_capture >= U.NO_CAPTURE_DRAW_PLIES:
             break
 
@@ -83,7 +98,10 @@ def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int
 
 def worker(idx: int, args, games: int, out_path: str):
     rng = random.Random(args.seed * 1000003 + idx)
-    opts = {"Threads": 1, "Hash": args.hash, "RawScore": "true"}
+    # No safe reveal bonus in the scores written (see the notes above)
+    opts = {"Threads": 1, "Hash": args.hash, "RawScore": "true",
+            "RevealQuietBase": 0, "RevealQuietPhase": 0, "RevealQuietSafety": 0,
+            "RevealQuietHighValue": 0, "RevealQuietDiversity": 0}
     if args.net:
         opts["EvalFile"] = os.path.abspath(args.net)
     opts.update(args.opt)
@@ -117,6 +135,8 @@ def main():
     ap.add_argument("--random-plies-min", type=int, default=2)
     ap.add_argument("--max-plies", type=int, default=400)
     ap.add_argument("--adjudicate", type=int, default=3000)
+    ap.add_argument("--full-info", action="store_true",
+                    help="tell both sides the identity of a captured dark piece")
     ap.add_argument("--opt", nargs="*", default=[],
                     help="extra UCI options, Name=Value (e.g. ChanceScaling=400)")
     ap.add_argument("--seed", type=int, default=int(time.time()))
