@@ -2,6 +2,8 @@
 # (regression values of the move generator) and invalid inputs. The sanitizer
 # job also checks gives_check() for every move of a dark piece (debug build).
 # Runs only for the pro branch: pushes to it and pull requests into it.
+# The runner image is pinned (not ubuntu-latest), so that a new compiler or
+# sanitizer runtime only comes with a deliberate change of this file.
 name: CI
 
 on:
@@ -13,9 +15,9 @@ on:
 jobs:
   release:
     name: Release build, perft, invalid input
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build
         working-directory: src
         run: make -j"$(nproc)" build ARCH=x86-64-avx2
@@ -28,12 +30,12 @@ jobs:
 
   sanitizers:
     name: Debug build with ASan and UBSan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       ASAN_OPTIONS: halt_on_error=1:detect_leaks=0
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build
         working-directory: src
         run: make -j"$(nproc)" build ARCH=x86-64-avx2 debug=yes sanitize="address undefined"
@@ -46,10 +48,10 @@ jobs:
 
   trainer:
     name: Trainer scripts compile
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Byte-compile
