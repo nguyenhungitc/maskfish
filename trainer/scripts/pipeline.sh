@@ -14,13 +14,13 @@
 #            train on data 0..N  →  runs/gen(N+1)/  →  nets/gen(N+1).nnue
 #
 #  Examples:
-#     ./pipeline.sh -g 0                    # full run gen 0 → gen1
-#     ./pipeline.sh -g 1 --gen-only         # only generate data (+prepare) with nets/gen1.nnue
-#     ./pipeline.sh -g 1 --train-only       # only train/verify/SPRT on existing data
-#     ./pipeline.sh -g 1 --gen-only --tag m2 --no-prepare   # second helper machine
-#     ./pipeline.sh --test-telegram
+#     scripts/pipeline.sh -g 0              # full run gen 0 → gen1
+#     scripts/pipeline.sh -g 1 --gen-only   # only generate data (+prepare) with nets/gen1.nnue
+#     scripts/pipeline.sh -g 1 --train-only # only train/verify/SPRT on existing data
+#     scripts/pipeline.sh -g 1 --gen-only --tag m2 --no-prepare   # second helper machine
+#     scripts/pipeline.sh --test-telegram
 #
-#  Config: trainer/pipeline.env (copy of pipeline.env.example) or --config.
+#  Config: trainer/scripts/pipeline.env (copy of pipeline.env.example) or --config.
 #  Hardware parameters left empty are chosen for the machine (hw_probe.py):
 #  workers from CPU/RAM, shard size from RAM, batch size by a trial run on the
 #  GPU, checkpoint interval from free disk space.
@@ -30,9 +30,10 @@ if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) ))
   echo "bash >= 4.4 required (this is $BASH_VERSION)" >&2; exit 2
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || exit 1
-SRC_DIR="$(cd "$SCRIPT_DIR/../src" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # trainer/scripts
+TRAINER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"                     # trainer
+cd "$TRAINER_DIR" || exit 1          # the trainer scripts, data/, nets/, runs/, logs/ live here
+SRC_DIR="$(cd "$TRAINER_DIR/../src" && pwd)"
 
 # ----------------------------------------------------------------------------- CLI
 usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
@@ -42,7 +43,7 @@ Options:
       --train-only     Only: checks, prepare what is missing, train, verify, SPRT, promote
       --no-prepare     (with --gen-only) do not prepare — for helper machines that only write text
       --tag NAME       Machine / data batch name (file data/genN_NAME.txt), for several machines
-      --config FILE    Config file (default: pipeline.env if present)
+      --config FILE    Config file (default: scripts/pipeline.env if present)
       --skip-check     Skip the initial verify.py engine/trainer bit-exact check
       --skip-match     Skip SPRT (and promote)
       --rebuild        Rebuild the engine even if the binary exists
@@ -90,7 +91,7 @@ AUTO_VARS=(GEN_WORKERS MATCH_WORKERS PREP_WORKERS SHARD_SIZE BATCH_SIZE CHECKPOI
 declare -A USERSET=()
 for _v in "${AUTO_VARS[@]}"; do [[ -n "${!_v:-}" ]] && USERSET[$_v]=1; done
 if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then PYTHON="$SCRIPT_DIR/.venv/bin/python"; else PYTHON=python3; fi
+  if [[ -x "$TRAINER_DIR/.venv/bin/python" ]]; then PYTHON="$TRAINER_DIR/.venv/bin/python"; else PYTHON=python3; fi
 fi
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_EPOCH_EVERY:=5}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
 : "${MAKE_ARCH:=native}"; : "${NNUE_ARCH:=default}"; : "${LAYERS:=1}"
@@ -202,7 +203,7 @@ Total time: $(fmt_dur $((SECONDS - T_START)))"
   [[ -n "$tail_txt" ]] && msg+="
 <pre>$(html_escape "$tail_txt")</pre>"
   [[ -n "$CUR_LOG" ]] && msg+="
-Log: <code>$(html_escape "$SCRIPT_DIR/$CUR_LOG")</code>"
+Log: <code>$(html_escape "$TRAINER_DIR/$CUR_LOG")</code>"
   log "FAILED [$CUR_STEP]: $1"
   tg_send "$msg"
 }
@@ -296,7 +297,7 @@ autotune() {
       HW_GPU_NAME|HW_TORCH) HW[${k#HW_}]=${v//[^A-Za-z0-9_.+-]/} ;;
     esac
     echo "$k=$v" >> "$CUR_LOG"
-  done < <("$PYTHON" "$SCRIPT_DIR/hw_probe.py" --arch "$ARCH_FULL" --batch "$target" --path "$SCRIPT_DIR" "${probe[@]}" 2>>"$CUR_LOG")
+  done < <("$PYTHON" "$SCRIPT_DIR/hw_probe.py" --arch "$ARCH_FULL" --batch "$target" --path "$TRAINER_DIR" "${probe[@]}" 2>>"$CUR_LOG")
 
   local cpus=${HW[CPUS]:-$NCPU}
   local ram=${HW[RAM_TOTAL_MB]:-0} avail=${HW[RAM_AVAIL_MB]:-0}
@@ -477,7 +478,7 @@ s_fit() {   # informational only, never fails the pipeline
   if run "$CUR_LOG" "$PYTHON" -u fit_scaling.py "$GEN_TXT"; then
     local line; line=$(grep -h 'fitted scale' "$CUR_LOG" | tail -1)
     [[ -n "$line" ]] && info "$(html_escape "$line")"
-    info "Using SCALING=${SCALING}${CHANCE_SCALING:+, ChanceScaling=$CHANCE_SCALING} (change it in pipeline.env if needed)"
+    info "Using SCALING=${SCALING}${CHANCE_SCALING:+, ChanceScaling=$CHANCE_SCALING} (change it in scripts/pipeline.env if needed)"
   else
     info "⚠ fit_scaling failed (ignored, training is not affected)"
   fi
@@ -670,7 +671,7 @@ s_promote() {
   fi
   run "$CUR_LOG" cp "$MATCH_RESULT" "$NET_NEXT" || return 1
   info "🏆 New net: <b>$(html_escape "$NET_NEXT")</b> ← $(html_escape "$MATCH_RESULT")"
-  info "Next generation: ./pipeline.sh -g ${NEXT}"
+  info "Next generation: scripts/pipeline.sh -g ${NEXT}"
 }
 
 # ----------------------------------------------------------------------------- lock against concurrent runs
@@ -731,6 +732,6 @@ final="🎉 ${NAME_TAG} · <b>FINISHED</b> ${MODE_TXT} in $(fmt_dur $((SECONDS -
 for l in "${SUMMARY[@]}"; do final+="
 $(html_escape "$l")"; done
 [[ "$MODE" == gen ]] && final+="
-Next: ./pipeline.sh -g ${GEN} --train-only"
+Next: scripts/pipeline.sh -g ${GEN} --train-only"
 tg_send "$final"
 log "FINISHED ($(fmt_dur $((SECONDS - T_START))))"

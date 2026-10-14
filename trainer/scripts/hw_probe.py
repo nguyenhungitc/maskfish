@@ -2,7 +2,7 @@
 training batch that fits on the GPU. Prints KEY=VALUE lines prefixed with
 "HW_" (parsed by pipeline.sh) plus a readable summary.
 
-    python hw_probe.py [--arch default] [--batch 16384] [--probe-batch] [--path .]
+    python scripts/hw_probe.py [--arch default] [--batch 16384] [--probe-batch] [--path .]
 
 Works without torch (then no GPU information). With --probe-batch and CUDA,
 it really runs a few training steps (model + Adam, synthetic batch) on the
@@ -154,7 +154,8 @@ def main():
             out["GPU_TOTAL_MB"] = total // 2**20
             out["GPU_FREE_MB"] = free // 2**20
             if args.probe_batch:
-                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                # the trainer modules (jieqi_features, model, train) are in the parent directory
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 try:
                     bs, peak = probe_batch(torch, args.arch, args.batch, args.headroom)
                     out["BATCH_FIT"] = bs
