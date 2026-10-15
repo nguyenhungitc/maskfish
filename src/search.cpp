@@ -92,6 +92,15 @@ constexpr std::array<int, 16> LMRDivisor = {3442, 3049, 2991, 2933, 3346, 3356, 
                                             2974, 3038, 3214, 3408, 3310, 2985, 3129, 3746};
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
+// Reductions lookup table indexed by depth or move number, shared by all the
+// workers
+const std::array<int, std::max(MAX_PLY, MAX_MOVES) + 10> reductions = [] {
+    std::array<int, std::max(MAX_PLY, MAX_MOVES) + 10> table{};
+    for (size_t i = 1; i < table.size(); ++i)
+        table[i] = int(2321 / (849 / 10.0) * std::log(i));
+    return table;
+}();
+
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
 // They are optimized to time controls of 180 + 1.8 and longer,
@@ -829,9 +838,6 @@ void Search::Worker::clear() {
                         h.fill(-548);
     }
 
-    for (size_t i = 1; i < reductions.size(); ++i)
-        reductions[i] = int(2321 / (849 / 10.0) * std::log(i));
-
     refreshTable.clear(networks[numaAccessToken]);
 }
 
@@ -1065,53 +1071,63 @@ Value Search::Worker::search(
     // At this point, if excluded, skip straight to step 5, static eval. However,
     // to save indentation, we list the condition in all code between here and there.
 
-    // At non-PV nodes we check for an early TT cutoff
-    if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)
-        && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()
-        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
-        && (cutNode == (ttData.value >= beta) || depth > 5))
+    // At non-PV nodes we check for an early TT cutoff. The validity of the TT
+    // value is always checked, because of access races in probe().
+    if (!PvNode && !excludedMove && is_valid(ttData.value)
+        && ttData.depth > depth - (ttData.value <= beta))
     {
-        // If ttMove is quiet, update move sorting heuristics on TT hit
-        if (ttData.move && ttData.value >= beta)
+        // Case A: the TT entry can produce a cutoff
+        if ((ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
+            && (cutNode == (ttData.value >= beta) || depth > 5))
         {
-            // Bonus for a quiet ttMove that fails high
-            if (!ttCapture)
-                update_quiet_histories(pos, ss, *this, ttData.move,
-                                       std::min(98 * depth - 58, 1488));
-
-            // Extra penalty for early quiet moves of the previous ply
-            if (prevSq != SQ_NONE && (ss - 1)->moveCount <= 2 && !priorCapture)
-                update_continuation_histories(*this, ss - 1, (ss - 1)->movedPiece, prevSq, -2387);
-        }
-
-        // Partial workaround for the graph history interaction problem
-        // For high rule40 counts don't produce transposition table cutoffs.
-        if (pos.rule40_count() < 70)
-        {
-            if (depth >= 8 && ttData.move && pos.pseudo_legal(ttData.move) && pos.legal(ttData.move)
-                && !is_decisive(ttData.value) && !pos.move_dark(ttData.move))
+            // If ttMove is quiet, update move sorting heuristics on TT hit
+            if (ttData.move && ttData.value >= beta)
             {
-                do_move(pos, ttData.move, st);
-                Key nextPosKey = observer_tt_key(pos.key(), rootObserver);
-                auto [ttHitNext, ttDataNext, ttWriterNext] = tt.probe(nextPosKey);
-                undo_move(pos, ttData.move);
+                // Bonus for a quiet ttMove that fails high
+                if (!ttCapture)
+                    update_quiet_histories(pos, ss, *this, ttData.move,
+                                           std::min(98 * depth - 58, 1488));
 
-                // Check that the ttValue after the tt move would also trigger a cutoff
-                if (!is_valid(ttDataNext.value))
-                    return ttData.value;
-                if ((ttData.value >= beta) == (-ttDataNext.value >= beta))
+                // Extra penalty for early quiet moves of the previous ply
+                if (prevSq != SQ_NONE && (ss - 1)->moveCount <= 2 && !priorCapture)
+                    update_continuation_histories(*this, ss - 1, (ss - 1)->movedPiece, prevSq,
+                                                  -2387);
+            }
+
+            // Partial workaround for the graph history interaction problem
+            // For high rule40 counts don't produce transposition table cutoffs.
+            if (pos.rule40_count() < 70)
+            {
+                if (depth >= 8 && ttData.move && pos.pseudo_legal(ttData.move)
+                    && pos.legal(ttData.move) && !is_decisive(ttData.value)
+                    && !pos.move_dark(ttData.move))
+                {
+                    do_move(pos, ttData.move, st);
+                    Key nextPosKey = observer_tt_key(pos.key(), rootObserver);
+                    auto [ttHitNext, ttDataNext, ttWriterNext] = tt.probe(nextPosKey);
+                    undo_move(pos, ttData.move);
+
+                    // Check that the ttValue after the tt move would also trigger a cutoff
+                    if (!is_valid(ttDataNext.value))
+                        return ttData.value;
+                    if ((ttData.value >= beta) == (-ttDataNext.value >= beta))
+                        return ttData.value;
+                }
+                else
                     return ttData.value;
             }
-            else
-                return ttData.value;
+        }
+        // Case B: no cutoff, but the entry is deep enough, so its bound points
+        // the wrong way: make it easier to replace. (Idea from AB-JChess, UCI
+        // option TTPenalize.) Unlike upstream, the bound can also be BOUND_NONE
+        // here (the estimate of a chance node, see search()), which is left alone.
+        else if (ttPenalize && depth > 5 && ttData.bound != BOUND_NONE)
+        {
+            assert(!(ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER)));
+
+            ttWriter.penalize(1);
         }
     }
-    // The entry is deep enough but its bound does not allow a cutoff: make it
-    // easier to replace. (Idea from AB-JChess, UCI option TTPenalize.)
-    else if (ttPenalize && !PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)
-             && is_valid(ttData.value) && ttData.bound != BOUND_EXACT
-             && (ttData.bound & (ttData.value >= beta ? BOUND_UPPER : BOUND_LOWER)) && depth > 5)
-        ttWriter.penalize(1);
 
     if (ss->inCheck)
     {
@@ -1864,8 +1880,9 @@ moves_loop:  // When in check, search starts here
     }
 
     // Bonus for prior capture countermove that caused the fail low
-    else if (priorCapture && prevSq != SQ_NONE)
+    else if (prevSq != SQ_NONE)
     {
+        assert(priorCapture);
         assert(pos.captured_piece() != NO_PIECE);
         thisThread->captureHistory[(ss - 1)->movedPiece][prevSq][pos.captured_type()] << 958;
     }
@@ -2055,8 +2072,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // Stand pat. Return immediately if static value is at least beta
         if (bestValue >= beta)
         {
-            if (!is_decisive(bestValue))
-                bestValue = (bestValue + beta) / 2;
+            // bestValue is the clamped static evaluation or a TT value that
+            // is not decisive
+            assert(!is_decisive(bestValue));
+            bestValue = (bestValue + beta) / 2;
+
             if (!ss->ttHit)
                 ttWriter.write(posKey, standPatNoTT ? VALUE_NONE : value_to_tt(bestValue, ss->ply),
                                false, BOUND_LOWER, DEPTH_UNSEARCHED, Move::none(),
