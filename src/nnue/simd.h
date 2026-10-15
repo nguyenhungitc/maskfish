@@ -41,6 +41,11 @@
 
 #elif defined(USE_LSX)
     #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    // The RISC-V vectors have no fixed size: VECTOR is not defined, the
+    // feature transformer and the layers have their own RVV code
+    #include <riscv_vector.h>
 #endif
 
 #include "../types.h"

@@ -52,6 +52,9 @@
 
 #elif defined(USE_LSX)
     #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    #include <riscv_vector.h>
 #endif
 
 // The squared and the plain clipped ReLU of the layer stacks computed together

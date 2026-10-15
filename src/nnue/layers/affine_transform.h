@@ -372,6 +372,49 @@ class AffineTransform {
     #undef vec_add_dpbusd_32
     #undef vec_hadd
         }
+#elif defined(USE_RVV)
+        // Dot product of each row of weights with the input
+        const std::int8_t* wIt = weights;
+
+    #define RVV_PROPAGATE_SINGLE(m2, m1) \
+        do \
+        { \
+            vint32m1_t     zero = __riscv_vmv_s_x_i32m1(0, 1); \
+            std::size_t    vl   = __riscv_vsetvl_e8##m1(InputDimensions); \
+            vuint8##m1##_t in   = __riscv_vle8_v_u8##m1(input, vl); \
+            for (IndexType i = 0; i < OutputDimensions; ++i, wIt += PaddedInputDimensions) \
+            { \
+                vint8##m1##_t  w    = __riscv_vle8_v_i8##m1(wIt, vl); \
+                vint16##m2##_t prod = __riscv_vwmulsu(w, in, vl); \
+                output[i]           = biases[i] + __riscv_vmv_x(__riscv_vwredsum(prod, zero, vl)); \
+            } \
+        } while (0)
+
+        const std::size_t VL1 = __riscv_vsetvlmax_e16m1();
+        if (InputDimensions <= VL1)
+            RVV_PROPAGATE_SINGLE(m1, mf2);
+        else if (InputDimensions <= VL1 * 2)
+            RVV_PROPAGATE_SINGLE(m2, m1);
+        else if (InputDimensions <= VL1 * 4)
+            RVV_PROPAGATE_SINGLE(m4, m2);
+        else
+        {
+            for (IndexType i = 0; i < OutputDimensions; ++i, wIt += PaddedInputDimensions)
+            {
+                vint32m1_t sum = __riscv_vmv_s_x_i32m1(0, 1);
+                for (std::size_t vl, j = 0; j < InputDimensions; j += vl)
+                {
+                    vl              = __riscv_vsetvl_e8m2(InputDimensions - j);
+                    vuint8m2_t in   = __riscv_vle8_v_u8m2(input + j, vl);
+                    vint8m2_t  w    = __riscv_vle8_v_i8m2(wIt + j, vl);
+                    vint16m4_t prod = __riscv_vwmulsu(w, in, vl);
+                    sum             = __riscv_vwredsum(prod, sum, vl);
+                }
+                output[i] = biases[i] + __riscv_vmv_x(sum);
+            }
+        }
+
+    #undef RVV_PROPAGATE_SINGLE
 #else
         // Use old implementation for the other architectures.
         affine_transform_non_ssse3<InputDimensions, PaddedInputDimensions, OutputDimensions>(

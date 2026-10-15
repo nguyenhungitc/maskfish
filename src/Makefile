@@ -176,7 +176,7 @@ ifeq ($(ARCH), $(filter $(ARCH), \
                  x86-64-bmi2 x86-64-avx2 x86-64-sse41-popcnt x86-64-modern x86-64-ssse3 x86-64-sse3-popcnt \
                  x86-64 x86-32-sse41-popcnt x86-32-sse2 x86-32 ppc-64 ppc-64-altivec ppc-64-vsx ppc-32 e2k \
                  armv7 armv7-neon armv8 armv8-dotprod arm64-universal apple-silicon general-64 general-32 riscv64 \
-                 loongarch64 loongarch64-lsx loongarch64-lasx))
+                 riscv64-rva23 loongarch64 loongarch64-lsx loongarch64-lasx))
    SUPPORTED_ARCH=true
 else
    SUPPORTED_ARCH=false
@@ -224,6 +224,7 @@ dotprod = no
 arm_version = 0
 lsx = no
 lasx = no
+rva23 = no
 STRIP = strip
 
 ifneq ($(shell which clang-format-20 2> /dev/null),)
@@ -490,8 +491,14 @@ ifeq ($(findstring e2k,$(ARCH)),e2k)
 	popcnt = yes
 endif
 
-ifeq ($(ARCH),riscv64)
+ifeq ($(findstring riscv64,$(ARCH)),riscv64)
 	arch = riscv64
+endif
+
+ifeq ($(ARCH),riscv64-rva23)
+	rva23 = yes
+	popcnt = yes
+	prefetch = yes
 endif
 
 ifeq ($(findstring loongarch64,$(ARCH)),loongarch64)
@@ -541,7 +548,7 @@ ifeq ($(COMP),gcc)
 			CXXFLAGS += -m$(bits)
 			LDFLAGS += -m$(bits)
 		endif
-		ifeq ($(ARCH),riscv64)
+		ifeq ($(arch),riscv64)
 			CXXFLAGS += -latomic
 		endif
 	else ifeq ($(arch),loongarch64)
@@ -613,7 +620,7 @@ ifeq ($(COMP),clang)
 			CXXFLAGS += -m$(bits)
 			LDFLAGS += -m$(bits)
 		endif
-		ifeq ($(ARCH),riscv64)
+		ifeq ($(arch),riscv64)
 			CXXFLAGS += -latomic
 		endif
 	else ifeq ($(arch),loongarch64)
@@ -856,7 +863,7 @@ else
 endif
 
 ifeq ($(popcnt),yes)
-	ifeq ($(arch),$(filter $(arch),ppc64 ppc64-altivec ppc64-vsx armv7 armv8 arm64))
+	ifeq ($(arch),$(filter $(arch),ppc64 ppc64-altivec ppc64-vsx armv7 armv8 arm64 riscv64))
 		CXXFLAGS += -DUSE_POPCNT
 	else
 		CXXFLAGS += -msse3 -mpopcnt -DUSE_POPCNT
@@ -969,6 +976,10 @@ ifeq ($(dotprod),yes)
 	CXXFLAGS += -march=armv8.2-a+dotprod -DUSE_NEON_DOTPROD
 endif
 
+ifeq ($(rva23),yes)
+	CXXFLAGS += -march=rv64gcv1p0_zba_zbb_zbs_zicbop_zicond -DUSE_RVV
+endif
+
 ifeq ($(lasx),yes)
 	CXXFLAGS += -DUSE_LASX
 	ifeq ($(comp),$(filter $(comp),gcc clang mingw icx))
@@ -1011,8 +1022,15 @@ endif
 ### 3.9 Link Time Optimization
 ### This is a mix of compile and link time options because the lto link phase
 ### needs access to the optimization flags.
+### (GCC 14 fails to compile the RISC-V vector intrinsics with LTO: none then.)
+lto = yes
+ifeq ($(rva23)$(comp)$(gccisclang),yesgcc)
+	lto = no
+endif
+
 ifeq ($(optimize),yes)
 ifeq ($(debug),no)
+ifeq ($(lto),yes)
 	ifneq ($(KERNEL),Darwin)
 		LLD_BIN := $(shell command -v ld.lld 2>/dev/null)
 		ifeq ($(LLD_BIN),)
@@ -1063,6 +1081,7 @@ ifeq ($(debug),no)
 		CXXFLAGS += -flto -flto-partition=one
 		LDFLAGS += $(CXXFLAGS) -save-temps
 	endif
+endif
 endif
 endif
 
@@ -1128,6 +1147,7 @@ help:
 	echo "general-64              > unspecified 64-bit" && \
 	echo "general-32              > unspecified 32-bit" && \
 	echo "riscv64                 > RISC-V 64-bit" && \
+	echo "riscv64-rva23           > RISC-V 64-bit RVA23 profile (vector extension)" && \
 	echo "loongarch64             > LoongArch 64-bit" && \
 	echo "loongarch64-lsx         > LoongArch 64-bit with SIMD eXtension" && \
 	echo "loongarch64-lasx        > LoongArch 64-bit with Advanced SIMD eXtension" && \
