@@ -112,10 +112,11 @@ const std::array<int, std::max(MAX_PLY, MAX_MOVES) + 10> reductions = [] {
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us    = pos.side_to_move();
     const auto  m     = (ss - 1)->currentMove;
-    const auto  pcv   = w.pawnCorrectionHistory[pawn_structure_index<Correction>(pos)][us];
-    const auto  micv  = w.minorPieceCorrectionHistory[minor_piece_index(pos)][us];
-    const auto  wnpcv = w.nonPawnCorrectionHistory[non_pawn_index<WHITE>(pos)][WHITE][us];
-    const auto  bnpcv = w.nonPawnCorrectionHistory[non_pawn_index<BLACK>(pos)][BLACK][us];
+    const auto& shared = w.sharedHistory;
+    const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
+    const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
+    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
+    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
     const auto  cntcv =
       m.is_ok()
         ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
@@ -145,15 +146,13 @@ void update_correction_history(const Position& pos,
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
-    int nonPawnWeight = 129;
+    constexpr int nonPawnWeight = 129;
+    auto&         shared        = workerThread.sharedHistory;
 
-    workerThread.pawnCorrectionHistory[pawn_structure_index<Correction>(pos)][us]
-      << bonus * 136 / 128;
-    workerThread.minorPieceCorrectionHistory[minor_piece_index(pos)][us] << bonus * 88 / 128;
-    workerThread.nonPawnCorrectionHistory[non_pawn_index<WHITE>(pos)][WHITE][us]
-      << bonus * nonPawnWeight / 128;
-    workerThread.nonPawnCorrectionHistory[non_pawn_index<BLACK>(pos)][BLACK][us]
-      << bonus * nonPawnWeight / 128;
+    shared.pawn_correction_entry(pos)[us].pawn << bonus * 136 / 128;
+    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 88 / 128;
+    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
+    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
     if (m.is_ok())
     {
@@ -205,24 +204,25 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 
 }  // namespace
 
+// The histories of this thread: those of its NUMA node if they are shared
+// (UCI option SharedHistory), otherwise its own
+SharedHistories& Search::Worker::claim_histories(SharedState& sharedState, NumaIndex numaIndex) {
+    if (SharedHistories* shared =
+          sharedState.threads.claim_shared_histories(numaIndex, numaThreadIdx, numaTotal))
+        return *shared;
+
+    numaThreadIdx = 0;
+    numaTotal     = 1;
+    ownHistories  = std::make_unique<SharedHistories>(1);
+    return *ownHistories;
+}
+
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
                        NumaReplicatedAccessToken       token) :
-    sharedHistories(sharedState.threads.claim_shared_histories(token.get_numa_index(),
-                                                               ownsSharedHistories)),
-    continuationHistory(sharedHistories ? sharedHistories->continuationHistory
-                                        : ownHistories.continuationHistory),
-    pawnHistory(sharedHistories ? sharedHistories->pawnHistory : ownHistories.pawnHistory),
-    pawnCorrectionHistory(sharedHistories ? sharedHistories->pawnCorrectionHistory
-                                          : ownHistories.pawnCorrectionHistory),
-    minorPieceCorrectionHistory(sharedHistories ? sharedHistories->minorPieceCorrectionHistory
-                                                : ownHistories.minorPieceCorrectionHistory),
-    nonPawnCorrectionHistory(sharedHistories ? sharedHistories->nonPawnCorrectionHistory
-                                             : ownHistories.nonPawnCorrectionHistory),
-    continuationCorrectionHistory(sharedHistories
-                                    ? sharedHistories->continuationCorrectionHistory
-                                    : ownHistories.continuationCorrectionHistory),
+    sharedHistory(claim_histories(sharedState, token.get_numa_index())),
+    continuationHistory(sharedHistory.continuationHistory()),
     // Unpack the SharedState struct into member variables
     threadIdx(threadId),
     numaAccessToken(token),
@@ -246,9 +246,9 @@ void Search::Worker::start_searching() {
     accumulatorStack.reset();
 
     // UCI option CorrHistReset: forget the correction histories of earlier
-    // searches. Shared histories are reset by the Worker that owns them.
-    // (Idea from AB-JChess.)
-    if (bool(options["CorrHistReset"]) && (!sharedHistories || ownsSharedHistories))
+    // searches. Each thread resets its part of the shared ones. (Idea from
+    // AB-JChess.)
+    if (bool(options["CorrHistReset"]))
         reset_correction_histories();
 
     // Non-main threads go directly to iterative_deepening()
@@ -828,12 +828,14 @@ void Search::Worker::clear() {
     captureHistory.fill(-560);
     ttMoveHistory = 0;
 
-    // Shared histories are cleared once, by the Worker that owns them
-    if (!sharedHistories || ownsSharedHistories)
-    {
-        pawnHistory.fill(-1083);
-        reset_correction_histories();
+    // Each thread clears its part of the pawn and correction histories it
+    // shares (all of them if not shared); the continuation history is cleared
+    // by the first thread that shares it.
+    sharedHistory.pawnHistory.clear_range(-1083, numaThreadIdx, numaTotal);
+    reset_correction_histories();
 
+    if (numaThreadIdx == 0)
+    {
         for (bool inCheck : {false, true})
             for (StatsType c : {NoCaptures, Captures})
                 for (auto& to : continuationHistory[inCheck][c])
@@ -847,13 +849,21 @@ void Search::Worker::clear() {
 // Initial values of the correction histories (also used by the UCI option
 // CorrHistReset)
 void Search::Worker::reset_correction_histories() {
-    pawnCorrectionHistory.fill(6);
-    minorPieceCorrectionHistory.fill(0);
-    nonPawnCorrectionHistory.fill(0);
-
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
             h.fill(7);
+
+    // The part of this thread of the correction histories it shares (all of
+    // them if not shared)
+    const auto [start, end] = sharedHistory.correctionHistory.range(numaThreadIdx, numaTotal);
+    for (usize i = start; i < end; ++i)
+        for (auto& entry : sharedHistory.correctionHistory[i])
+        {
+            entry.pawn         = 6;
+            entry.minor        = 0;
+            entry.nonPawnWhite = 0;
+            entry.nonPawnBlack = 0;
+        }
 }
 
 
@@ -1153,7 +1163,7 @@ Value Search::Worker::search(
         int bonus = std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus * 1269 / 1024;
         if (type_of((ss - 1)->movedPiece) != PAWN)
-            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][(ss - 1)->movedPiece][prevSq]
+            thisThread->pawn_history_entry(pos)[(ss - 1)->movedPiece][prevSq]
               << bonus * 1267 / 1024;
     }
 
@@ -1331,8 +1341,8 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &thisThread->mainHistory, &thisThread->lowPlyHistory,
-                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply,
-                  thisThread->pawn_history_index(pos));
+                  &thisThread->captureHistory, contHist, &thisThread->pawn_history_entry(pos),
+                  ss->ply);
 
     value = bestValue;
 
@@ -1426,10 +1436,9 @@ moves_loop:  // When in check, search starts here
             }
             else if (!ss->followPV || !PvNode)
             {
-                int history =
-                  (*contHist[0])[movedPiece][move.to_sq()]
-                  + (*contHist[1])[movedPiece][move.to_sq()]
-                  + thisThread->pawnHistory[thisThread->pawn_history_index(pos)][movedPiece][move.to_sq()];
+                int history = (*contHist[0])[movedPiece][move.to_sq()]
+                            + (*contHist[1])[movedPiece][move.to_sq()]
+                            + thisThread->pawn_history_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
                 if (history < -3491 * depth)
@@ -1892,7 +1901,7 @@ moves_loop:  // When in check, search starts here
           << scaledBonus * 221 / 32768;
 
         if (type_of((ss - 1)->movedPiece) != PAWN)
-            thisThread->pawnHistory[thisThread->pawn_history_index(pos)][(ss - 1)->movedPiece][prevSq]
+            thisThread->pawn_history_entry(pos)[(ss - 1)->movedPiece][prevSq]
               << int(std::int64_t(scaledBonus) * 1001 / 32768);
     }
 
@@ -2116,8 +2125,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &thisThread->mainHistory, &thisThread->lowPlyHistory,
-                  &thisThread->captureHistory, contHist, &thisThread->pawnHistory, ss->ply,
-                  thisThread->pawn_history_index(pos));
+                  &thisThread->captureHistory, contHist, &thisThread->pawn_history_entry(pos),
+                  ss->ply);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.
@@ -2164,8 +2173,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             // Continuation history based pruning
             if (!capture
                 && (*contHist[0])[pos.moved_piece(move)][move.to_sq()]
-                       + thisThread->pawnHistory[thisThread->pawn_history_index(pos)][pos.moved_piece(move)]
-                                                [move.to_sq()]
+                       + thisThread->pawn_history_entry(pos)[pos.moved_piece(move)][move.to_sq()]
                      <= 2861)
                 continue;
 
@@ -2904,10 +2912,8 @@ void update_quiet_histories(
 
     // With BigPawnHistory, stronger updates, scaled like upstream's (691 / 468
     // -> 800 / 500)
-    int pIndex = workerThread.pawn_history_index(pos);
-    workerThread.pawnHistory[pIndex][pos.moved_piece(move)][move.to_sq()]
-      << bonus
-           * (workerThread.bigPawnHistory ? (bonus > 0 ? 873 : 491) : (bonus > 0 ? 754 : 460))
+    workerThread.pawn_history_entry(pos)[pos.moved_piece(move)][move.to_sq()]
+      << bonus * (workerThread.bigPawnHistory ? (bonus > 0 ? 873 : 491) : (bonus > 0 ? 754 : 460))
            / 1024;
 }
 
