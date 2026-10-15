@@ -33,6 +33,7 @@
 #include "nnue_accumulator.h"
 #include "nnue_architecture.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 #include "simd.h"
 
 namespace Maskfish::Eval::NNUE {
@@ -247,11 +248,14 @@ class FeatureTransformer {
     }
 
     // Convert input features
-    std::int32_t transform(const Position&                           pos,
-                           AccumulatorStack&                         accumulatorStack,
-                           AccumulatorCaches::Cache<HalfDimensions>* cache,
-                           OutputType*                               output,
-                           int                                       bucket) const {
+    // Also records the non-zero 32-bit chunks of the output in nnzInfo, for
+    // the sparse input layer that follows.
+    std::int32_t transform(const Position&                             pos,
+                           AccumulatorStack&                           accumulatorStack,
+                           AccumulatorCaches::Cache<HalfDimensions>*   cache,
+                           OutputType*                                 output,
+                           int                                         bucket,
+                           [[maybe_unused]] NNZInfo<OutputDimensions>& nnzInfo) const {
 
         using namespace SIMD;
 
@@ -389,19 +393,31 @@ class FeatureTransformer {
               6;
     #endif
 
-            for (IndexType j = 0; j < NumOutputChunks; ++j)
+            static_assert(NumOutputChunks % 2 == 0);
+
+            [[maybe_unused]] auto cursor = nnzInfo.make_cursor(p);
+
+            for (IndexType j = 0; j < NumOutputChunks; j += 2)
             {
-                const vec_t sum0a =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 0), One), Zero), shift);
-                const vec_t sum0b =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 1), One), Zero), shift);
-                const vec_t sum1a = vec_min_16(in(in1, thr1, j * 2 + 0), One);
-                const vec_t sum1b = vec_min_16(in(in1, thr1, j * 2 + 1), One);
+                vec_t packed[2];
+                for (IndexType k = 0; k < 2; ++k)
+                {
+                    const IndexType i = (j + k) * 2;
 
-                const vec_t pa = vec_mulhi_16(sum0a, sum1a);
-                const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+                    const vec_t sum0a =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 0), One), Zero), shift);
+                    const vec_t sum0b =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 1), One), Zero), shift);
+                    const vec_t sum1a = vec_min_16(in(in1, thr1, i + 0), One);
+                    const vec_t sum1b = vec_min_16(in(in1, thr1, i + 1), One);
 
-                out[j] = vec_packus_16(pa, pb);
+                    const vec_t pa = vec_mulhi_16(sum0a, sum1a);
+                    const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+
+                    packed[k] = out[j + k] = vec_packus_16(pa, pb);
+                }
+
+                cursor.record2(packed[0], packed[1]);
             }
 
 #else

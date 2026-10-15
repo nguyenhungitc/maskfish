@@ -34,6 +34,7 @@
 #include "layers/clipped_relu.h"
 #include "layers/sqr_clipped_relu.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 
 namespace Maskfish::Eval::NNUE {
 
@@ -240,7 +241,8 @@ struct NetworkArchitecture {
     }
 
     // context: the outputs of the ContextTower (make ctx=yes), else unused
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures,
+    std::int32_t propagate(const TransformedFeatureType*        transformedFeatures,
+                           const NNZInfo<L1>&                   nnzInfo,
                            [[maybe_unused]] const std::uint8_t* context = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
@@ -257,7 +259,7 @@ struct NetworkArchitecture {
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
         if constexpr (UseContext)
             add_context(context, buffer.fc_0_out);
     #if defined(USE_PAIR_ACTIVATIONS)
@@ -388,7 +390,8 @@ struct NetworkArchitecture {
     }
 
     // context: the outputs of the ContextTower (make ctx=yes), else unused
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures,
+    std::int32_t propagate(const TransformedFeatureType*        transformedFeatures,
+                           const NNZInfo<L1>&                   nnzInfo,
                            [[maybe_unused]] const std::uint8_t* context = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
@@ -404,7 +407,7 @@ struct NetworkArchitecture {
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
         if constexpr (UseContext)
             add_context(context, buffer.fc_0_out);
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.ac_sqr_0_out);

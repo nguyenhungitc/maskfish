@@ -39,6 +39,7 @@
 #include "nnue_architecture.h"
 #include "nnue_common.h"
 #include "nnue_misc.h"
+#include "nnz_helper.h"
 
 // The default network embedded in the binary (nnue/embedded_nnue.S): the
 // zstd-compressed maskfish.nnue, or nothing (size 0) when the binary was built
@@ -156,15 +157,17 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
 
     ASSERT_ALIGNED(transformedFeatures, alignment);
 
+    NNZInfo<FTDimensions> nnzInfo;
+
     const int  bucket = FeatureSet::make_layer_stack_bucket(pos);
     const auto psqt   = featureTransformer.transform(pos, accumulatorStack, cache,
-                                                     transformedFeatures, psqt_bucket(bucket));
+                                                     transformedFeatures, psqt_bucket(bucket), nnzInfo);
 
     std::uint8_t context[ContextOutputs] = {};
     if constexpr (UseContext)
         compute_context(pos, context);
 
-    auto positional = network[bucket].propagate(transformedFeatures, context);
+    auto positional = network[bucket].propagate(transformedFeatures, nnzInfo, context);
 
     // make lsblend=yes: interpolation with the next layer stack (the PSQT
     // bucket stays the floor one)
@@ -173,7 +176,8 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
         const int blend = FeatureSet::make_layer_stack_selection(pos).blend;
         if (blend)
         {
-            const auto next = network[bucket + 1].propagate(transformedFeatures, context);
+            const auto next =
+              network[bucket + 1].propagate(transformedFeatures, nnzInfo, context);
             positional =
               std::int32_t((std::int64_t(positional) * (256 - blend) + std::int64_t(next) * blend)
                            / 256);
@@ -294,12 +298,14 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     t.correctBucket = FeatureSet::make_layer_stack_bucket(pos);
     for (IndexType bucket = 0; bucket < LayerStacks; ++bucket)
     {
-        const auto materialist = featureTransformer.transform(
-          pos, accumulatorStack, cache, transformedFeatures, psqt_bucket(int(bucket)));
+        NNZInfo<FTDimensions> nnzInfo;
+        const auto            materialist =
+          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures,
+                                       psqt_bucket(int(bucket)), nnzInfo);
         std::uint8_t context[ContextOutputs] = {};
         if constexpr (UseContext)
             compute_context(pos, context);
-        const auto positional = network[bucket].propagate(transformedFeatures, context);
+        const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo, context);
 
         t.psqt[bucket]       = static_cast<Value>(materialist / OutputScale);
         t.positional[bucket] = static_cast<Value>(positional / OutputScale);
