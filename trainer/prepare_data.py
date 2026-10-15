@@ -4,7 +4,7 @@ train.py reads directly (memory-mapped, no parsing during training).
     python prepare_data.py data/gen1.txt data/gen2.txt --out data/train [--arch att]
     -> data/train-00000.features.npy  int16 (N, 2, 64): stm / nstm feature indices
        data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40,
-                                      se, allmat
+                                      se, allmat, sed
        data/train-00001.* ...         one pair of files per shard
        data/train.arch                architecture of the features
        data/train.material            "major" or "jieqi" (see --jieqi-material)
@@ -14,7 +14,10 @@ material and rule40 are the inputs of the scaling that the engine's evaluate()
 applies to the network output (see eval_scale.py); train.py applies the same
 scaling before comparing the network with the data scores. se (material
 balance for the side to move) and allmat (total material) are those of the
-EvalScaling Alignment option (train.py --eval-scaling alignment).
+EvalScaling Alignment option (train.py --eval-scaling alignment). sed
+(simple_eval_dark(): material balance with dark pieces at the average value of
+their pool) stands for the PSQT part of networks without one (train.py
+--no-psqt) in EvalScaling Complexity.
 
 The threat architectures (--arch threats / att-threats) also write, per shard:
        data/train-00000.threats.npy   uint32 (T,): threat feature indices of all
@@ -63,7 +66,7 @@ from textio import open_text
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
                        ("material", np.int16), ("rule40", np.uint8), ("se", np.int16),
-                       ("allmat", np.int16)])
+                       ("allmat", np.int16), ("sed", np.int16)])
 # "-blend" architectures: also the interpolation weight of the layer stacks
 META_DTYPE_BLEND = np.dtype(META_DTYPE.descr + [("blend", np.uint8)])
 CHUNK_LINES = 16384
@@ -138,6 +141,7 @@ def parse_chunk(lines: list[str]):
                 continue
             material, rule40 = E.position_scale_inputs(pos, _JIEQI_MATERIAL)
             se, allmat = E.alignment_inputs(pos)
+            sed = max(-32000, min(32000, E.simple_eval_dark(pos)))
             if F.THREATS:
                 phys = F.physical_threats(pos)
                 ts, to = F.active_threats(pos, stm, phys), F.active_threats(pos, 1 - stm, phys)
@@ -151,11 +155,12 @@ def parse_chunk(lines: list[str]):
                 examples.append(f"{line.strip()[:120]!r}: {type(e).__name__}: {e}")
             continue
         record = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255),
-                  se, allmat) + ((blend,) if F.BLEND else ())
+                  se, allmat, sed) + ((blend,) if F.BLEND else ())
         samples = [(s, o, (ts, to) if F.THREATS else None)]
         if _MIRROR:
             # the mirrored position (same layer stack, blend, material, se /
-            # allmat, context: they only count pieces), if it brings new features
+            # allmat / sed, context: they only count pieces), if it brings new
+            # features
             mp = F.mirror_position(pos)
             ms, mo = F.active_features(mp, stm), F.active_features(mp, 1 - stm)
             mt = None

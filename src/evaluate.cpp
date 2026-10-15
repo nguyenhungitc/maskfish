@@ -30,7 +30,9 @@
 #include <sstream>
 #include <tuple>
 
+#include "bitboard.h"
 #include "nnue/network.h"
+#include "nnue/nnue_architecture.h"
 #include "nnue/nnue_misc.h"
 #include "position.h"
 #include "types.h"
@@ -55,6 +57,30 @@ int simple_eval(const Position& pos) {
 int total_material(const Position& pos) {
     return PawnValue * pos.count<PAWN>() + AdvisorValue * pos.count<ADVISOR>()
          + BishopValue * pos.count<BISHOP>() + pos.major_material();
+}
+
+// Material of the side to move minus that of the opponent (kings excluded), a
+// dark piece counting at the average value of its side's pool
+// (Position::dark_value()). As Pikafish's simple_eval(), it stands for the
+// PSQT part of the network in networks without one (make psqt=no) in
+// EvalScaling Complexity.
+[[maybe_unused]] int simple_eval_dark(const Position& pos) {
+    int material[COLOR_NB];
+    for (Color c : {WHITE, BLACK})
+    {
+        // A dark piece counts as the kind of piece of its square here...
+        material[c] = PawnValue * pos.count<PAWN>(c) + AdvisorValue * pos.count<ADVISOR>(c)
+                    + BishopValue * pos.count<BISHOP>(c) + pos.major_material(c);
+
+        // ...and is replaced by the expected value of its side's pool
+        const Bitboard dark = pos.pieces(c, DARK);
+        for (Bitboard b = dark; b;)
+            material[c] -= PieceValue[pos.piece_on(pop_lsb(b))];
+        material[c] += popcount(dark) * pos.dark_value(c);
+    }
+
+    const Color us = pos.side_to_move();
+    return material[us] - material[~us];
 }
 
 }  // namespace
@@ -99,8 +125,16 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     }
     else
     {
-        // EvalScaling Complexity (default): blend optimism and eval with nnue complexity
-        int nnueComplexity = std::abs(psqt - positional);
+        // EvalScaling Complexity (default): blend optimism and eval with nnue
+        // complexity. Without PSQT (make psqt=no) psqt is 0 and |psqt -
+        // positional| would be |nnue|: as in Pikafish ("Replace nnueComplexity
+        // with simple_eval equivalent"), the material stands for the PSQT part
+        // then, |psqt - (nnue - psqt)| with psqt = simple_eval_dark().
+        int nnueComplexity;
+        if constexpr (Eval::NNUE::UsePSQT)
+            nnueComplexity = std::abs(psqt - positional);
+        else
+            nnueComplexity = std::abs(2 * simple_eval_dark(pos) - nnue);
         optimism += optimism * std::int64_t(nnueComplexity) / 488;
         nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
 

@@ -1171,15 +1171,19 @@ which change helped.
 
 `evaluate()` does not return the network output as is: it scales it (see
 step 4 and `eval_scale.py`), and the trainer applies the same scaling in the
-loss, so the two must agree. The engine has two scalings, chosen by the UCI
-option `EvalScaling`:
+loss, so the two must agree. The engine has two scalings that the trainer
+models, chosen by the UCI option `EvalScaling`:
 
 - `Complexity` (default, unchanged): the output is damped by the
   "complexity" |psqt − positional| and scaled by the major material
   (`JieqiMaterial` applies to it). With a network **without PSQT**
-  (`make psqt=no`) the complexity becomes |output| itself, so every large
-  evaluation is damped (by about a quarter at 3000): it stays consistent
-  (the trainer does the same) but it is not what that term was meant for.
+  (`make psqt=no`) the material balance stands for the missing PSQT part,
+  as in Pikafish: complexity = |2 × sed − output|, where sed
+  (`simple_eval_dark()`) counts each dark piece at the average value of its
+  side's pool. `prepare_data.py` stores it (field `sed`): data prepared
+  before must be prepared again to train such a network with this scaling.
+  (Before, the complexity was |output| itself, which damped every large
+  evaluation.)
 - `Alignment`: Pikafish's "Replace nnueComplexity with simple_eval
   equivalent" (September 2026), made to allow networks without PSQT: the
   output is scaled up or down by its agreement with the material balance
@@ -1188,7 +1192,12 @@ option `EvalScaling`:
   position, which `prepare_data.py` now stores (fields `se`, `allmat`):
   data prepared before must be prepared again from the text files.
 
-Both are checked bit for bit by `verify.py --eval-scaling ...` (also with
+A third value, `Correlation`, is the agreement with the material balance as
+`Alignment`, but with dark pieces at the average value of their pool and the
+major material scaling of `Complexity`. The trainer does not model it: do not
+generate training data with it.
+
+`Complexity` and `Alignment` are checked bit for bit by `verify.py --eval-scaling ...` (also with
 `psqt=no` and `quant=2`). To use `Alignment`:
 
 ```

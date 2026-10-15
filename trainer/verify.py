@@ -132,7 +132,9 @@ def main():
             pos = F.parse_fen(fen)
             material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
             se, allmat = E.alignment_inputs(pos)
-            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, args.eval_scaling, se, allmat)
+            sed = None if F.PSQT else E.simple_eval_dark(pos)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, args.eval_scaling, se, allmat,
+                                     sed)
             if r_final == e_final:
                 scaled += 1
             else:

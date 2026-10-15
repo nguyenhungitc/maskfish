@@ -129,6 +129,8 @@ class Data:
                              for _, m in self.shards)
         self.has_scale = all("material" in m.dtype.names and "rule40" in m.dtype.names
                              for _, m in self.shards)
+        # sed for networks without PSQT in EvalScaling Complexity (since that change)
+        self.has_sed = all("sed" in m.dtype.names for _, m in self.shards)
         kinds = set()
         for prefix in prefixes:
             try:
@@ -218,6 +220,8 @@ class Data:
         if self.has_align:
             h["se"] = host_tensor(m["se"], pin)
             h["allmat"] = host_tensor(m["allmat"], pin)
+        if self.has_sed:
+            h["sed"] = host_tensor(m["sed"], pin)
         if self.has_blend:
             h["blend"] = host_tensor(m["blend"], pin)
         return h
@@ -234,7 +238,7 @@ def host_tensor(a: np.ndarray, pin: bool, dtype=None) -> torch.Tensor:
 
 def to_device(h: dict, device):
     """Batch tuple used by loss_fn / model_score:
-    (stm, nstm, bucket, score, result, threats, material, rule40, blend, se, allmat),
+    (stm, nstm, bucket, score, result, threats, material, rule40, blend, se, allmat, sed),
     converted on the device to the types the model expects (int64 indices,
     float32 values), exactly the values of the stored data."""
     def dev(name):
@@ -249,8 +253,9 @@ def to_device(h: dict, device):
     blend = dev("blend").long() if "blend" in h else None
     se = dev("se").float() if "se" in h else None
     allmat = dev("allmat").float() if "allmat" in h else None
+    sed = dev("sed").float() if "sed" in h else None
     return (f[:, 0], f[:, 1], dev("bucket").long(), dev("score").float(), dev("result").float(),
-            threats, material, rule40, blend, se, allmat)
+            threats, material, rule40, blend, se, allmat, sed)
 
 
 _DONE = object()
@@ -318,10 +323,15 @@ def model_score(model, batch, eval_scale=True, qat: bool = False) -> torch.Tenso
     material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
     blend = batch[8] if len(batch) >= 9 else None
     se, allmat = (batch[9], batch[10]) if len(batch) >= 11 else (None, None)
+    sed = batch[11] if len(batch) >= 12 else None
     mode = scaling_mode(eval_scale)
     if material is None or (mode == "alignment" and se is None):
         mode = None
     extra = {"scaling": mode, "se": se, "allmat": allmat} if mode else {}
+    # Without PSQT, EvalScaling Complexity takes simple_eval_dark() for the
+    # PSQT part (as the engine)
+    if mode == "complexity" and not F.PSQT:
+        extra["sed"] = sed
     if qat:
         psqt, positional = model.forward_parts_qat(stm, nstm, bucket, threats, blend)
         psqt, positional = psqt.squeeze(1), positional.squeeze(1)
@@ -517,6 +527,12 @@ def main():
                 raise SystemExit(f"the {name} data has no material / rule40 (prepared by an older "
                                  "prepare_data.py): prepare it again from the text files, or "
                                  "train with --no-eval-scale")
+            if d is not None and args.no_psqt and scaling_mode(eval_scale) == "complexity" \
+                    and not d.has_sed:
+                raise SystemExit(f"the {name} data has no sed (prepared by an older "
+                                 "prepare_data.py): prepare it again from the text files to "
+                                 "train a network without PSQT with EvalScaling Complexity "
+                                 "(or use --eval-scaling alignment)")
             if d is not None and eval_scale == "alignment" and not d.has_align:
                 raise SystemExit(f"the {name} data has no se / allmat (prepared by an older "
                                  "prepare_data.py): prepare it again from the text files to "
