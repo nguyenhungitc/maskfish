@@ -106,18 +106,16 @@ void TimeManagement::init(Search::LimitsType& limits,
     const TimePoint scaledTime  = std::max(TimePoint(1), limits.time[us] / scaleFactor);
 
     // Maximum move horizon
-    int centiMTG = limits.movestogo ? std::min(limits.movestogo * 100, 6000) : 6000;
+    int mtg = limits.movestogo ? std::min(limits.movestogo, 50) : 50;
 
     // If less than one second, gradually reduce mtg.
     // In cyclic time controls we keep the actual movestogo as horizon.
     if (scaledTime < 1000 && limits.movestogo == 0)
-        centiMTG = scaledTime * 6.000;
+        mtg = int(scaledTime * 0.05);
 
     // Make sure timeLeft is > 0 since we may use it as a divisor
-    TimePoint timeLeft =
-      std::max(TimePoint(1),
-               limits.time[us]
-                 + (limits.inc[us] * (centiMTG - 100) - moveOverhead * (200 + centiMTG)) / 100);
+    TimePoint timeLeft = std::max(TimePoint(1), limits.time[us] + limits.inc[us] * (mtg - 1)
+                                                  - moveOverhead * (2 + mtg));
 
     // x basetime (+ z increment)
     // If there is a healthy increment, timeLeft can exceed the actual available
@@ -143,9 +141,8 @@ void TimeManagement::init(Search::LimitsType& limits,
     // x moves in y seconds (+ z increment)
     else
     {
-        optScale =
-          std::min((0.88 + ply / 116.4) / (centiMTG / 100.0), 0.88 * limits.time[us] / timeLeft);
-        maxScale = 1.3 + 0.11 * (centiMTG / 100.0);
+        optScale = std::min((0.88 + ply / 116.4) / mtg, 0.88 * limits.time[us] / timeLeft);
+        maxScale = 1.3 + 0.11 * mtg;
     }
 
     // Decrease time usage if behind in time.
