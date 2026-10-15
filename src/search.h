@@ -387,6 +387,7 @@ class Worker {
     bool bestMoveBonusScale = false;
     bool contHistOffset = false;
     bool contCorr6Ply = false;
+    bool simplifications    = false;
     bool bigPawnHistory = false;
 
     // Index of the pawn history for the position (UCI option BigPawnHistory)

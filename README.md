@@ -177,7 +177,7 @@ default and described next to their definition in `src/engine.cpp`:
 `ContCorr4Ply`, `ContCorr6Ply`, `MultiCutHistory`, `CMHC`, `SeekMate`,
 `PruningTweaks`, `LMRTweaks`, `FailHighRecovery`, `AspirationTweaks`,
 `MainHistoryDecay`, `MalusDecay`, `BestMoveBonusScale`, `LMRHistoryDivisor`,
-`ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
+`Simplifications`, `ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
 `CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
 `RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory` and
 `SharedHistory`. Test them with `trainer/match.py --opt-a Name=true`; the ones

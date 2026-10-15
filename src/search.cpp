@@ -86,10 +86,12 @@ constexpr int SEARCHEDLIST_CAPACITY = 32;
 constexpr int MainHistoryDefault    = 51;
 
 // History divisor of the lmrDepth adjustment by depth (UCI option
-// LMRHistoryDivisor): Pikafish's tuned table, scaled from its constant 3484
-// to this engine's 3626
-constexpr std::array<int, 16> LMRDivisor = {3442, 3049, 2991, 2933, 3346, 3356, 3355, 2895,
-                                            2974, 3038, 3214, 3408, 3310, 2985, 3129, 3746};
+// LMRHistoryDivisor): Pikafish's formula (which replaced its tuned table of
+// 16 values), scaled from its constant 3484 to this engine's 3626
+constexpr int lmr_divisor(int depth) {
+    const int d = std::min(depth, 16);
+    return (3000 + 7 * (d - 8) * (d - 8)) * 3626 / 3484;
+}
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // Reductions lookup table indexed by depth or move number, shared by all the
@@ -380,6 +382,7 @@ bool Search::Worker::iterative_deepening() {
     malusDecay = bool(options["MalusDecay"]);
     bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
     lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
+    simplifications        = bool(options["Simplifications"]);
     contHistOffset = bool(options["ContHistOffset"]);
     corrHistAsym = bool(options["CorrHistAsym"]);
     contCorr6Ply = bool(options["ContCorr6Ply"]);
@@ -1086,7 +1089,8 @@ Value Search::Worker::search(
                 // Bonus for a quiet ttMove that fails high
                 if (!ttCapture)
                     update_quiet_histories(pos, ss, *this, ttData.move,
-                                           std::min(98 * depth - 58, 1488));
+                                           simplifications ? 114 * depth
+                                                           : std::min(98 * depth - 58, 1488));
 
                 // Extra penalty for early quiet moves of the previous ply
                 if (prevSq != SQ_NONE && (ss - 1)->moveCount <= 2 && !priorCapture)
@@ -1159,7 +1163,11 @@ Value Search::Worker::search(
     // Step 6. Razoring
     // If eval is really low, skip search entirely and return the qsearch value.
     // For PvNodes, we must have a guard against mates being returned.
-    if ((pruningTweaks ? allNode : !PvNode) && eval < alpha - 1130 - 252 * depth * depth)
+    // (With Simplifications, the margin is linear in depth, as in Pikafish.)
+    if ((pruningTweaks ? allNode : !PvNode)
+        && eval < alpha
+                    - (simplifications ? (pruningTweaks ? 511 : 720) * depth
+                                       : 1130 + 252 * depth * depth))
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 7. Futility pruning: child node
@@ -1193,6 +1201,9 @@ Value Search::Worker::search(
         // Null move dynamic reduction based on depth (and on the static
         // evaluation with PruningTweaks)
         Depth R = 7 + depth / 3 + (pruningTweaks ? std::max((ss->staticEval - beta) / 256, 0) : 0);
+
+        // When seeking a mate (UCI option SeekMate), reduce less
+        R -= seekMate * R / 2;
 
         ss->currentMove                   = Move::null();
         ss->movedPiece                    = NO_PIECE;
@@ -1311,7 +1322,7 @@ moves_loop:  // When in check, search starts here
     // Step 11. A small Probcut idea
     probCutBeta = beta + 430;
     if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
-        && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
+        && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value) && !seekMate)
         return probCutBeta;
 
     const PieceToHistory* contHist[] = {
@@ -1371,6 +1382,11 @@ moves_loop:  // When in check, search starts here
 
         Depth r = reduction(improving, depth, moveCount, delta);
 
+        // With Simplifications, the reduction does not depend on the window
+        // (delta, see reduction()), but is smaller at PV nodes
+        if (simplifications && PvNode)
+            r -= 605;
+
         // Increase reduction for ttPv nodes (*Scaler)
         // Smaller or even negative value is better for short time controls
         // Bigger value is better for long time controls
@@ -1421,13 +1437,9 @@ moves_loop:  // When in check, search starts here
 
                 history += 60 * thisThread->mainHistory[us][move.from_to()] / 28;
 
-                lmrDepth +=
-                  history
-                  / (lmrHistoryDivisor
-                       ? LMRDivisor[std::clamp(int(depth), 1, int(LMRDivisor.size())) - 1]
-                       : 3626);
+                lmrDepth += history / (lmrHistoryDivisor ? lmr_divisor(depth) : 3626);
 
-                Value baseFutility = (bestMove ? 48 : 275);
+                Value baseFutility = (bestMove && !simplifications ? 48 : 275);
                 Value futilityValue =
                   ss->staticEval + baseFutility + 126 * lmrDepth + 103 * (ss->staticEval > alpha);
 
@@ -1528,7 +1540,7 @@ moves_loop:  // When in check, search starts here
             // If we are on a cutNode but the ttMove is not assumed to fail high
             // over current beta
             else if (cutNode)
-                extension = -2;
+                extension = simplifications ? -3 : -2;
         }
 
         // Bonus for a safe reveal (a quiet move of a dark piece), computed on
@@ -1610,6 +1622,11 @@ moves_loop:  // When in check, search starts here
             if (allNode)
                 r += r / (depth + 1);
         }
+
+        // When seeking a mate (UCI option SeekMate), reduce non-checking moves
+        // more and checking moves less
+        if (seekMate && r > 0)
+            r += (givesCheck ? -r : r) / 4;
 
         // Step 16. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
@@ -2707,7 +2724,8 @@ Value Search::Worker::flip_search(
 
 Depth Search::Worker::reduction(bool i, Depth d, int mn, int delta) const {
     int reductionScale = reductions[d] * reductions[mn];
-    return reductionScale - delta * 1333 / rootDelta + !i * reductionScale * 122 / 246 + 2378;
+    return reductionScale - (simplifications ? 0 : delta * 1333 / rootDelta)
+         + !i * reductionScale * 122 / 246 + 2378;
 }
 
 // elapsed() returns the time elapsed since the search started. If the
@@ -2831,8 +2849,8 @@ void update_all_stats(const Position& pos,
 }
 
 
-// Updates histories of the move pairs formed by moves
-// at ply -1, -2, -3, -4, and -6 with current move.
+// Updates histories of the move pairs formed by moves at ply -1 to -6 (not -5
+// with the UCI option Simplifications) with the current move.
 void update_continuation_histories(
   const Search::Worker& w, Stack* ss, Piece pc, Square to, int bonus) {
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
@@ -2849,6 +2867,9 @@ void update_continuation_histories(
         // Only update the first 2 continuation histories if we are in check
         if (ss->inCheck && i > 2)
             break;
+        // No update of the move 5 plies back with Simplifications
+        if (i == 5 && w.simplifications)
+            continue;
         if (((ss - i)->currentMove).is_ok())
         {
             auto& entry = (*(ss - i)->continuationHistory)[pc][to];

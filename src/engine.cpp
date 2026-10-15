@@ -160,7 +160,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // when the previous continuation histories already agree.
     options.add("CMHC", Option(false));
     // When the root score suggests a forced mate, futility-prune only at low
-    // depth and skip singular extensions, to find the mate faster.
+    // depth, skip singular extensions and the small ProbCut, reduce null moves
+    // less, and reduce checks less and other moves more, to find the mate faster.
     options.add("SeekMate", Option(false));
     // Small pruning changes: razoring only at expected ALL nodes, more null
     // move pruning when improving and a reduction growing with the static eval
@@ -189,6 +190,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pruning at shallow depth: divide the history of quiet moves by a
     // depth dependent value (instead of a constant) when reducing lmrDepth.
     options.add("LMRHistoryDivisor", Option(false));
+    // Simplifications of Pikafish's search (Aug-Oct 2026): razoring margin
+    // linear in depth, LMR not depending on the window but smaller at PV nodes,
+    // no continuation history update 5 plies back, bonus of a quiet TT move
+    // linear in depth, a futility margin that does not depend on the best move,
+    // the same negative extension at cut nodes as for TT values above beta.
+    options.add("Simplifications", Option(false));
     // Add a constant offset to the continuation history updates of the move
     // one ply back.
     options.add("ContHistOffset", Option(false));
