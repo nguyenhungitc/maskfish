@@ -295,18 +295,6 @@ class NullSearchManager: public ISearchManager {
 // Search::Worker is the class that does the actual search.
 // It is instantiated once per thread, and it is responsible for keeping track
 // of the search history, and storing data required for the search.
-// The histories that can be shared between the threads of a NUMA node
-// (UCI option SharedHistory). Without sharing, each Worker uses its own copy.
-struct HistoryTables {
-    ContinuationHistory continuationHistory[2][2];
-    PawnHistory         pawnHistory;
-
-    CorrectionHistory<Pawn>         pawnCorrectionHistory;
-    CorrectionHistory<Minor>        minorPieceCorrectionHistory;
-    CorrectionHistory<NonPawn>      nonPawnCorrectionHistory;
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
-};
-
 class Worker {
    public:
     Worker(SharedState&, std::unique_ptr<ISearchManager>, size_t, NumaReplicatedAccessToken);
@@ -328,20 +316,17 @@ class Worker {
 
     CapturePieceToHistory captureHistory;
 
-    // Shared tables of this thread's NUMA node (nullptr when not shared), and
-    // whether this Worker is the one that clears them.
-    bool           ownsSharedHistories = false;  // declared first: set by the claim below
-    HistoryTables* sharedHistories     = nullptr;
-    HistoryTables  ownHistories;
+    // The continuation, pawn and correction histories: those of this thread's
+    // NUMA node with the UCI option SharedHistory, otherwise this thread's own
+    // (ownHistories). This thread is thread numaThreadIdx of the numaTotal
+    // threads that share them (0 of 1 when not shared).
+    // Declared first: set by the claim below.
+    usize                            numaThreadIdx = 0, numaTotal = 1;
+    std::unique_ptr<SharedHistories> ownHistories;
+    SharedHistories&                 sharedHistory;
 
-    // The tables actually used: references into sharedHistories or ownHistories
     ContinuationHistory (&continuationHistory)[2][2];
-    PawnHistory& pawnHistory;
-
-    CorrectionHistory<Pawn>&         pawnCorrectionHistory;
-    CorrectionHistory<Minor>&        minorPieceCorrectionHistory;
-    CorrectionHistory<NonPawn>&      nonPawnCorrectionHistory;
-    CorrectionHistory<Continuation>& continuationCorrectionHistory;
+    CorrectionHistory<Continuation> continuationCorrectionHistory;
 
     TTMoveHistory ttMoveHistory;
 
@@ -357,12 +342,17 @@ class Worker {
     bool simplifications    = false;
     bool bigPawnHistory = false;
 
-    // Index of the pawn history for the position (UCI option BigPawnHistory)
-    int pawn_history_index(const Position& pos) const {
-        return pawn_structure_index(pos, bigPawnHistory);
+    // Entry of the pawn history for the position (UCI option BigPawnHistory)
+    auto& pawn_history_entry(const Position& pos) {
+        return sharedHistory.pawn_entry(pos, bigPawnHistory);
+    }
+    const auto& pawn_history_entry(const Position& pos) const {
+        return sharedHistory.pawn_entry(pos, bigPawnHistory);
     }
 
    private:
+    SharedHistories& claim_histories(SharedState& sharedState, NumaIndex numaIndex);
+
     // Returns whether the last PV sent to the GUI is up to date
     bool iterative_deepening();
 

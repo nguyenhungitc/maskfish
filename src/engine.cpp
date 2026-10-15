@@ -221,9 +221,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
     // always has the size for 10), with stronger updates
     options.add("BigPawnHistory", Option(false));
-    // Share the continuation, pawn and correction histories between the
-    // threads of a NUMA node (only matters with Threads > 1). Changing it
-    // recreates the threads.
+    // Share the continuation, pawn and correction histories (not the
+    // continuation correction history) between the threads of a NUMA node, as
+    // Pikafish does; the pawn and correction histories then grow with the
+    // number of threads (only matters with Threads > 1). Changing it recreates
+    // the threads.
     options.add("SharedHistory", Option(false, [this](const Option&) {
                     resize_threads();
                     return std::nullopt;
