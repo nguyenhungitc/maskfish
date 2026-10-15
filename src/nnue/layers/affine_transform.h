@@ -153,8 +153,22 @@ class AffineTransform {
     }
 
     static constexpr IndexType get_weight_index_scrambled(IndexType i) {
-        return (i / 4) % (PaddedInputDimensions / 4) * OutputDimensions * 4
-             + i / PaddedInputDimensions * 4 + i % 4;
+        IndexType inputIndex = i % PaddedInputDimensions;
+
+#if defined(USE_PAIR_ACTIVATIONS)
+        // At load time, pre-permute the weights to match the per-128-bit-lane
+        // interleaving that SqrClippedReLU::propagate_pair() produces, so no
+        // shuffle is needed at runtime.
+        const IndexType block = inputIndex / 32;
+        const IndexType chunk = (inputIndex % 32) / 4;
+    #if defined(USE_PAIR_ACTIVATIONS_512)
+        inputIndex = block * 32 + ((chunk % 4) * 2 + chunk / 4) * 4 + inputIndex % 4;
+    #else
+        inputIndex = block * 32 + ((chunk % 2) * 4 + chunk / 2) * 4 + inputIndex % 4;
+    #endif
+#endif
+        return inputIndex / 4 * OutputDimensions * 4 + i / PaddedInputDimensions * 4
+             + inputIndex % 4;
     }
 
     static constexpr IndexType get_weight_index(IndexType i) {

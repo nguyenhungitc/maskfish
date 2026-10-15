@@ -135,9 +135,11 @@ struct NetworkArchitecture {
             // [sqr(fc_0), crelu(fc_0), sqr(fc_1), crelu(fc_1)]
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
               concat[ceil_to_multiple<IndexType>(FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 32)];
+    #if !defined(USE_PAIR_ACTIVATIONS)
             alignas(CacheLineSize) typename decltype(ac_0)::OutputBuffer ac_0_out;
-            alignas(CacheLineSize) typename decltype(fc_1)::OutputBuffer fc_1_out;
             alignas(CacheLineSize) typename decltype(ac_1)::OutputBuffer ac_1_out;
+    #endif
+            alignas(CacheLineSize) typename decltype(fc_1)::OutputBuffer fc_1_out;
             alignas(CacheLineSize) typename decltype(fc_2)::OutputBuffer fc_2_out;
 
             Buffer() { std::memset(concat, 0, sizeof(concat)); }
@@ -146,16 +148,25 @@ struct NetworkArchitecture {
         Buffer buffer;
 
         fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_0.propagate_pair(buffer.fc_0_out, buffer.concat, buffer.concat + FC_0_OUTPUTS);
+    #else
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.concat);
         ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
         std::memcpy(buffer.concat + FC_0_OUTPUTS, buffer.ac_0_out,
                     FC_0_OUTPUTS * sizeof(typename decltype(ac_0)::OutputType));
+    #endif
 
         fc_1.propagate(buffer.concat, buffer.fc_1_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2,
+                                buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #else
         ac_sqr_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2);
         ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
         std::memcpy(buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS, buffer.ac_1_out,
                     FC_1_OUTPUTS * sizeof(typename decltype(ac_1)::OutputType));
+    #endif
 
         fc_2.propagate(buffer.concat, buffer.fc_2_out);
 

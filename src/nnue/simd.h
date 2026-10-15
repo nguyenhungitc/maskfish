@@ -41,6 +41,18 @@
 
 namespace Maskfish::Eval::NNUE::SIMD {
 
+// Layer stacks of make layers=2: the squared and the clipped activations are
+// computed together (SqrClippedReLU::propagate_pair()), in an order of the
+// 128-bit lanes that the weights of the next layers are permuted to match
+// (AffineTransform::get_weight_index_scrambled()). The default layer stacks
+// (15 activations of each kind, not a multiple of 32) do not use it.
+#if defined(USE_AVX2) && defined(JIEQI_NNUE_LAYERS2)
+    #define USE_PAIR_ACTIVATIONS
+    #if defined(USE_AVX512) && defined(USE_AVX512BW)
+        #define USE_PAIR_ACTIVATIONS_512
+    #endif
+#endif
+
 // If vector instructions are enabled, we update and refresh the
 // accumulator tile by tile such that each tile fits in the CPU's
 // vector registers.

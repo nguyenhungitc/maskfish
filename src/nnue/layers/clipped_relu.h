@@ -65,22 +65,22 @@ class ClippedReLU {
         return h;
     }
 
-    // Forward propagation
+#if !defined(USE_PAIR_ACTIVATIONS)
+    // Forward propagation (with pair activations, see SqrClippedReLU::propagate_pair())
     void propagate(const InputType* input, OutputType* output) const {
 
-
-#if defined(USE_SSE2)
+    #if defined(USE_SSE2)
         constexpr IndexType NumChunks = InputDimensions / 16;
 
-    #ifndef USE_SSE41
+        #ifndef USE_SSE41
         const __m128i k0x80s = _mm_set1_epi8(-128);
-    #endif
+        #endif
 
         const auto in  = reinterpret_cast<const __m128i*>(input);
         const auto out = reinterpret_cast<__m128i*>(output);
         for (IndexType i = 0; i < NumChunks; ++i)
         {
-    #if defined(USE_SSE41)
+        #if defined(USE_SSE41)
             const __m128i words0 = _mm_srli_epi16(
               _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
               WeightScaleBits);
@@ -88,7 +88,7 @@ class ClippedReLU {
               _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
               WeightScaleBits);
             _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
-    #else
+        #else
             const __m128i words0 = _mm_srai_epi16(
               _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
               WeightScaleBits);
@@ -97,11 +97,11 @@ class ClippedReLU {
               WeightScaleBits);
             const __m128i packedbytes = _mm_packs_epi16(words0, words1);
             _mm_store_si128(&out[i], _mm_subs_epi8(_mm_adds_epi8(packedbytes, k0x80s), k0x80s));
-    #endif
+        #endif
         }
         constexpr IndexType Start = NumChunks * 16;
 
-#elif defined(USE_NEON)
+    #elif defined(USE_NEON)
         constexpr IndexType    NumChunks = InputDimensions / (SimdWidth / 2);
         const SIMD::vec_i8x8_t Zero      = {0};
         const auto             in        = reinterpret_cast<const SIMD::vec_i32x4_t*>(input);
@@ -115,15 +115,16 @@ class ClippedReLU {
             out[i]          = vmax_s8(vqmovn_s16(shifted), Zero);
         }
         constexpr IndexType Start = NumChunks * (SimdWidth / 2);
-#else
+    #else
         constexpr IndexType Start = 0;
-#endif
+    #endif
 
         for (IndexType i = Start; i < InputDimensions; ++i)
         {
             output[i] = static_cast<OutputType>(std::clamp(input[i] >> WeightScaleBits, 0, 127));
         }
     }
+#endif
 };
 
 }  // namespace Maskfish::Eval::NNUE::Layers
