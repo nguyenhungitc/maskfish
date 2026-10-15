@@ -60,7 +60,7 @@ class AffineTransformSparseInput {
     static constexpr IndexType PaddedOutputDimensions =
       ceil_to_multiple<IndexType>(OutputDimensions, MaxSimdWidth);
 
-#if (USE_SSSE3 | (USE_NEON >= 8))
+#if (USE_SSSE3 | (USE_NEON >= 8) | USE_LSX | USE_LASX)
     static constexpr IndexType ChunkSize = 4;
 #else
     static constexpr IndexType ChunkSize = 1;
@@ -83,7 +83,7 @@ class AffineTransformSparseInput {
     }
 
     static constexpr IndexType get_weight_index(IndexType i) {
-#if (USE_SSSE3 | (USE_NEON >= 8))
+#if (USE_SSSE3 | (USE_NEON >= 8) | USE_LSX | USE_LASX)
         return get_weight_index_scrambled(i);
 #else
         return i;
@@ -124,7 +124,7 @@ class AffineTransformSparseInput {
                    OutputType*                             output,
                    [[maybe_unused]] const NNZInfo<InDims>& nnzInfo) const {
 
-#if (USE_SSSE3 | (USE_NEON >= 8))
+#if (USE_SSSE3 | (USE_NEON >= 8) | USE_LSX | USE_LASX)
     #if defined(USE_AVX512)
         using invec_t  = __m512i;
         using outvec_t = __m512i;
@@ -152,6 +152,16 @@ class AffineTransformSparseInput {
         using outvec_t = int32x4_t;
         #define vec_set_32(a) vreinterpretq_s8_u32(vdupq_n_u32(a))
         #define vec_add_dpbusd_32 SIMD::neon_m128_add_dpbusd_epi32
+    #elif defined(USE_LASX)
+        using invec_t  = __m256i;
+        using outvec_t = __m256i;
+        #define vec_set_32 __lasx_xvreplgr2vr_w
+        #define vec_add_dpbusd_32 SIMD::lasx_m256_add_dpbusd_epi32
+    #elif defined(USE_LSX)
+        using invec_t  = __m128i;
+        using outvec_t = __m128i;
+        #define vec_set_32 __lsx_vreplgr2vr_w
+        #define vec_add_dpbusd_32 SIMD::lsx_m128_add_dpbusd_epi32
     #endif
         constexpr IndexType OutputSimdWidth = sizeof(outvec_t) / sizeof(OutputType);
         constexpr IndexType NumAccums = OutputDimensions / OutputSimdWidth;

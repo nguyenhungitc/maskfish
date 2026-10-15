@@ -115,6 +115,23 @@ class ClippedReLU {
             out[i]          = vmax_s8(vqmovn_s16(shifted), Zero);
         }
         constexpr IndexType Start = NumChunks * (SimdWidth / 2);
+
+    #elif defined(USE_LSX)
+        // 128 bits also with LASX, so that the outputs stay in order (the
+        // 256-bit packs work within 128-bit lanes)
+        constexpr IndexType NumChunks = InputDimensions / 16;
+        const auto          in        = reinterpret_cast<const __m128i*>(input);
+        const auto          out       = reinterpret_cast<__m128i*>(output);
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            // Unsigned saturation to 16 bits, then shift and signed saturation
+            // to 8 bits: clamp(input >> WeightScaleBits, 0, 127)
+            const __m128i packed0 = __lsx_vssrani_hu_w(in[i * 4 + 1], in[i * 4 + 0], 0);
+            const __m128i packed1 = __lsx_vssrani_hu_w(in[i * 4 + 3], in[i * 4 + 2], 0);
+            out[i]                = __lsx_vssrlni_b_h(packed1, packed0, WeightScaleBits);
+        }
+        constexpr IndexType Start = NumChunks * 16;
+
     #else
         constexpr IndexType Start = 0;
     #endif

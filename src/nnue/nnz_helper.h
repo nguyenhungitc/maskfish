@@ -45,7 +45,7 @@ inline int nnz_popcount(unsigned m) {
 #endif
 }
 
-#if !defined(USE_AVX512) && (defined(USE_SSSE3) || (USE_NEON >= 8))
+#if !defined(USE_AVX512) && (defined(USE_SSSE3) || (USE_NEON >= 8) || defined(USE_LSX))
 namespace Detail {
 
 constexpr int nnz_lsb(unsigned b) {
@@ -161,7 +161,7 @@ struct NNZInfo {
 
     NNZCursor make_cursor(bool perspective) { return {*this, perspective, count}; }
 
-#elif defined(USE_SSSE3) || (USE_NEON >= 8)
+#elif defined(USE_SSSE3) || (USE_NEON >= 8) || defined(USE_LSX)
 
     struct NNZCursor {
         NNZInfo&       info;

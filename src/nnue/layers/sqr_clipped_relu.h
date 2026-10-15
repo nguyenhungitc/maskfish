@@ -173,6 +173,24 @@ class SqrClippedReLU {
         }
         constexpr IndexType Start = NumChunks * 16;
 
+    #elif defined(USE_LSX)
+        // 128 bits also with LASX, so that the outputs stay in order
+        static_assert(WeightScaleBits == 6);
+        constexpr IndexType NumChunks = InputDimensions / 16;
+        const auto          in        = reinterpret_cast<const __m128i*>(input);
+        const auto          out       = reinterpret_cast<__m128i*>(output);
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            // Signed saturation to 16 bits, high half of the square (a shift of
+            // 16), shift of 3 more and signed saturation to 8 bits, as with SSE2
+            const __m128i words0 = __lsx_vssrani_h_w(in[i * 4 + 1], in[i * 4 + 0], 0);
+            const __m128i words1 = __lsx_vssrani_h_w(in[i * 4 + 3], in[i * 4 + 2], 0);
+            const __m128i sqr0   = __lsx_vmuh_h(words0, words0);
+            const __m128i sqr1   = __lsx_vmuh_h(words1, words1);
+            out[i]               = __lsx_vssrlni_b_h(sqr1, sqr0, 3);
+        }
+        constexpr IndexType Start = NumChunks * 16;
+
     #else
         constexpr IndexType Start = 0;
     #endif
