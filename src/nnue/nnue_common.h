@@ -52,6 +52,9 @@
 
 #elif defined(USE_LSX)
     #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    #include <riscv_vector.h>
 #endif
 
 namespace Maskfish::Eval::NNUE {

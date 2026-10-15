@@ -83,7 +83,7 @@ class AffineTransformSparseInput {
     }
 
     static constexpr IndexType get_weight_index(IndexType i) {
-#if (USE_SSSE3 | (USE_NEON >= 8) | USE_LSX | USE_LASX)
+#if (USE_SSSE3 | (USE_NEON >= 8) | USE_LSX | USE_LASX | USE_RVV)
         return get_weight_index_scrambled(i);
 #else
         return i;
@@ -269,6 +269,55 @@ class AffineTransformSparseInput {
     #ifdef vec_add_32
         #undef vec_add_32
     #endif
+#elif defined(USE_RVV)
+        // The weights of an input are contiguous (ChunkSize 1), and nnzInfo has
+        // the indices of the non-zero input bytes. We don't support larger
+        // layers for now.
+        static_assert(OutputDimensions <= 128 * 8 / 32);
+
+    #define RVV_SPARSE_PROPAGATE(m1, m2, m4) \
+        do \
+        { \
+            std::size_t    vl  = OutputDimensions; \
+            vint32##m4##_t acc = __riscv_vle32_v_i32##m4(biases, vl); \
+            IndexType      i   = 0; \
+            for (; i + 2 <= nnzInfo.count; i += 2) \
+            { \
+                std::size_t   idx0 = nnzInfo.nnz[i + 0]; \
+                std::size_t   idx1 = nnzInfo.nnz[i + 1]; \
+                std::uint8_t  in0  = input[idx0]; \
+                std::uint8_t  in1  = input[idx1]; \
+                vint8##m1##_t w0   = __riscv_vle8_v_i8##m1(&weights[idx0 * OutputDimensions], vl); \
+                vint8##m1##_t w1   = __riscv_vle8_v_i8##m1(&weights[idx1 * OutputDimensions], vl); \
+                /* the inputs are in [0, 127] and the weights in [-128, 127], \
+                 * so two products can be accumulated in 16 bits */ \
+                vint16##m2##_t prod = __riscv_vwmulsu(w0, in0, vl); \
+                prod                = __riscv_vwmaccus(prod, in1, w1, vl); \
+                acc                 = __riscv_vwadd_wv(acc, prod, vl); \
+            } \
+            if (i < nnzInfo.count) \
+            { \
+                std::size_t    idx  = nnzInfo.nnz[i]; \
+                std::uint8_t   in   = input[idx]; \
+                vint8##m1##_t  w    = __riscv_vle8_v_i8##m1(&weights[idx * OutputDimensions], vl); \
+                vint16##m2##_t prod = __riscv_vwmulsu(w, in, vl); \
+                acc                 = __riscv_vwadd_wv(acc, prod, vl); \
+            } \
+            __riscv_vse32(output, acc, vl); \
+        } while (0)
+
+        // Select LMUL
+        const std::size_t VL1 = __riscv_vsetvlmax_e32m1();
+        if (VL1 >= OutputDimensions)
+            RVV_SPARSE_PROPAGATE(mf4, mf2, m1);
+        else if (VL1 * 2 >= OutputDimensions)
+            RVV_SPARSE_PROPAGATE(mf2, m1, m2);
+        else if (VL1 * 4 >= OutputDimensions)
+            RVV_SPARSE_PROPAGATE(m1, m2, m4);
+        else
+            RVV_SPARSE_PROPAGATE(m2, m4, m8);
+
+    #undef RVV_SPARSE_PROPAGATE
 #else
         // Use dense implementation for the other architectures.
         affine_transform_non_ssse3<InputDimensions, PaddedInputDimensions, OutputDimensions>(

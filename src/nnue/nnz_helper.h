@@ -32,8 +32,8 @@
 // transformer while it writes its output (FeatureTransformer::transform()),
 // instead of in a second pass over the output by the sparse input layer
 // (AffineTransformSparseInput::propagate()). Unlike upstream, they are always
-// kept as a list of indices (upstream uses a bitset except with AVX-512): with
-// the layer stacks of Maskfish, the list is faster on AVX2.
+// kept as a list of indices (upstream uses a bitset except with AVX-512 and
+// RVV): with the layer stacks of Maskfish, the list is faster on AVX2.
 
 namespace Maskfish::Eval::NNUE {
 
@@ -84,9 +84,15 @@ template<usize Dimensions>
 struct NNZInfo {
     static_assert(Dimensions % 64 == 0);
 
-    // Number of entries of nnz, and indices of the non-zero chunks
+    // Number of entries of nnz, and indices of the non-zero 32-bit chunks (of
+    // the non-zero bytes with RVV)
+#if defined(USE_RVV)
+    static constexpr usize Granularity = 1;
+#else
+    static constexpr usize Granularity = 4;
+#endif
     unsigned count = 0;
-    alignas(64) u16 nnz[Dimensions / 4];
+    alignas(64) u16 nnz[Dimensions / Granularity];
 
 #if defined(USE_AVX512)
     #ifdef USE_AVX512ICL
@@ -212,6 +218,11 @@ struct NNZInfo {
     };
 
     NNZCursor make_cursor(bool perspective) { return {*this, perspective, count}; }
+
+#elif defined(USE_RVV)
+
+        // With RVV, FeatureTransformer::transform() records the indices of the
+        // non-zero bytes itself, without a cursor
 
 #else
 

@@ -132,6 +132,23 @@ class ClippedReLU {
         }
         constexpr IndexType Start = NumChunks * 16;
 
+    #elif defined(USE_RVV)
+        for (std::size_t j = 0; j < InputDimensions;)
+        {
+            std::size_t vl = __riscv_vsetvl_e32m4(InputDimensions - j);
+
+            vint32m4_t in = __riscv_vle32_v_i32m4(&input[j], vl);
+            in            = __riscv_vmax_vx_i32m4(in, 0, vl);
+
+            // Saturating narrowing shifts (rounding down): clamp(input >> 6, 0, 127)
+            vint16m2_t words = __riscv_vnclip_wx_i16m2(in, WeightScaleBits, __RISCV_VXRM_RDN, vl);
+            vint8m1_t  narrowed = __riscv_vnclip_wx_i8m1(words, 0, __RISCV_VXRM_RDN, vl);
+
+            __riscv_vse8_v_u8m1(&output[j], __riscv_vreinterpret_v_i8m1_u8m1(narrowed), vl);
+            j += vl;
+        }
+        constexpr IndexType Start = InputDimensions;
+
     #else
         constexpr IndexType Start = 0;
     #endif
