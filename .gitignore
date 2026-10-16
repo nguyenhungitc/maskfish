@@ -16,6 +16,7 @@ src/-lstdc++.res
 
 # Neural network for the NNUE evaluation
 **/*.nnue
+**/*.nnue.part
 
 
 # Trainer outputs (see trainer/README.md)

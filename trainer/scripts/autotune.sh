@@ -949,14 +949,22 @@ tg_doc() {   # $1 = file, $2 = caption
 }
 say() { log "$*"; tg_send "$TAG · $*"; }
 
-kill_tree() { local p; for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done; kill -TERM "$1" 2>/dev/null; }
+kill_tree() {
+  local p; for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done
+  # commands started by run_logged lead their own process group: this also catches
+  # pool workers that multiprocessing respawns while its workers are being killed
+  [[ "$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" == "$1" ]] && kill -TERM -- "-$1" 2>/dev/null
+  kill -TERM "$1" 2>/dev/null
+}
 kill_children() { local p; for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done; }
+if command -v setsid >/dev/null 2>&1; then GROUP=(setsid -w); else GROUP=(); fi
 
 run_logged() {   # run_logged LOGFILE cmd...  (background + wait: signals are handled at once)
   local lf="$1"; shift
   echo "[$(date '+%F %T')] \$ $*" >> "$lf"
   (( DRY_RUN )) && { echo "\$ $*"; return 0; }
-  ( "$@" >> "$lf" 2>&1 ) &
+  # 9>&-: the autotune lock is not inherited, so a stray process cannot block a restart
+  ( "${GROUP[@]}" "$@" >> "$lf" 2>&1 9>&- ) &
   wait $!
 }
 
@@ -1118,7 +1126,7 @@ pipeline() {   # pipeline ARGS...  (retries; pipeline.sh itself resumes)
   while :; do
     log "\$ pipeline.sh $* --config $AT_DIR/run.env"
     if (( DRY_RUN )); then "$PIPELINE" "$@" --config "$AT_DIR/run.env" --dry-run; return 0; fi
-    "$PIPELINE" "$@" --config "$AT_DIR/run.env" >> "$AT_DIR/logs/pipeline.log" 2>&1 &
+    "$PIPELINE" "$@" --config "$AT_DIR/run.env" >> "$AT_DIR/logs/pipeline.log" 2>&1 9>&- &
     wait $!; rc=$?
     (( rc == 0 )) && return 0
     (( rc == 130 || rc == 143 )) && return "$rc"

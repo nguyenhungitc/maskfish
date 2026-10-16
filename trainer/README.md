@@ -89,9 +89,9 @@ cd ../trainer
 - Choose `ARCH` for your CPU (`make help` lists them, e.g. `x86-64-bmi2`,
   `x86-64-avx512`, `apple-silicon`). When generating data on several
   different machines, build on each machine.
-- The build does not download any network (`make net` only checks for
-  `src/maskfish.nnue`). This does not matter here: every script
-  passes the Jieqi network with the `EvalFile` option.
+- The build downloads the latest released network to `src/maskfish.nnue`
+  if that file does not exist (`make net`). The scripts do not use it:
+  every script passes the Jieqi network with the `EvalFile` option.
 
 ### 3.2. Install Python
 

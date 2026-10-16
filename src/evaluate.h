@@ -30,10 +30,10 @@ class Position;
 
 namespace Eval {
 
-// The default net name MUST follow the format nn-[SHA256 first 12 digits].nnue
-// for the build process (profile-build and fishtest) to work. Do not change the
-// name of the macro or the location where this macro is defined, as it is used
-// in the Makefile/Fishtest.
+// The default net name. It MUST match the file name of the network attached to
+// the GitHub releases (maskfish.nnue), which scripts/net.sh downloads for the
+// build (`make net`). Do not change the name of the macro or the location where
+// this macro is defined.
 #define EvalFileDefaultNameBig "maskfish.nnue"
 
 namespace NNUE {
