@@ -306,7 +306,7 @@ void ThreadPool::start_thinking(Position&          pos,
     searchable = searchable && pos.is_playable();
     if (searchable)
     {
-        const auto legalmoves = MoveList<LEGAL>(pos);
+        const auto legalmoves = MoveList<ALL>(pos);
 
         for (const auto& uciMove : limits.searchmoves)
         {

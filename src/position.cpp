@@ -463,54 +463,20 @@ Bitboard Position::checkers_to(Color c, Square s, Bitboard occupied) const {
 }
 
 
-// Tests whether a pseudo-legal move is legal
+// Takes a random move and tests whether the move is legal. It is used to
+// validate moves from TT that can be corrupted due to SMP concurrent access or
+// hash position key aliasing. The move generator only generates legal moves.
 bool Position::legal(Move m) const {
 
-    assert(m.is_ok());
-
-    Color    us       = sideToMove;
-    Square   from     = m.from_sq();
-    Square   to       = m.to_sq();
-    Bitboard occupied = (pieces() ^ from) | to;
-
-    assert(color_of(moved_piece(m)) == us);
-    assert(piece_on(king_square(us)) == make_piece(us, KING));
-    assert(check_info_valid());
-
-    // If the moving piece is a dark advisor, make sure the destination square
-    // is within the palace
-    if (type_of(piece_on(from)) == ADVISOR && move_dark(m) && !(Palace & to))
+    if (!m.is_ok() || !is_ok(m.from_sq()) || !is_ok(m.to_sq()))
         return false;
-
-    // If the moving piece is a king, check whether the destination square is
-    // attacked by the opponent.
-    if (type_of(piece_on(from)) == KING)
-        return !(checkers_to(~us, to, occupied));
-
-    // If we don't need slow check. A non-king move is always legal when either:
-    // 1. Not moving a pinned piece.
-    // 2. Moving a pinned non-cannon piece and aligned with king.
-    // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
-    if (!st->needFullCheck
-        && (!(blockers_for_king(us) & from)
-            || (((type_of(piece_on(from)) != CANNON) || !capture(m))
-                && aligned(from, to, king_square(us)))))
-        return true;
-
-    // A non-king move is legal if the king is not under attack after the move.
-    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
-}
-
-
-// Takes a random move and tests whether the move is
-// pseudo-legal. It is used to validate moves from TT that can be corrupted
-// due to SMP concurrent access or hash position key aliasing.
-bool Position::pseudo_legal(const Move m) const {
 
     Color  us   = sideToMove;
     Square from = m.from_sq();
     Square to   = m.to_sq();
     Piece  pc   = moved_piece(m);
+
+    assert(check_info_valid());
 
     // If the 'from' square is not occupied by a piece belonging to the side to
     // move, the move is obviously not legal.
@@ -535,15 +501,33 @@ bool Position::pseudo_legal(const Move m) const {
     else if (!(attacks_bb(type_of(pc), from, pieces()) & to))
         return false;
 
-    // In check, only the evasions are pseudo-legal
-    if (checkers())
-        return MoveList<EVASIONS>(*this).contains(m);
+    // If the moving piece is a dark advisor, make sure the destination square
+    // is within the palace
+    if (type_of(pc) == ADVISOR && is_dark(from) && !(Palace & to))
+        return false;
 
-    return true;
+    Bitboard occupied = (pieces() ^ from) | to;
+
+    // If the moving piece is a king, check whether the destination square is
+    // attacked by the opponent.
+    if (type_of(pc) == KING)
+        return !(checkers_to(~us, to, occupied));
+
+    // If we don't need slow check. A non-king move is always legal when either:
+    // 1. Not moving a pinned piece.
+    // 2. Moving a pinned non-cannon piece and aligned with king.
+    // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
+    if (!st->needFullCheck
+        && (!(blockers_for_king(us) & from)
+            || (((type_of(pc) != CANNON) || !capture(m)) && aligned(from, to, king_square(us)))))
+        return true;
+
+    // A non-king move is legal if the king is not under attack after the move.
+    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
 }
 
 
-// Tests whether a pseudo-legal move gives a check
+// Tests whether a legal move gives a check
 bool Position::gives_check(Move m) const {
 
     assert(m.is_ok());
@@ -1406,7 +1390,7 @@ bool Position::rule_judge(Value& result, int ply) {
     // 40 move rule
     if (st->rule40 >= 80)
     {
-        result = MoveList<LEGAL>(*this).size() ? VALUE_DRAW : mated_in(ply);
+        result = MoveList<ALL>(*this).size() ? VALUE_DRAW : mated_in(ply);
         return true;
     }
 
