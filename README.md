@@ -160,6 +160,14 @@ management `SimpleMtg` (test it with a time control, `trainer/match.py --tc`).
 Test them with `trainer/match.py --opt-a Name=true`; the ones that fail should
 be removed rather than kept as dead options.
 
+Speed options, which give the same search (bench signature unchanged): compare
+the speed with and without (e.g. `bench` several times, alternating), not the
+strength: `ThreatCache` (king moves tested against threats cached in the
+position) and, in `make threats=yes` builds, `ThreatsIncremental` (threat
+features updated from the threats recorded by the moves). `ThreatCacheMovePick`
+(move ordering with the cached threats, as Pikafish) changes the search: test
+it with `match.py` like the options above.
+
 ### Debugging commands
 
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.
