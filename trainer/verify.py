@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS),
                     help="architecture of the random test network (ignored with --net)")
+    ap.add_argument("--qat", action="store_true",
+                    help="evaluate the float model with the quantization of --qat training "
+                         "(the float/quantized difference should then be small)")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="check the evaluate() scaling with the engine option JieqiMaterial=true")
     args = ap.parse_args()
@@ -102,6 +105,9 @@ def main():
         tmp.close()
         S.write_nnue(q, tmp.name, "verify")
         net = tmp.name
+
+    if model is not None:
+        model.stacks.qat = args.qat
 
     engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net),
                                     "JieqiMaterial": str(args.jieqi_material).lower()})

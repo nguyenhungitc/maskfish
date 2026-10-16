@@ -255,6 +255,10 @@ def main():
     ap.add_argument("--stack-balance", type=float, default=0.0, metavar="CAP",
                     help="weight samples by inverse layer stack frequency, capped at CAP "
                          "(e.g. 8); 0 = off")
+    ap.add_argument("--qat", action="store_true",
+                    help="quantization-aware training: the forward pass rounds the layer "
+                         "stack weights, biases and activations like the engine (gradients "
+                         "go straight through); the exported network format is unchanged")
     ap.add_argument("--no-eval-scale", action="store_true",
                     help="compare the raw network output with the data scores, without the "
                          "engine's evaluate() scaling (old behaviour; the scale of the "
@@ -325,8 +329,9 @@ def main():
                      kb_factor=args.factorize_kb)
         if init_q is not None:
             S.load_into_model(init_q, model, ft_only=init_ft_only)
+    model.stacks.qat = args.qat
     print(f"factorized inputs: {model.factorized} (king bucket rows: {model.ft_kb is not None}), "
-          f"shared fc0: {model.has_l1_fact}", flush=True)
+          f"shared fc0: {model.has_l1_fact}, quantization-aware: {args.qat}", flush=True)
     model.to(device)
 
     output_params = list(model.stacks.output.parameters())
