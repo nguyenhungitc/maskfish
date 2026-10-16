@@ -772,7 +772,16 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
     if (!pos.move_dark(move))
         prefetch(tt.first_entry(observer_tt_key(pos.prefetch_key(move), rootObserver)));
 
-    DirtyPiece dp = pos.do_move(move, st, givesCheck);
+    // UCI option ThreatsIncremental (make threats=yes): do_move() records the
+    // threats it adds and removes for the threat accumulator
+    DirtyThreats* dts = nullptr;
+#ifdef JIEQI_NNUE_THREATS
+    DirtyThreats& next = accumulatorStack.next_dirty_threats();
+    next.clear(Eval::NNUE::AccumulatorStack::incrementalThreats);
+    if (next.valid)
+        dts = &next;
+#endif
+    DirtyPiece dp = pos.do_move(move, st, givesCheck, dts);
     // Preferable over fetch_add to avoid locking instructions (only this
     // thread writes its node count)
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
@@ -2502,6 +2511,12 @@ Value Search::Worker::flip_search(
 
     const Square     flipSq = (ss - 1)->currentMove.to_sq();
     const DirtyPiece baseDp = accumulatorStack.latest().dirtyPiece;
+#ifdef JIEQI_NNUE_THREATS
+    // Threats recorded by the move (ThreatsIncremental): each outcome appends
+    // the threats of its reveal to them
+    const int  baseThreats      = accumulatorStack.latest().dirtyThreats.size;
+    const bool baseThreatsValid = accumulatorStack.latest().dirtyThreats.valid;
+#endif
 
     // Give every outcome the same view of the parent's LMR reduction.
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
@@ -2516,7 +2531,14 @@ Value Search::Worker::flip_search(
 
         DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();
+#ifdef JIEQI_NNUE_THREATS
+        DirtyThreats& dts = accumulatorStack.next_dirty_threats();
+        dts.size          = baseThreats;
+        dts.valid         = baseThreatsValid;
+        const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp, dts.valid ? &dts : nullptr);
+#else
         const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp);
+#endif
         accumulatorStack.push(dp);
         assert(pos.key() == flipKey);
 
@@ -2537,6 +2559,10 @@ Value Search::Worker::flip_search(
     // reveal (and the refresh flags) of the last outcome: a second search of
     // the same move (e.g. after LMR) starts again from it
     accumulatorStack.pop();
+#ifdef JIEQI_NNUE_THREATS
+    accumulatorStack.next_dirty_threats().size  = baseThreats;
+    accumulatorStack.next_dirty_threats().valid = baseThreatsValid;
+#endif
     accumulatorStack.push(baseDp);
 
     return value;
