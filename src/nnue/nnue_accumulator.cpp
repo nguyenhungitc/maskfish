@@ -124,7 +124,42 @@ void apply_threats(std::int16_t* __restrict dst,
 
     const ThreatWeightType* weights = featureTransformer.threatWeights;
 
-#if defined(__GNUC__)
+#if defined(VECTOR)
+    // The SIMD helpers of the feature transformer: one sign-extending load
+    // (vpmovsxbw) per vector of weights, the accumulator kept in registers by
+    // tiles of Regs vectors (both accumulators are aligned to the cache line)
+    constexpr IndexType Lanes = sizeof(vec_t) / sizeof(std::int16_t);
+    constexpr IndexType Regs  = 8;
+    constexpr IndexType Tile  = Lanes * Regs;
+    static_assert(Dimensions % Tile == 0);
+
+    for (IndexType j = 0; j < Dimensions; j += Tile)
+    {
+        vec_t r[Regs];
+        if (src)
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_load(reinterpret_cast<const vec_t*>(src + j) + i);
+        else
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_zero();
+
+        for (int k = 0; k < nRemoved; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_sub_16(r[i], vec_load_i8_16(w + i * Lanes));
+        }
+        for (int k = 0; k < nAdded; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_add_16(r[i], vec_load_i8_16(w + i * Lanes));
+        }
+
+        for (IndexType i = 0; i < Regs; ++i)
+            vec_store(reinterpret_cast<vec_t*>(dst + j) + i, r[i]);
+    }
+#elif defined(__GNUC__)
     // GCC / clang vector extensions: 16 x int16 per vector (two registers on
     // 128-bit targets), sign extension of the 8-bit weights
     using I16 = std::int16_t __attribute__((vector_size(32)));
