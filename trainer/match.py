@@ -8,6 +8,9 @@ SPRT, to decide whether a change is an improvement.
     python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
         --opt-a TTPenalize=true --nodes 20000 --sprt 0 3
 
+    python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
+        --engine-b old/maskfish --tc 10+0.1 --workers 1 --sprt 0 5
+
 A is the version being tested, B the reference (by default B uses the same
 engine and network as A). Results are reported for A.
 
@@ -70,6 +73,8 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
         e.isready()
 
     last_scores = {F.WHITE: [], F.BLACK: []}   # from white's point of view
+    # Clocks in ms (--tc), white and black
+    clock = [args.tc_base, args.tc_base] if args.tc else None
     no_capture = 0
     repetitions = U.RepetitionTracker()
     for ply in range(args.max_plies):
@@ -84,7 +89,17 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
             move = opening[ply]
             score, mate = None, False
         else:
-            move, score, mate = eng.search(args.go)
+            if clock:
+                go = (f"wtime {max(1, int(clock[0]))} btime {max(1, int(clock[1]))} "
+                      f"winc {args.tc_inc} binc {args.tc_inc}")
+                start = time.monotonic()
+                move, score, mate = eng.search(go)
+                clock[stm] -= (time.monotonic() - start) * 1000
+                if clock[stm] < 0:                  # lost on time
+                    return -1 if stm == F.WHITE else 1
+                clock[stm] += args.tc_inc
+            else:
+                move, score, mate = eng.search(args.go)
             if move in ("(none)", "0000"):
                 return -1 if stm == F.WHITE else 1
         capture = U.is_capture(fen, move)
@@ -211,6 +226,8 @@ def main():
     ap.add_argument("--nodes", type=int, default=20000)
     ap.add_argument("--depth", type=int, default=0)
     ap.add_argument("--movetime", type=int, default=0, help="ms per move")
+    ap.add_argument("--tc", help="time control 'base+inc' in seconds (e.g. 10+0.1), clocks "
+                    "kept by match.py: tests the time management; a flag fall loses")
     ap.add_argument("--pairs", type=int, default=10000, help="maximum number of game pairs")
     ap.add_argument("--sprt", nargs=2, type=float, metavar=("ELO0", "ELO1"),
                     help="stop when H0 (elo0) or H1 (elo1) is accepted")
@@ -235,6 +252,10 @@ def main():
     args.opt_a, args.opt_b = parse_opts(args.opt_a), parse_opts(args.opt_b)
     args.go = (f"depth {args.depth}" if args.depth else
                f"movetime {args.movetime}" if args.movetime else f"nodes {args.nodes}")
+    if args.tc:
+        base, _, inc = args.tc.partition("+")
+        args.tc_base, args.tc_inc = int(float(base) * 1000), int(float(inc or 0) * 1000)
+        args.go = f"tc {args.tc}"
     lower = math.log(args.beta / (1 - args.alpha))
     upper = math.log((1 - args.beta) / args.alpha)
 
