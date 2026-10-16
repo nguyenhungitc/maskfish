@@ -278,6 +278,17 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     Position::useThreatCacheMovePick = bool(o);
                     return std::nullopt;
                 }));
+#ifdef JIEQI_NNUE_THREATS
+    // Pikafish's incremental threat features ("Full threats" DirtyThreats,
+    // "Update NNUE perspectives together"): the moves record the threats
+    // they add and remove, and the threat accumulator is updated from them
+    // instead of from the difference of the lists of threats of the two
+    // positions. No functional change (bench identical): compare the speed.
+    options.add("ThreatsIncremental", Option(false, [](const Option& o) {
+                    Eval::NNUE::AccumulatorStack::incrementalThreats = bool(o);
+                    return std::nullopt;
+                }));
+#endif
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));

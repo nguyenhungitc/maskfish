@@ -620,7 +620,7 @@ bool Position::gives_check(Move m) const {
 }
 
 
-Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp) {
+Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, DirtyThreats* dts) {
 
     assert(is_ok(s) && is_dark(s));
     assert(!check_info_valid());  // Called right after the move of the dark piece
@@ -643,6 +643,13 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp) {
 #endif
 
     assert(color_of(pc) == us);
+
+    // The dark piece becomes the revealed one: same occupancy
+    if (dts)
+    {
+        update_piece_threats(int(us) << 3, type_of(fromPc), false, s, *dts, false);
+        update_piece_threats(int(pc), type_of(pc), true, s, *dts, false);
+    }
 
     // Flip the piece
     remove_piece(s);
@@ -749,12 +756,117 @@ void Position::restore_rest_piece(Piece pc) {
 }
 
 
+// Threats added (add) or removed by putting or removing, on s, a piece of
+// class cls attacking like a piece of type pt (see DirtyThreats), with the
+// rules of JieqiThreats::physical_threats(): a dark piece attacks like the
+// piece of its starting square, a dark advisor only inside the palace; the
+// threats of the kings are left out (no features). The piece is on the board.
+// Without computeRay the occupancy does not change (only the class of the
+// piece on s), and only the threats from and to s change.
+void Position::update_piece_threats(
+  int cls, PieceType pt, bool add, Square s, DirtyThreats& dts, bool computeRay) const {
+
+    const Bitboard occupied = pieces();
+    const Color    c        = Color(cls >> 3);
+    const bool     dark     = !(cls & 7);
+
+    assert(occupied & s);
+
+    // Outgoing threats
+    if (pt != KING)
+    {
+        Bitboard threatened =
+          pt == PAWN ? attacks_bb(PAWN, s, c) : attacks_bb(pt, s, occupied);
+        if (dark && pt == ADVISOR)
+            threatened &= Palace;
+        threatened &= occupied;
+
+        while (threatened)
+        {
+            const Square to = pop_lsb(threatened);
+            dts.push(DirtyThreats::make(s, to, cls, threat_class(to), add));
+        }
+    }
+
+    // Incoming threats. A dark advisor attacks no square outside the palace.
+    const Bitboard rAttacks = attacks_bb(ROOK, s, occupied);
+    const Bitboard cAttacks = attacks_bb(CANNON, s, occupied);
+    const Bitboard advisors = Palace & s ? pieces(ADVISOR) : pieces(ADVISOR) & ~pieces(DARK);
+
+    Bitboard incoming = (attacks_bb(PAWN_TO, s, WHITE) & pieces(WHITE, PAWN))
+                      | (attacks_bb(PAWN_TO, s, BLACK) & pieces(BLACK, PAWN))
+                      | (attacks_bb(KNIGHT_TO, s, occupied) & pieces(KNIGHT))
+                      | (attacks_bb(BISHOP, s, occupied) & pieces(BISHOP))
+                      | (attacks_bb(ADVISOR, s) & advisors) | (rAttacks & pieces(ROOK))
+                      | (cAttacks & pieces(CANNON));
+
+    while (incoming)
+    {
+        const Square from = pop_lsb(incoming);
+        dts.push(DirtyThreats::make(from, s, threat_class(from), cls, add));
+    }
+
+    if (!computeRay)
+        return;
+
+    // Discovered (or blocked) threats of the pieces that s blocks: the first
+    // piece beyond s for a rook that sees s, the first and second ones for a
+    // cannon that sees s, the first one for a cannon with one piece between,
+    // and the targets of knights and bishops whose leg or eye is s
+    for (Bitboard b = rAttacks & pieces(ROOK); b;)
+    {
+        const Square   from = pop_lsb(b);
+        const Bitboard p1   = ray_pass_bb(from, s) & rAttacks & occupied;
+        assert(!more_than_one(p1));
+        if (p1)
+            dts.push(DirtyThreats::make(from, lsb(p1), threat_class(from), threat_class(lsb(p1)),
+                                        !add));
+    }
+
+    for (Bitboard b = rAttacks & pieces(CANNON); b;)
+    {
+        const Square   from = pop_lsb(b);
+        const Bitboard p1   = ray_pass_bb(from, s) & rAttacks & occupied;
+        const Bitboard p2   = ray_pass_bb(from, s) & cAttacks & occupied;
+        assert(!more_than_one(p1) && !more_than_one(p2));
+        if (p1)
+            dts.push(DirtyThreats::make(from, lsb(p1), threat_class(from), threat_class(lsb(p1)),
+                                        add));
+        if (p2)
+            dts.push(DirtyThreats::make(from, lsb(p2), threat_class(from), threat_class(lsb(p2)),
+                                        !add));
+    }
+
+    for (Bitboard b = cAttacks & pieces(CANNON); b;)
+    {
+        const Square   from = pop_lsb(b);
+        const Bitboard p1   = ray_pass_bb(from, s) & rAttacks & occupied;
+        assert(!more_than_one(p1));
+        if (p1)
+            dts.push(DirtyThreats::make(from, lsb(p1), threat_class(from), threat_class(lsb(p1)),
+                                        !add));
+    }
+
+    for (Bitboard b = (unconstrained_attacks_bb(KING, s) & pieces(KNIGHT))
+                    | (unconstrained_attacks_bb(ADVISOR, s) & pieces(BISHOP));
+         b;)
+    {
+        const Square from = pop_lsb(b);
+        for (Bitboard t = leaper_pass_bb(from, s) & occupied; t;)
+        {
+            const Square to = pop_lsb(t);
+            dts.push(DirtyThreats::make(from, to, threat_class(from), threat_class(to), !add));
+        }
+    }
+}
+
+
 // Makes a move, and saves all information necessary
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.
 // The search prefetches the TT entry of the new position itself (the TT key
 // depends on the observer, see Search::observer_tt_key()).
-DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
+DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck, DirtyThreats* dts) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -781,6 +893,7 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     Piece  pc       = piece_on(from);
     Piece  captured = piece_on(to);
     bool   moveDark = move_dark(m);
+    int    capturedClass = 0;  // threat class of the captured piece (ThreatsIncremental)
 
     DirtyPiece dp{};  // add_pc/remove_pc are only set when used: no indeterminate copies
     dp.pc     = moveDark ? DARK_PIECE : pc;
@@ -817,6 +930,13 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     else
         dp.requires_refresh[us] = dp.requires_refresh[them] = false;
 
+    // Threats (ThreatsIncremental): the mover leaves 'from', the board being
+    // otherwise unchanged. A dark piece stays dark (and attacks like the
+    // piece of its starting square) until do_flip().
+    const int moverClass = moveDark ? int(us) << 3 : int(pc);
+    if (dts)
+        update_piece_threats(moverClass, type_of(pc), false, from, *dts, true);
+
     if (captured)
     {
         Square capsq = to;
@@ -849,6 +969,10 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
 
         dp.remove_pc = st->captureDark ? DARK_PIECE : captured;
         dp.remove_sq = capsq;
+
+        // The threats of the captured piece are recorded after the move
+        if (dts)
+            capturedClass = threat_class(capsq);
 
         if (st->captureDark)
             byTypeBB[DARK] ^= to;
@@ -893,8 +1017,17 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
             st->minorPieceKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
     }
 
-    // Move the piece.
+    // Move the piece. Threats: a capture does not change the occupancy of
+    // 'to', so the captured piece is replaced by the mover there without the
+    // discovered threats (as Pikafish), on the board after the move.
     move_piece(from, to);
+
+    if (dts)
+    {
+        if (captured)
+            update_piece_threats(capturedClass, type_of(captured), false, to, *dts, false);
+        update_piece_threats(moverClass, type_of(pc), true, to, *dts, !captured);
+    }
 
     // Set capture piece
     st->capturedPiece = captured;

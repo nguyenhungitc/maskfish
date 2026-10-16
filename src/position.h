@@ -154,11 +154,13 @@ class Position {
 
     // Doing and undoing moves
     void       do_move(Move m, StateInfo& newSt);
-    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck);
+    // With dts, the threats the move adds and removes (see DirtyThreats) are
+    // appended to it (make threats=yes, UCI option ThreatsIncremental)
+    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck, DirtyThreats* dts = nullptr);
     void       undo_move(Move m);
     void       do_null_move(StateInfo& newSt);
     void       undo_null_move();
-    Piece do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr);
+    Piece do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr, DirtyThreats* dts = nullptr);
     void undo_flip(Square s, Piece fromPc);
 
     // Take one piece out of / put it back into the pool of unrevealed pieces,
@@ -230,6 +232,17 @@ class Position {
     void set_state() const;
     void set_check_info() const;
     void set_threats() const;
+
+    // Threat bookkeeping (see DirtyThreats): class of the piece on a square,
+    // and the threats added (add) or removed by putting or removing, on s, a
+    // piece of class cls that attacks like a piece of type pt. The piece must be
+    // on the board when it is called, the rest of the board as it is before
+    // (for a removal) or after (for an addition). Without computeRay, only the
+    // threats from and to s (the class of the piece on s changes, not the
+    // occupancy).
+    int  threat_class(Square s) const;
+    void update_piece_threats(
+      int cls, PieceType pt, bool add, Square s, DirtyThreats& dts, bool computeRay) const;
 
     // Other helpers
     void                  move_piece(Square from, Square to);
@@ -481,6 +494,10 @@ inline bool Position::capture(Move m) const {
 inline Piece Position::captured_piece() const { return st->capturedPiece; }
 
 inline bool Position::move_dark(Move m) const { return pieces(DARK) & m.from_sq(); }
+
+inline int Position::threat_class(Square s) const {
+    return is_dark(s) ? int(color_of(piece_on(s))) << 3 : int(piece_on(s));
+}
 
 inline void Position::put_piece(Piece pc, Square s) {
 

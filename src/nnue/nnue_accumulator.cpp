@@ -442,6 +442,10 @@ void AccumulatorStack::evaluate_threats(
     if (target.computed[WHITE] && target.computed[BLACK])
         return;
 
+    // UCI option ThreatsIncremental: from the threats recorded by the moves
+    if (incrementalThreats && evaluate_threats_incremental(pos, featureTransformer))
+        return;
+
     if (!target.listValid)
     {
         target.count     = std::uint16_t(ThreatFeatureSet::physical_threats(pos, target.list));
@@ -452,6 +456,151 @@ void AccumulatorStack::evaluate_threats(
         evaluate_threats_side<WHITE>(pos, featureTransformer);
     if (!target.computed[BLACK])
         evaluate_threats_side<BLACK>(pos, featureTransformer);
+}
+
+// Nearest earlier state with a computed threat accumulator for the
+// perspective, with the same mirroring, such that the threats of every move
+// (and reveal) since then are recorded; size if there is none.
+template<Color Perspective>
+std::size_t AccumulatorStack::incremental_threats_source(bool mirror) const noexcept {
+    for (std::size_t i = size - 1; i-- > 0;)
+    {
+        if (!accumulators[i + 1].dirtyThreats.valid)
+            return size;
+        if (accumulators[i].threats.computed[Perspective])
+            return accumulators[i].threats.mirror[Perspective] == mirror ? i : size;
+    }
+    return size;
+}
+
+// Updates the threat accumulators of the latest state that are not computed
+// from an earlier state by the threats recorded since then (Pikafish's
+// DirtyThreats), both perspectives together when they start from the same
+// state. Returns whether both perspectives are computed; a perspective that
+// cannot be updated this way (no source, too many changes) is left to
+// evaluate_threats_side().
+template<IndexType Dimensions>
+bool AccumulatorStack::evaluate_threats_incremental(
+  const Position& pos, const FeatureTransformer<Dimensions>& featureTransformer) noexcept {
+
+    // Threats recorded since the source: more than this, a refresh is cheaper
+    constexpr int MaxRaw     = 2 * ThreatFeatureSet::MaxActiveDimensions;
+    constexpr int MaxChanges = ThreatFeatureSet::MaxActiveDimensions;
+
+    auto&      target    = mut_latest().threats;
+    const bool mirror[2] = {FeatureSet::make_feature_bucket(pos, WHITE).second,
+                            FeatureSet::make_feature_bucket(pos, BLACK).second};
+    std::size_t src[2]   = {size, size};
+
+    if (!target.computed[WHITE])
+        src[WHITE] = incremental_threats_source<WHITE>(mirror[WHITE]);
+    if (!target.computed[BLACK])
+        src[BLACK] = incremental_threats_source<BLACK>(mirror[BLACK]);
+
+    IndexType removed[2][MaxChanges], added[2][MaxChanges];
+    int       nRemoved[2] = {}, nAdded[2] = {};
+    bool      ok[2]       = {src[WHITE] < size, src[BLACK] < size};
+
+    // The recorded threats since `begin`, without the ones that were added
+    // and removed again (by the reveal, or by a later move): a threat is
+    // recorded at most once in each direction in a row, so after sorting by
+    // threat a pair of opposite signs cancels. Their feature indices for the
+    // perspectives in (white, black), in one pass for both.
+    auto collect = [&](std::size_t begin, bool white, bool black) {
+        u32 raw[MaxRaw];
+        int n = 0;
+        for (std::size_t j = begin + 1; j < size; ++j)
+        {
+            const DirtyThreats& dts = accumulators[j].dirtyThreats;
+            if (n + dts.size > MaxRaw)
+            {
+                ok[WHITE] &= !white, ok[BLACK] &= !black;
+                return;
+            }
+            std::memcpy(raw + n, dts.list, dts.size * sizeof(u32));
+            n += dts.size;
+        }
+
+        // Sort by threat (rotating the sign bit to the bottom), then drop
+        // the pairs of the same threat with opposite signs
+        for (int k = 0; k < n; ++k)
+            raw[k] = raw[k] << 1 | raw[k] >> 31;
+        std::sort(raw, raw + n);
+        int m = 0;
+        for (int k = 0; k < n; ++k)
+        {
+            if (m && (raw[m - 1] ^ raw[k]) == 1)
+                --m;  // same threat, opposite signs
+            else
+                raw[m++] = raw[k];
+        }
+
+        for (int k = 0; k < m; ++k)
+        {
+            const bool add = raw[k] & 1;
+            const auto th  = ThreatFeatureSet::Threat(raw[k] >> 1);
+            for (Color c : {WHITE, BLACK})
+            {
+                if (!(c == WHITE ? white : black) || !ok[c])
+                    continue;
+                const IndexType idx = c == WHITE ? ThreatFeatureSet::index<WHITE>(th, mirror[c])
+                                                 : ThreatFeatureSet::index<BLACK>(th, mirror[c]);
+                if (idx >= ThreatFeatureSet::Dimensions)
+                    continue;
+                if (nRemoved[c] + nAdded[c] == MaxChanges)
+                    ok[c] = false;
+                else if (add)
+                    added[c][nAdded[c]++] = idx;
+                else
+                    removed[c][nRemoved[c]++] = idx;
+            }
+        }
+    };
+
+    if (ok[WHITE] && ok[BLACK] && src[WHITE] == src[BLACK])
+        collect(src[WHITE], true, true);
+    else
+    {
+        if (ok[WHITE])
+            collect(src[WHITE], true, false);
+        if (ok[BLACK])
+            collect(src[BLACK], false, true);
+    }
+
+    for (Color c : {WHITE, BLACK})
+    {
+        if (!ok[c])
+            continue;
+
+        // A refresh is cheaper than more changes than active features
+        const ThreatAccumulator<Dimensions>& source = accumulators[src[c]].threats;
+        const int features = source.features[c] + nAdded[c] - nRemoved[c];
+        if (nRemoved[c] + nAdded[c] > features)
+            continue;
+        apply_threats(target.acc[c], target.psqt[c], source.acc[c], source.psqt[c],
+                      featureTransformer, removed[c], nRemoved[c], added[c], nAdded[c]);
+        target.computed[c] = true;
+        target.mirror[c]   = mirror[c];
+        target.features[c] = std::uint16_t(features);
+
+#ifndef NDEBUG
+        // Debug builds: the same accumulator as a computation from scratch
+        ThreatFeatureSet::Threat list[ThreatFeatureSet::MaxActiveDimensions];
+        IndexType                idx[ThreatFeatureSet::MaxActiveDimensions];
+        const int                count = ThreatFeatureSet::physical_threats(pos, list);
+        const int                n     = c == WHITE
+                                         ? threat_indices<WHITE>(list, count, mirror[c], idx)
+                                         : threat_indices<BLACK>(list, count, mirror[c], idx);
+        auto fresh = std::make_unique<ThreatAccumulator<Dimensions>>();
+        apply_threats(fresh->acc[c], fresh->psqt[c], nullptr, nullptr, featureTransformer, idx, 0,
+                      idx, n);
+        assert(!std::memcmp(fresh->acc[c], target.acc[c], sizeof(target.acc[c])));
+        assert(!std::memcmp(fresh->psqt[c], target.psqt[c], sizeof(target.psqt[c])));
+        assert(n == target.features[c]);
+#endif
+    }
+
+    return target.computed[WHITE] && target.computed[BLACK];
 }
 
 template<Color Perspective, IndexType Dimensions>
@@ -467,10 +616,13 @@ void AccumulatorStack::evaluate_threats_side(
     // Nearest earlier state of the stack with a computed threat accumulator
     // (with the same mirroring, otherwise every feature changes)
     const ThreatAccumulator<Dimensions>* source = nullptr;
+    // (and with its list of threats, which the states updated with
+    // ThreatsIncremental do not have)
     for (std::size_t i = size - 1; i-- > 0;)
         if (accumulators[i].threats.computed[Perspective])
         {
-            if (accumulators[i].threats.mirror[Perspective] == mirror)
+            if (accumulators[i].threats.mirror[Perspective] == mirror
+                && accumulators[i].threats.listValid)
                 source = &accumulators[i].threats;
             break;
         }
@@ -505,12 +657,15 @@ void AccumulatorStack::evaluate_threats_side(
         apply_threats(target.acc[Perspective], target.psqt[Perspective],
                       source->acc[Perspective], source->psqt[Perspective], featureTransformer,
                       removedIdx, nRemoved, addedIdx, nAdded);
+        target.features[Perspective] =
+          std::uint16_t(source->features[Perspective] + nAdded - nRemoved);
     }
     else
     {
         nAdded = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
         apply_threats(target.acc[Perspective], target.psqt[Perspective], nullptr, nullptr,
                       featureTransformer, nullptr, 0, addedIdx, nAdded);
+        target.features[Perspective] = std::uint16_t(nAdded);
     }
 
     target.computed[Perspective] = true;

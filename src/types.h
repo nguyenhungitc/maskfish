@@ -325,6 +325,34 @@ struct DirtyPiece {
     bool requires_refresh[2];
 };
 
+// Threats added or removed by a move and the reveal that completes it (make
+// threats=yes, UCI option ThreatsIncremental), packed like
+// JieqiThreats::Threat (from << 24 | to << 16 | attacker class << 8 | attacked
+// class) with bit 31 set for an added threat. The class of a piece is its
+// code, color * 8 for a dark piece. Threats of the kings are not recorded
+// (they are no features). A list that is not valid (not recorded, or full)
+// makes the threat accumulator fall back to the list difference or a refresh.
+struct DirtyThreats {
+    static constexpr int MaxSize = 256;
+
+    static constexpr u32 make(Square from, Square to, int attacker, int attacked, bool add) {
+        return u32(add) << 31 | u32(from) << 24 | u32(to) << 16 | u32(attacker) << 8
+             | u32(attacked);
+    }
+
+    void clear(bool tracked) { size = 0, valid = tracked; }
+    void push(u32 t) {
+        if (size < MaxSize)
+            list[size++] = t;
+        else
+            valid = false;
+    }
+
+    u32  list[MaxSize];
+    int  size  = 0;
+    bool valid = false;
+};
+
     #define ENABLE_INCR_OPERATORS_ON(T) \
         constexpr T& operator++(T& d) { return d = T(int(d) + 1); } \
         constexpr T& operator--(T& d) { return d = T(int(d) - 1); }
