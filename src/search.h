@@ -491,6 +491,11 @@ class Worker {
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
     Value     rootDelta;
+    // At least one root move has been fully searched since the search started,
+    // so that rootMoves[0] holds a searched move: a hard time or node limit may
+    // then stop the search before the first iteration is completed (in Jieqi,
+    // depth 1 of an opening position can take hundreds of milliseconds)
+    bool rootMoveSearched = false;
 
     size_t                    threadIdx;
     NumaReplicatedAccessToken numaAccessToken;
