@@ -64,6 +64,9 @@ constexpr std::string_view DarkPieces("RNBAKABNR"
                                       "........."
                                       "rnbakabnr");
 
+// Largest fullmove number accepted in a FEN (gamePly stays far from overflow)
+constexpr int MaxFullmove = 100000;
+
 static constexpr Piece Pieces[] = {W_ROOK, W_ADVISOR, W_CANNON, W_PAWN, W_KNIGHT, W_BISHOP, W_KING,
                                    B_ROOK, B_ADVISOR, B_CANNON, B_PAWN, B_KNIGHT, B_BISHOP, B_KING};
 }  // namespace
@@ -214,9 +217,10 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
         }
     }
 
-    // 2. Active color
+    // 2. Active color. Anything but "b" (also a missing field, or "r" for red as
+    // in some xiangqi FENs) is white, like trainer/jieqi_features.py
     ss >> token;
-    sideToMove = (token == 'w' ? WHITE : BLACK);
+    sideToMove = (token == 'b' ? BLACK : WHITE);
     ss >> token;
 
     // 3. Rest pieces: a list of <piece><count>, e.g. R2A2C2P5N2B2r2a2c2p5n2b2.
@@ -235,13 +239,18 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
             restPieces[idx] = std::min(int(token - '0'), MAX_REST_COUNT);
     }
 
-    // 4-5. Halfmove clock and fullmove number
-    ss >> std::skipws >> st->rule40 >> gamePly;
-    st->rule40 = std::max(st->rule40, 0);
+    // 4-5. Halfmove clock and fullmove number. Out of range values (an
+    // extraction that overflows gives INT_MAX or INT_MIN) are clamped: the
+    // counters are incremented by every move, and rule40 scales the evaluation
+    // (evaluate()); 80 plies without capture already draw the game.
+    int fullmove = 1;
+    ss >> std::skipws >> st->rule40 >> fullmove;
+    st->rule40 = std::clamp(st->rule40, 0, 80);
+    fullmove   = std::clamp(fullmove, 1, MaxFullmove);
 
     // Convert from fullmove starting from 1 to gamePly starting from 0,
     // handle also common incorrect FEN with fullmove = 0.
-    gamePly = std::max(2 * (gamePly - 1), 0) + (sideToMove == BLACK);
+    gamePly = 2 * (fullmove - 1) + (sideToMove == BLACK);
 
     set_state();
 
