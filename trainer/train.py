@@ -231,6 +231,9 @@ def main():
     ap.add_argument("--scaling", type=float, default=361.0)
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
+    ap.add_argument("--init-ft-only", action="store_true",
+                    help="take only the feature transformer of --init-net, train the layer "
+                         "stacks from scratch (to compare layer stack architectures fairly)")
     ap.add_argument("--no-psqt", action="store_true",
                     help="network without PSQT part (make psqt=no), architecture '<arch>-np'")
     ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
@@ -292,11 +295,13 @@ def main():
     if args.init_net:
         # A network with the other layer stacks gives only its feature transformer
         init_arch = S.detect_arch(args.init_net)
-        if F.feature_arch(init_arch) != train.arch:
+        # Same input features: the stack count (-s32) may differ, then only
+        # the feature transformer is used (PSQT buckets copied to each pair)
+        if F.split_arch(init_arch)[0] != F.split_arch(train.arch)[0]:
             raise SystemExit(f"--init-net is arch '{init_arch}', training '{F.ARCH}' "
                              f"(data '{train.arch}', --layers {args.layers}, "
                              f"--no-psqt {args.no_psqt})")
-        init_ft_only = init_arch != F.ARCH
+        init_ft_only = init_arch != F.ARCH or args.init_ft_only
         F.set_arch(init_arch)
         init_q = S.read_nnue(args.init_net)
         F.set_arch(arch)

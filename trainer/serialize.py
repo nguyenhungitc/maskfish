@@ -380,11 +380,29 @@ def upgrade(q: dict) -> tuple[int, int]:
     return clamped
 
 
+def _psqt_for_model(psqt: np.ndarray, n: int):
+    """PSQT weights of a network (in internal units) for the PSQT buckets of the
+    current architecture: unchanged with as many buckets, each of 16 buckets
+    copied to its pair of 32 (-s32 from a 16 stack network), zeros without
+    PSQT (-np: the PSQT columns of the model are unused). n: PSQT columns of
+    the model."""
+    import torch
+    from model import NNUE2SCORE, OUTPUT_SCALE
+    if not F.USE_PSQT:
+        return torch.zeros(psqt.shape[0], n)
+    if psqt.shape[1] * 2 == n:
+        psqt = np.repeat(psqt, 2, axis=1)
+    elif psqt.shape[1] != n:
+        raise ValueError(f"cannot map {psqt.shape[1]} PSQT buckets to {n}")
+    return torch.tensor(psqt / (NNUE2SCORE * OUTPUT_SCALE))
+
+
 def load_into_model(q: dict, model, ft_only: bool = False):
     """Dequantize a network into a model (to continue training from it). The
     training-only factorized parts, if any, are set to zero. ft_only: only the
-    feature transformer (from a network with the same input features but the
-    other layer stacks); the layer stacks of the model are kept."""
+    feature transformer (from a network with the same input features but
+    other layer stacks, or 16 layer stacks for -s32, or with PSQT for -np);
+    the layer stacks of the model are kept."""
     import torch
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE)
@@ -392,13 +410,13 @@ def load_into_model(q: dict, model, ft_only: bool = False):
     L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
-        model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+        model.ft.weight[:F.NUM_FEATURES, L1:] = _psqt_for_model(q["psqt"], model.ft.weight.shape[1] - L1)
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
-            model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+            model.ft_thr.weight[:, L1:] = _psqt_for_model(q["thr_psqt"], model.ft_thr.weight.shape[1] - L1)
         for name in ("ft_ps", "ft_kb"):
             if getattr(model, name, None) is not None:
                 getattr(model, name).weight.zero_()
