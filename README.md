@@ -207,8 +207,8 @@ each one with SPRT before changing its default.
 
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.
 `go perft <depth>` counts leaf nodes; a move of a dark piece is expanded into
-one child per kind of piece left in the mover's pool (each kind counted once).
-It does not need a network.
+one child per kind of piece left in the mover's pool (each kind counted once),
+also at the last ply. It does not need a network.
 `evalraw` prints the raw network output (PSQT and layer parts, in internal
 units), the layer stack used, and `final`: the static evaluation after the
 scaling of `evaluate()` (optimism 0; `none` in check). The option `RawScore`

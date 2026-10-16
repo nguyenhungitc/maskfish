@@ -125,6 +125,14 @@ void TTEntry::save(Key     k,
     if (m || uint16_t(k) != key16)
         move16 = m;
 
+    // A value without a bound (a static evaluation only, or the estimate of a
+    // chance node, see Search::Worker::chance_node()) does not replace a usable
+    // bound of the same position that is at least as deep: only the move is
+    // updated (above).
+    if (b == BOUND_NONE && uint16_t(k) == key16 && Bound(genBound8 & 0x3) != BOUND_NONE
+        && d - DEPTH_NONE <= depth8)
+        return;
+
     // Overwrite less valuable entries (cheapest checks first)
     if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_NONE + 2 * pv > depth8 - 4
         || relative_age(generation8))
