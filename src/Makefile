@@ -1223,10 +1223,13 @@ clang-profile-use:
 	EXTRALDFLAGS='-fprofile-use ' \
 	all
 
+# -fprofile-update=atomic: the PGO bench runs speedtest with several threads;
+# without atomic counters the profile can be inconsistent, and GCC 13 then
+# stops with "corrupted profile info" at the -fprofile-use step.
 gcc-profile-make:
 	@mkdir -p profdir
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-generate=profdir' \
+	EXTRACXXFLAGS='-fprofile-generate=profdir -fprofile-update=atomic' \
 	EXTRACXXFLAGS+=$(EXTRAPROFILEFLAGS) \
 	EXTRALDFLAGS='-lgcov' \
 	all
