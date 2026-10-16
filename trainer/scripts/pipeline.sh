@@ -187,8 +187,16 @@ fmt_num() { printf "%'d" "$1" 2>/dev/null || printf '%d' "$1"; }
 log()  { echo "[$(date '+%F %T')] $*"; }
 words() { local -n _arr=$1; read -r -a _arr <<< "${2:-}"; }   # split a config string into an array
 
-kill_tree() { local p; for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done; kill -TERM "$1" 2>/dev/null; }
+kill_tree() {
+  local p; for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done
+  # a command started by run() leads its own process group: killing the group also
+  # catches the pool workers multiprocessing respawns while its workers are killed
+  [[ "$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" == "$1" ]] && kill -TERM -- "-$1" 2>/dev/null
+  kill -TERM "$1" 2>/dev/null
+}
 kill_children() { local p; for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done; }
+# own process group for every command (if setsid exists), see kill_tree
+if command -v setsid >/dev/null 2>&1; then GROUP=(setsid -w); else GROUP=(); fi
 
 notify_fail() {   # $1 = reason
   (( FAILED_SENT )) && return
@@ -228,7 +236,8 @@ run() {   # run LOG cmd...
   log "\$ $*" | tee -a "$logf"
   (( DRY_RUN )) && return 0
   # background + wait: so that Ctrl+C / kill are handled at once (bash defers traps while a foreground command runs)
-  ( "$@" 2>&1 | tee -a "$logf"; exit "${PIPESTATUS[0]}" ) &
+  # 9>&-: the run lock is not inherited, so a stray process cannot block the next run
+  ( "${GROUP[@]}" "$@" 9>&- 2>&1 | tee -a "$logf"; exit "${PIPESTATUS[0]}" ) &
   wait $!
 }
 
@@ -590,7 +599,7 @@ s_train() {
   (( DRY_RUN )) && return 0
 
   # run in the background and watch the log: Telegram every TG_EPOCH_EVERY epochs, stop at once if the loss is nan
-  "${cmd[@]}" >> "$CUR_LOG" 2>&1 &
+  "${cmd[@]}" >> "$CUR_LOG" 2>&1 9>&- &
   local pid=$! nanflag="$LOG_DIR/.nan.$$"
   rm -f "$nanflag"
   tail -n +1 -f --pid="$pid" "$CUR_LOG" 2>/dev/null | while IFS= read -r line; do
