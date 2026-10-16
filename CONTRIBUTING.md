@@ -118,6 +118,13 @@ make -j build
 You also need a **Jieqi network** at `src/maskfish.nnue` (or set the `EvalFile`
 option). Pikafish xiangqi networks do not work.
 
+The published binaries are universal binaries (`make -j build
+ARCH=x86-64-universal`, see [Universal binary](./README.md#universal-binary)):
+a change that is specific to an instruction set (SIMD code, `#ifdef USE_...`)
+should be checked with the builds it affects, e.g.
+`MASKFISH_UNIVERSAL_ARCH=x86-64 ./maskfish` for the baseline build of a
+universal binary.
+
 ## Reporting issues
 
 If you find a bug, please open an issue on the

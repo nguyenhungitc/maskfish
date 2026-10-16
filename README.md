@@ -28,6 +28,28 @@ reveal.
 > Xiangqi networks (such as Pikafish's `master-net`) are **not compatible**
 > (they use a different feature set), see [Network](#network).
 
+## Binaries
+
+The binaries are **universal binaries**: one file per system, which selects
+the best build for the CPU when it starts (see
+[Universal binary](#universal-binary)). They are built by the
+[Binaries](.github/workflows/binaries.yml) workflow and attached to the
+releases published since then (and to every run of the workflow, under
+Actions):
+
+| File | System |
+| --- | --- |
+| `maskfish-ubuntu-x86-64-universal.tar` | Linux x86-64 (any distribution with glibc; the C++ runtime is linked in) |
+| `maskfish-windows-x86-64-universal.zip` | Windows x86-64 |
+| `maskfish-macos-universal.tar` | macOS, Intel and Apple silicon |
+| `maskfish-android-arm64-universal.tar` | Android arm64 (static) |
+
+Each archive holds the binary, `maskfish.nnue` (the network of the latest
+release when it was built: keep it next to the binary), `README.md`,
+`Copying.txt` and `AUTHORS`. `scripts/get_native_properties.sh` prints the
+best architecture of the machine (for `make ARCH=...`) and the name of the
+archive for it.
+
 ## Rules implemented
 
 * At the start, the 15 non-king pieces of each side stand face down on the usual
@@ -234,17 +256,27 @@ and selects the best one for the CPU when it starts (`compiler` prints the
 selected one; AMD Zen 1/2, whose BMI2 is slow, get `x86-64-avx2`).
 `ARCH=arm64-universal` does the same with `armv8` / `armv8-dotprod`.
 `make macos-lipo` makes a macOS binary for both Intel (universal) and Apple
-silicon.
+silicon. The published [binaries](#binaries) are made this way:
+
+```
+make -j build ARCH=x86-64-universal COMP=gcc      # Linux
+make -j build ARCH=x86-64-universal COMP=mingw    # Windows, from Linux (MinGW-w64)
+make -j macos-lipo COMP=clang                     # macOS
+make -j build ARCH=arm64-universal COMP=ndk       # Android (NDK r27c or later)
+```
 
 * Every build is compiled separately in `src/temp_builds/` (about eight times
   the time of one build); `make clean` deletes them. The architecture options
   of the network (`threats=yes`, `layers=2`, ...) apply to all of them.
 * `make -j profile-build ARCH=x86-64-universal` runs the PGO bench of every
   build, which needs a CPU that runs all of them, or
-  `RUN_PREFIX="/path/to/sde -future --"` (Intel SDE).
+  `RUN_PREFIX="/path/to/sde -future --"` (Intel SDE). Cross builds use
+  `make build` (no PGO): under Wine the engine stops at startup (NUMA
+  detection, as Pikafish's), so a Windows binary is checked on Windows.
 * It needs `optimize=yes` and `debug=no` (it uses the LTO-optimized object of
   every build). On Linux the C++ runtime is linked statically; with
   `COMP=clang UNIVERSAL_LIBCXX=yes` it is libc++ (as Pikafish's releases).
+  Windows and Android binaries are static.
 * The network is not embedded (as in the other builds).
 * `MASKFISH_UNIVERSAL_ARCH=<build>` in the environment forces a build (the
   CPU must support it), e.g. to compare them on one machine;

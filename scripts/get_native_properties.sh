@@ -2,8 +2,11 @@
 
 #
 # Returns properties of the native system.
-# best architecture as supported by the CPU
-# filename of the best binary uploaded as an artifact during CI
+# best architecture as supported by the CPU (as expected by src/Makefile ARCH=)
+# filename of the binary built for this system by the CI (.github/workflows/
+# binaries.yml): the universal binary of the system when there is one (it
+# selects the best build for the CPU itself), otherwise the build of the
+# best architecture
 #
 
 # Check if all the given flags are present in the CPU flags list
@@ -48,6 +51,9 @@ set_arch_x86_64() {
     true_arch='x86-64-avx512bw'
   elif check_flags 'avx512f'; then
     true_arch='x86-64-avx512'
+  elif check_flags 'avxvnni' 'avx2' 'bmi2'; then
+    # as the x86-64-universal binary (src/universal/entry_x86.cpp)
+    true_arch='x86-64-avxvnni'
   elif [ -z "${znver_1_2+1}" ] && check_flags 'bmi2'; then
     true_arch='x86-64-bmi2'
   elif check_flags 'avx2'; then
@@ -81,16 +87,14 @@ case $uname_s in
     case $uname_m in
       'arm64')
         true_arch='apple-silicon'
-        file_arch='x86-64-sse41-popcnt' # Supported by Rosetta 2
         ;;
       'x86_64')
         flags=$(sysctl -n machdep.cpu.features machdep.cpu.leaf7_features | tr '\n' ' ' | tr '[:upper:]' '[:lower:]' | tr -d '_.')
         set_arch_x86_64
-        if [ "$true_arch" = 'x86-64-vnni256' ] || [ "$true_arch" = 'x86-64-avx512' ]; then
-           file_arch='x86-64-bmi2'
-        fi
         ;;
     esac
+    # make macos-lipo: x86-64-universal and apple-silicon in one binary
+    file_arch='universal'
     file_os='macos'
     file_ext='tar'
     ;;
@@ -101,6 +105,7 @@ case $uname_s in
         file_os='ubuntu'
         check_znver_1_2
         set_arch_x86_64
+        file_arch='x86-64-universal'
         ;;
       'i686')
         file_os='ubuntu'
@@ -116,6 +121,7 @@ case $uname_s in
         if check_flags 'asimddp'; then
           true_arch="$true_arch-dotprod"
         fi
+        file_arch='arm64-universal'
         ;;
       'armv7'*)
         file_os='android'
@@ -145,6 +151,7 @@ case $uname_s in
     get_flags
     check_znver_1_2
     set_arch_x86_64
+    file_arch='x86-64-universal'
     file_os='windows'
     file_ext='zip'
     ;;

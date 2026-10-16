@@ -1,0 +1,178 @@
+# Builds the binaries that are published: universal binaries, which hold a
+# build of the engine per instruction set and select the best one for the CPU
+# at startup (see "Universal binary" in README.md).
+#
+#   maskfish-ubuntu-x86-64-universal.tar    Linux x86-64 (gcc, static C++ runtime)
+#   maskfish-windows-x86-64-universal.zip   Windows x86-64 (MinGW cross build)
+#   maskfish-macos-universal.tar            macOS, Intel (x86-64-universal) and
+#                                           Apple silicon in one binary
+#   maskfish-android-arm64-universal.tar    Android arm64 (NDK, static)
+#
+# The names are those given by scripts/get_native_properties.sh. Each archive
+# holds the binary, the network downloaded by the build (maskfish.nnue, the
+# one of the latest release), README.md, Copying.txt and AUTHORS
+# (scripts/package_binary.sh). The binaries are checked with perft (the
+# Windows one on a Windows runner, the Android one is not run).
+#
+# Runs for pushes to pro that touch src/ or scripts/, by hand (Actions >
+# Binaries > Run workflow), and when a release is published: the archives are
+# then also attached to the release.
+name: Binaries
+
+on:
+  push:
+    branches: [pro]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - ".github/workflows/binaries.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # only to attach the archives to a published release
+
+jobs:
+  linux:
+    name: Linux x86-64-universal
+    runs-on: ubuntu-24.04
+    env:
+      ARCHIVE: maskfish-ubuntu-x86-64-universal.tar
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        working-directory: src
+        run: |
+          make -j"$(nproc)" build ARCH=x86-64-universal COMP=gcc
+          make strip
+      - name: Check (selected build and the baseline one)
+        working-directory: src
+        run: |
+          printf "compiler\nquit\n" | ./maskfish
+          PERFT_QUICK=1 ../tests/perft.sh
+          MASKFISH_UNIVERSAL_ARCH=x86-64 PERFT_QUICK=1 ../tests/perft.sh
+      - name: Package
+        run: scripts/package_binary.sh src/maskfish "$ARCHIVE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
+
+  windows:
+    name: Windows x86-64-universal (MinGW cross build)
+    runs-on: ubuntu-24.04
+    env:
+      ARCHIVE: maskfish-windows-x86-64-universal.zip
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64
+      - name: Build
+        working-directory: src
+        run: |
+          make -j"$(nproc)" build ARCH=x86-64-universal COMP=mingw
+          make strip COMP=mingw STRIP=x86_64-w64-mingw32-strip
+      - name: Package
+        run: scripts/package_binary.sh src/maskfish.exe "$ARCHIVE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+  # The Windows binary is checked on Windows itself (under Wine, the NUMA
+  # detection of the engine, as Pikafish's, fails at startup)
+  windows-check:
+    name: Windows x86-64-universal (check, publish)
+    needs: windows
+    runs-on: windows-latest
+    env:
+      ARCHIVE: maskfish-windows-x86-64-universal.zip
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARCHIVE }}
+      - name: Check (selected build and the baseline one)
+        run: |
+          mkdir bin && unzip -q "$ARCHIVE" -d bin
+          cd bin
+          printf "compiler\nquit\n" | ./maskfish.exe
+          PERFT_QUICK=1 ../tests/perft.sh
+          MASKFISH_UNIVERSAL_ARCH=x86-64 PERFT_QUICK=1 ../tests/perft.sh
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
+
+  macos:
+    name: macOS universal (x86-64-universal + apple-silicon)
+    runs-on: macos-latest
+    env:
+      ARCHIVE: maskfish-macos-universal.tar
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        working-directory: src
+        run: |
+          make -j"$(sysctl -n hw.ncpu)" macos-lipo COMP=clang
+          make strip COMP=clang
+          lipo -info maskfish
+      - name: Check (native slice)
+        working-directory: src
+        run: |
+          printf "compiler\nquit\n" | ./maskfish
+          PERFT_QUICK=1 ../tests/perft.sh
+      - name: Package
+        run: scripts/package_binary.sh src/maskfish "$ARCHIVE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
+
+  android:
+    name: Android arm64-universal
+    runs-on: ubuntu-24.04
+    env:
+      ARCHIVE: maskfish-android-arm64-universal.tar
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install NDK
+        run: |
+          NDKV="28.2.13676358"
+          ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          echo "y" | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDKV"
+          echo "$ANDROID_SDK_ROOT/ndk/$NDKV/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Build
+        working-directory: src
+        run: |
+          make -j"$(nproc)" build ARCH=arm64-universal COMP=ndk
+          make strip COMP=ndk ARCH=arm64-universal
+          file maskfish
+      - name: Package
+        run: scripts/package_binary.sh src/maskfish "$ARCHIVE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
