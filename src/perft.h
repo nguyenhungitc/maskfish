@@ -45,9 +45,9 @@ u64 perft(Position& pos, Depth depth) {
     u64        cnt, nodes = 0;
     const bool leaf = (depth == 2);
 
-    auto count = [&]() { return leaf ? MoveList<LEGAL>(pos).size() : perft<false>(pos, depth - 1); };
+    auto count = [&]() { return leaf ? MoveList<ALL>(pos).size() : perft<false>(pos, depth - 1); };
 
-    for (const auto& m : MoveList<LEGAL>(pos))
+    for (const auto& m : MoveList<ALL>(pos))
     {
         if (Root && depth <= 1)
             cnt = 1, nodes++;

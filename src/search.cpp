@@ -1070,8 +1070,8 @@ Value Search::Worker::search(
             // For high rule40 counts don't produce transposition table cutoffs.
             if (pos.rule40_count() < 70)
             {
-                if (depth >= 8 && ttData.move && pos.pseudo_legal(ttData.move)
-                    && pos.legal(ttData.move) && !is_decisive(ttData.value)
+                if (depth >= 8 && ttData.move && pos.legal(ttData.move)
+                    && !is_decisive(ttData.value)
                     && !pos.move_dark(ttData.move))
                 {
                     do_move(pos, ttData.move, st);
@@ -1239,7 +1239,7 @@ Value Search::Worker::search(
         {
             assert(move.is_ok());
 
-            if (move == excludedMove || !pos.legal(move))
+            if (move == excludedMove)
                 continue;
 
             assert(pos.capture(move));
@@ -1306,17 +1306,13 @@ moves_loop:  // When in check, search starts here
 
     int moveCount = 0;
 
-    // Step 12. Loop through all pseudo-legal moves until no moves remain
+    // Step 12. Loop through all legal moves until no moves remain
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
         assert(move.is_ok());
 
         if (move == excludedMove)
-            continue;
-
-        // Check for legality
-        if (!pos.legal(move))
             continue;
 
         // At root obey the "searchmoves" option and skip moves not listed in Root Move List.
@@ -1815,7 +1811,7 @@ moves_loop:  // When in check, search starts here
     // it must be a mate. If we are in a singular extension search then
     // return a fail low score.
 
-    assert(moveCount || !ss->inCheck || excludedMove || !MoveList<LEGAL>(pos).size());
+    assert(moveCount || !ss->inCheck || excludedMove || !MoveList<ALL>(pos).size());
 
     // Adjust best value for fail high cases
     if (bestValue >= beta && !is_decisive(bestValue) && !is_decisive(alpha))
@@ -2073,14 +2069,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                   &thisThread->captureHistory, contHist, &thisThread->pawn_history_entry(pos),
                   ss->ply);
 
-    // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
+    // Step 5. Loop through all legal moves until no moves remain or a beta
     // cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
         assert(move.is_ok());
-
-        if (!pos.legal(move))
-            continue;
 
         givesCheck = pos.gives_check(move);
         capture    = pos.capture(move);
@@ -2175,14 +2168,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // Step 9. Check for mate
     // All legal moves have been searched. A special case: if no legal
     // moves were found, it is checkmate.
-    if (bestValue == -VALUE_INFINITE || (!moveCount && [&] {
-            for (const auto& m : MoveList<QUIETS>(pos))
-                if (pos.legal(m))
-                    return false;
-            return true;
-        }()))
+    if (bestValue == -VALUE_INFINITE || (!moveCount && !MoveList<QUIETS>(pos).size()))
     {
-        assert(!MoveList<LEGAL>(pos).size());
+        assert(!MoveList<ALL>(pos).size());
         return mated_in(ss->ply);  // Plies to mate from the root
     }
 
@@ -2853,7 +2841,7 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
     if (!pos.rule_judge(result, 1))
     {
         auto [ttHit, ttData, ttWriter] = tt.probe(observer_tt_key(pos.key(), observer));
-        if (ttHit && MoveList<LEGAL>(pos).contains(ttData.move))
+        if (ttHit && ttData.move && pos.legal(ttData.move))
             pv.push_back(ttData.move);
     }
 

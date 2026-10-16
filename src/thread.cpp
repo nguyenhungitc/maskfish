@@ -305,7 +305,7 @@ void ThreadPool::start_thinking(Position&          pos,
     // Engine::set_position()), is not searched: no root moves, "bestmove (none)"
     if (searchable && pos.is_playable())
     {
-        const auto legalmoves = MoveList<LEGAL>(pos);
+        const auto legalmoves = MoveList<ALL>(pos);
 
         for (const auto& uciMove : limits.searchmoves)
         {
