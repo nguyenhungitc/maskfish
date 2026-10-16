@@ -142,7 +142,7 @@ class ThreadPool {
     Search::SearchManager* main_manager();
     Thread*                main_thread() const { return threads.front().get(); }
     uint64_t               nodes_searched() const;
-    Thread*                get_best_thread() const;
+    Thread*                get_best_thread(bool simpleVote = false) const;
     void                   start_searching();
     void                   wait_for_search_finished() const;
 

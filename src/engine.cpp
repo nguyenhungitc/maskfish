@@ -233,6 +233,20 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
+    // Pikafish "Simplify mtg in time management": the move horizon in whole
+    // moves, at most 50 (instead of centi-moves, at most 60).
+    options.add("SimpleMtg", Option(false));
+    // Pikafish "Simplify optimism scaling formula": the weight of optimism in
+    // the evaluation does not depend on the material.
+    options.add("OptimismSimple", Option(false));
+    // Pikafish "Replace nnueComplexity with simple_eval equivalent": the
+    // agreement between the network and the material balance replaces the
+    // complexity blending of the evaluation (the trainer does not model it).
+    options.add("EvalCorrelation", Option(false));
+    // Pikafish's futility pruning (margin, depth limit, returned value).
+    options.add("PikaFutility", Option(false));
+    // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
+    options.add("SimpleThreadVote", Option(false));
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));

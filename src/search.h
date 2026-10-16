@@ -455,6 +455,10 @@ class Worker {
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;
+    bool   optimismSimple     = false;  // UCI options, see engine.cpp
+    bool   evalCorrelation    = false;
+    bool   pikaFutility       = false;
+    bool   simpleThreadVote   = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
 

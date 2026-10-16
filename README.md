@@ -150,9 +150,13 @@ default and described next to their definition in `src/engine.cpp`:
 `MainHistoryDecay`, `MalusDecay`, `BestMoveBonusScale`, `LMRHistoryDivisor`,
 `Simplifications`, `ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
 `CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
-`RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory` and
-`SharedHistory`. Test them with `trainer/match.py --opt-a Name=true`; the ones
-that fail should be removed rather than kept as dead options.
+`RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory`,
+`SharedHistory`, `PikaFutility` and `SimpleThreadVote`; for the evaluation
+`OptimismSimple` and `EvalCorrelation` (the trainer does not model
+`EvalCorrelation`: do not generate training data with it); for the time
+management `SimpleMtg` (test it with a time control, `trainer/match.py --tc`).
+Test them with `trainer/match.py --opt-a Name=true`; the ones that fail should
+be removed rather than kept as dead options.
 
 ### Debugging commands
 

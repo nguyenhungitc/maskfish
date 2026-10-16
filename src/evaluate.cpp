@@ -47,7 +47,7 @@ namespace {
 // dark piece counting at the average value of its side's pool
 // (Position::dark_value()). As Pikafish's simple_eval(), it stands for the
 // PSQT part of the network in networks without one (make psqt=no).
-[[maybe_unused]] int simple_eval(const Position& pos) {
+int simple_eval(const Position& pos) {
     int material[COLOR_NB];
     for (Color c : {WHITE, BLACK})
     {
@@ -75,30 +75,59 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
                      int                            optimism,
-                     bool                           jieqiMaterial) {
+                     bool                           jieqiMaterial,
+                     bool                           optimismSimple,
+                     bool                           evalCorrelation) {
 
     assert(!pos.checkers());
 
     auto [psqt, positional] = networks.big.evaluate(pos, accumulators, &caches.big);
 
-    Value nnue = psqt + positional;
+    Value nnue     = psqt + positional;
+    int   material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
+    int   v;
 
-    // Blend optimism and eval with nnue complexity. Without PSQT (make
-    // psqt=no) psqt is 0 and |psqt - positional| would be |nnue|: as in
-    // Pikafish ("Replace nnueComplexity with simple_eval equivalent"), the
-    // material stands for the PSQT part then, |psqt - (nnue - psqt)| with
-    // psqt = simple_eval().
-    int nnueComplexity;
-    if constexpr (Eval::NNUE::UsePSQT)
-        nnueComplexity = std::abs(psqt - positional);
+    // UCI option EvalCorrelation (Pikafish "Replace nnueComplexity with
+    // simple_eval equivalent"): the agreement of the network with the
+    // material balance (simple_eval(), dark pieces at the average value of
+    // their pool) takes the place of the complexity blending. When they agree
+    // the position is easy and the evaluation is boosted when winning; when
+    // they disagree there is compensation, and the evaluation is damped.
+    // Optimism only enters through that agreement. The scaling by material is
+    // kept (the networks are trained through it, see trainer/eval_scale.py,
+    // which does not model this option).
+    if (evalCorrelation)
+    {
+        const int se        = simple_eval(pos);
+        const int se_norm   = (se * 1024) / (std::abs(se) + 1024);
+        const int nnue_norm = (nnue * 1024) / (std::abs(nnue) + 1024);
+        const int correl    = (se_norm * nnue_norm) / 512;
+
+        const int base = nnue + (nnue * correl) / 65536 + (optimism * correl) / 16384;
+        v              = int(std::int64_t(base) * (18560 + material) / 33331);
+    }
     else
-        nnueComplexity = std::abs(2 * simple_eval(pos) - nnue);
-    optimism += optimism * std::int64_t(nnueComplexity) / 488;
-    nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
+    {
+        // Blend optimism and eval with nnue complexity. Without PSQT (make
+        // psqt=no) psqt is 0 and |psqt - positional| would be |nnue|: as in
+        // Pikafish ("Replace nnueComplexity with simple_eval equivalent"), the
+        // material stands for the PSQT part then, |psqt - (nnue - psqt)| with
+        // psqt = simple_eval().
+        int nnueComplexity;
+        if constexpr (Eval::NNUE::UsePSQT)
+            nnueComplexity = std::abs(psqt - positional);
+        else
+            nnueComplexity = std::abs(2 * simple_eval(pos) - nnue);
+        optimism += optimism * std::int64_t(nnueComplexity) / 488;
+        nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
 
-    int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
-    int v        = (nnue * std::int64_t(18560 + material) + optimism * std::int64_t(2727 + material))
-          / 33331;
+        // UCI option OptimismSimple (Pikafish "Simplify optimism scaling
+        // formula"): the weight of optimism does not depend on the material; the
+        // constant is its value at the average major material of self-play games
+        // (4990).
+        const int optimismWeight = optimismSimple ? 2727 + 4990 : 2727 + material;
+        v = (nnue * std::int64_t(18560 + material) + optimism * std::int64_t(optimismWeight)) / 33331;
+    }
 
     // Damp down the evaluation linearly when shuffling
     v -= (v * pos.rule40_count()) / 217;
