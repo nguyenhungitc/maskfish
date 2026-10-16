@@ -33,6 +33,7 @@ COMPLEXITY_DIV = 11418
 MATERIAL_BASE = 18560
 MATERIAL_DIV = 33331
 RULE40_DIV = 217
+RULE40_MAX = 80                         # evaluate() caps the counter (the game is drawn there)
 VALUE_MATE_IN_MAX_PLY = 32000 - 246     # VALUE_MATE - MAX_PLY (maskfish/src/types.h)
 
 _MAJOR = (F.ROOK, F.CANNON, F.KNIGHT)
@@ -74,7 +75,7 @@ def jieqi_major_material(pos: F.JieqiPosition) -> int:
 def position_scale_inputs(pos: F.JieqiPosition, jieqi_material: bool = False) -> tuple[int, int]:
     """(material, rule40) of a position, as evaluate() uses them."""
     m = jieqi_major_material(pos) if jieqi_material else major_material(pos)
-    return m, max(0, pos.rule40)
+    return m, min(RULE40_MAX, max(0, pos.rule40))
 
 
 def _tdiv(a: int, b: int) -> int:
@@ -96,7 +97,7 @@ def evaluate_int(psqt: int, positional: int, material: int, rule40: int) -> int:
     complexity = abs(_i32(psqt - positional))
     nnue = _i32(nnue - _tdiv(nnue * complexity, COMPLEXITY_DIV))
     v = _i32(_tdiv(nnue * (MATERIAL_BASE + material), MATERIAL_DIV))
-    v = _i32(v - _tdiv(_i32(v * rule40), RULE40_DIV))
+    v = _i32(v - _tdiv(v * min(rule40, RULE40_MAX), RULE40_DIV))   # 64-bit product, as the engine
     return max(-VALUE_MATE_IN_MAX_PLY + 1, min(VALUE_MATE_IN_MAX_PLY - 1, v))
 
 
@@ -105,4 +106,4 @@ def evaluate_float(psqt, positional, material, rule40):
     units). Differs from evaluate_int() only by the integer truncations."""
     nnue = (psqt + positional) * (1.0 - abs(psqt - positional) / COMPLEXITY_DIV)
     v = nnue * ((MATERIAL_BASE + material) / MATERIAL_DIV)
-    return v * (1.0 - rule40 / RULE40_DIV)
+    return v * (1.0 - rule40 / RULE40_DIV)   # rule40 is capped by position_scale_inputs()

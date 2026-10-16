@@ -63,8 +63,11 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     int v        = (nnue * std::int64_t(18560 + material) + optimism * std::int64_t(2727 + material))
           / 33331;
 
-    // Damp down the evaluation linearly when shuffling
-    v -= (v * pos.rule40_count()) / 217;
+    // Damp down the evaluation linearly when shuffling. The counter is capped at
+    // 80 plies (the game is drawn there): beyond 217 the factor would change the
+    // sign of the evaluation, and the product could overflow an int. Unchanged
+    // for every counter of a real game (see also trainer/eval_scale.py).
+    v -= int(v * std::int64_t(std::min(pos.rule40_count(), 80)) / 217);
 
     // Guarantee evaluation does not hit the mate range
     v = std::clamp(v, VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1);
