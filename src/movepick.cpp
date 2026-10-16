@@ -207,11 +207,25 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     [[maybe_unused]] Bitboard threatByLesser[BISHOP + 1];
     if constexpr (Type == QUIETS)
     {
-        threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
-        threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
-          pos.attacks_by<ADVISOR>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[ADVISOR];
-        threatByLesser[ROOK] =
-          pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        if (Position::useThreatCacheMovePick)
+        {
+            // UCI option ThreatCacheMovePick: Pikafish's threats by lesser
+            // pieces, from the threats cached in the StateInfo (x-raying our
+            // king, except the cannons)
+            threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.threats_by(PAWN);
+            threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
+              pos.threats_by(ADVISOR) | pos.threats_by(BISHOP) | threatByLesser[ADVISOR];
+            threatByLesser[ROOK] =
+              pos.threats_by(KNIGHT) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        }
+        else
+        {
+            threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
+            threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
+              pos.attacks_by<ADVISOR>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[ADVISOR];
+            threatByLesser[ROOK] =
+              pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        }
     }
 
     ExtMove* it = cur;

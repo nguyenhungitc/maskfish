@@ -3,6 +3,7 @@
 #
 # Run from the src directory, after building: ../tests/perft.sh
 # PERFT_QUICK=1 skips the long start position test (slow sanitizer builds).
+# PERFT_OPTIONS="Name=value ..." sets UCI options first (e.g. ThreatCache=true).
 # 'go perft' does not need a network. In a debug build (make build debug=yes)
 # it also checks gives_check() for every move of a dark piece.
 #
@@ -14,6 +15,11 @@
 
 TESTS_FAILED=0
 
+SETOPTIONS=""
+for opt in $PERFT_OPTIONS; do
+  SETOPTIONS+="setoption name ${opt%%=*} value ${opt#*=}"$'\n'
+done
+
 echo "perft testing started"
 
 run_test() {
@@ -24,7 +30,7 @@ run_test() {
   echo -n "Testing depth $depth: ${pos:0:50}... "
 
   local nodes
-  nodes=$(printf "position %s\ngo perft %s\nquit\n" "$pos" "$depth" | ./maskfish 2>&1 \
+  nodes=$(printf "%sposition %s\ngo perft %s\nquit\n" "$SETOPTIONS" "$pos" "$depth" | ./maskfish 2>&1 \
           | awk '/^Nodes searched:/ {print $3}')
 
   if [ "$nodes" = "$expected" ]; then
