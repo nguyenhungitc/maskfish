@@ -22,9 +22,11 @@ described below, and that tells the engine which piece was revealed after each
 reveal.
 
 > [!IMPORTANT]
-> Maskfish needs a **Jieqi network**. Xiangqi networks (such as Pikafish's
-> `master-net`) are **not compatible** (they use a different feature set), see
-> [Network](#network).
+> Maskfish needs a **Jieqi network**. The latest one is published as
+> `maskfish.nnue` in the
+> [latest release](https://github.com/nguyenhungitc/maskfish/releases/latest).
+> Xiangqi networks (such as Pikafish's `master-net`) are **not compatible**
+> (they use a different feature set), see [Network](#network).
 
 ## Rules implemented
 
@@ -171,6 +173,13 @@ centipawns. Both are used by the [trainer](trainer/).
 The network file is set with the `EvalFile` option (default `maskfish.nnue`,
 looked up next to the binary and in the working directory).
 
+The latest network is attached to the
+[latest release](https://github.com/nguyenhungitc/maskfish/releases/latest)
+as `maskfish.nnue`, and can be downloaded directly from
+<https://github.com/nguyenhungitc/maskfish/releases/latest/download/maskfish.nnue>.
+Put it next to the binary, or set `EvalFile` to its path. The build downloads
+it automatically (see [Compiling](#compiling)).
+
 Maskfish uses its own feature set (`HalfKAv2_hm` with dark-piece and pool
 features, feature hash `0x0d17b100`). Networks trained for Pikafish master
 (xiangqi), including the one published as `master-net`, use a different feature
@@ -195,9 +204,19 @@ make -j build
 
 Run `make help` for the list of targets and architectures.
 
-Every build target first runs `make net`, which only checks whether
-`src/maskfish.nnue` exists (nothing is downloaded). Put a Jieqi network at
-`src/maskfish.nnue`, or point the `EvalFile` option to one at run time.
+Every build target first runs `make net`, which downloads `maskfish.nnue`
+from the latest release into `src/` when `src/maskfish.nnue` does not exist
+(with `curl` or `wget`). An existing `src/maskfish.nnue` is kept: to get a
+newer network, delete it and run `make net` again. `MASKFISH_NET_URL` overrides
+the download URL, e.g. to use the network of a given release:
+
+```
+make net MASKFISH_NET_URL=https://github.com/nguyenhungitc/maskfish/releases/download/<tag>/maskfish.nnue
+```
+
+If the download fails (no connection, no release yet), the build goes on
+without a network; put a Jieqi network at `src/maskfish.nnue`, or point the
+`EvalFile` option to one at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network. When the binary cannot run natively (cross compilation),
