@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -214,7 +215,11 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
 template<typename Arch, typename Transformer>
 void Network<Arch, Transformer>::load_user_net(const std::string& dir,
                                                const std::string& evalfilePath) {
-    std::stringstream stream      = read_compressed_nnue(dir + evalfilePath);
+    // dir has no trailing separator (binary directory), so join with the
+    // filesystem operator; an empty dir or an absolute evalfilePath give
+    // evalfilePath unchanged.
+    std::stringstream stream =
+      read_compressed_nnue(std::filesystem::path(dir) / std::filesystem::path(evalfilePath));
     auto              description = load(stream);
 
     if (description.has_value())
