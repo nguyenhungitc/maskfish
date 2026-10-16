@@ -63,6 +63,11 @@ struct StateInfo {
     Piece      capturedPiece;
     Move       move;
     bool       captureDark;
+    // Squares attacked by the side not to move, by piece type (ALL_PIECES:
+    // all of them), x-raying the king of the side to move: computed on demand
+    // by threats_by() (UCI options ThreatCache, ThreatCacheMovePick)
+    mutable Bitboard threats[PIECE_TYPE_NB];
+    mutable bool     threatsComputed;
 #ifndef NDEBUG
     // A dark piece has moved and do_flip() has not revealed it yet: the check
     // info (checkersBB, blockersForKing, pinners, checkSquares, needFullCheck)
@@ -126,6 +131,18 @@ class Position {
     Bitboard checkers_to(Color c, Square s, Bitboard occupied) const;
     template<PieceType Pt>
     Bitboard attacks_by(Color c) const;
+    // Squares attacked by the pieces of type pt of the side not to move (as
+    // Pikafish), with the king of the side to move removed from the occupancy
+    // (x-ray), cached in the StateInfo. threats_by(ALL_PIECES) & s is the same
+    // as checkers_to(~side_to_move(), s, pieces() ^ king square | s) for a
+    // square s next to the king.
+    Bitboard threats_by(PieceType pt) const;
+    // Pikafish's legality test and generation of king moves with
+    // threats_by(ALL_PIECES) (UCI option ThreatCache): no functional change
+    static inline bool useThreatCache = false;
+    // The threats by lesser pieces of the move ordering from threats_by()
+    // (UCI option ThreatCacheMovePick): x-rays the king, changes the ordering
+    static inline bool useThreatCacheMovePick = false;
 
     // Properties of moves
     bool  legal(Move m) const;
@@ -212,6 +229,7 @@ class Position {
     // Initialization helpers (used while setting up a position)
     void set_state() const;
     void set_check_info() const;
+    void set_threats() const;
 
     // Other helpers
     void                  move_piece(Square from, Square to);
@@ -312,6 +330,13 @@ inline Bitboard Position::attacks_by(Color c) const {
             threats |= Attacks::attacks_bb(Pt, s, pieces());
     }
     return threats;
+}
+
+inline Bitboard Position::threats_by(PieceType pt) const {
+    assert(check_info_valid());
+    if (!st->threatsComputed)
+        set_threats();
+    return st->threats[pt];
 }
 
 inline bool Position::check_info_valid() const {

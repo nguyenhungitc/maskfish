@@ -264,6 +264,20 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("PikaFutility", Option(false));
     // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
     options.add("SimpleThreadVote", Option(false));
+    // Pikafish "Only generate legal moves in movegen" (the part not ported
+    // yet): the squares attacked by the opponent are cached in the StateInfo
+    // and used to generate and test king moves. No functional change (bench
+    // identical): compare the speed with and without.
+    options.add("ThreatCache", Option(false, [](const Option& o) {
+                    Position::useThreatCache = bool(o);
+                    return std::nullopt;
+                }));
+    // Threats by lesser pieces of the quiet move ordering from the cached
+    // threats, as Pikafish (x-raying our king): changes the move ordering.
+    options.add("ThreatCacheMovePick", Option(false, [](const Option& o) {
+                    Position::useThreatCacheMovePick = bool(o);
+                    return std::nullopt;
+                }));
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));

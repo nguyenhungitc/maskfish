@@ -265,6 +265,8 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
 // Sets king attacks to detect if a move gives check
 void Position::set_check_info() const {
 
+    st->threatsComputed = false;
+
     update_blockers<WHITE>();
     update_blockers<BLACK>();
 
@@ -291,6 +293,40 @@ void Position::set_check_info() const {
         for (PieceType pt = ROOK; pt < KING; ++pt)
             st->checkSquares[pt] |= hollowCannonDiscover;
     }
+}
+
+
+// Computes the squares attacked by the side not to move (see threats_by()).
+// A dark piece attacks like the piece of its starting square, a dark advisor
+// only inside the palace; the king of the side to move is x-rayed, so that a
+// king move is legal if and only if its destination is not attacked.
+void Position::set_threats() const {
+
+    const Color    them = ~sideToMove;
+    const Bitboard occ  = pieces() ^ king_square(sideToMove);
+
+    auto attacks = [&](PieceType pt) {
+        Bitboard b = 0;
+        for (Bitboard attackers = pieces(them, pt); attackers;)
+        {
+            const Square s = pop_lsb(attackers);
+            if (pt == PAWN)
+                b |= attacks_bb(PAWN, s, them);
+            else if (pt == ADVISOR)
+                b |= attacks_bb(ADVISOR, s) & (is_dark(s) ? Palace : ~Bitboard(0));
+            else if (pt == KING)
+                // Flying general
+                b |= attacks_bb(KING, s) | (attacks_bb(ROOK, s, occ) & file_bb(s));
+            else
+                b |= attacks_bb(pt, s, occ);
+        }
+        return b;
+    };
+
+    st->threats[ALL_PIECES] = 0;
+    for (PieceType pt = ROOK; pt <= KING; ++pt)
+        st->threats[ALL_PIECES] |= st->threats[pt] = attacks(pt);
+    st->threatsComputed = true;
 }
 
 
@@ -511,7 +547,11 @@ bool Position::legal(Move m) const {
     // If the moving piece is a king, check whether the destination square is
     // attacked by the opponent.
     if (type_of(pc) == KING)
-        return !(checkers_to(~us, to, occupied));
+    {
+        assert(!useThreatCache
+               || bool(to & threats_by(ALL_PIECES)) == bool(checkers_to(~us, to, occupied)));
+        return useThreatCache ? !(to & threats_by(ALL_PIECES)) : !(checkers_to(~us, to, occupied));
+    }
 
     // If we don't need slow check. A non-king move is always legal when either:
     // 1. Not moving a pinned piece.
@@ -681,7 +721,8 @@ void Position::undo_flip(Square s, Piece fromPc) {
     // checkers known, and the check info, computed for the revealed piece,
     // is not valid any more. The caller must call do_flip() (next outcome)
     // or undo_move() before anything reads it (asserted in debug builds).
-    st->checkersBB = Bitboard(0);
+    st->checkersBB      = Bitboard(0);
+    st->threatsComputed = false;
     set_reveal_pending(true);
 
     assert(pos_is_ok());
@@ -728,9 +769,10 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
     // ones which are going to be recalculated from scratch anyway and then switch
     // our state pointer to point to the new (ready to be updated) state.
     std::memcpy(&newSt, st, offsetof(StateInfo, key));
-    newSt.previous = st;
-    st             = &newSt;
-    st->move       = m;
+    newSt.previous      = st;
+    st                  = &newSt;
+    st->move            = m;
+    st->threatsComputed = false;
 
     Color  us       = sideToMove;
     Color  them     = ~us;

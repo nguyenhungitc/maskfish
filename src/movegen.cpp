@@ -147,7 +147,23 @@ Move* generate_all(const Position& pos, Move* moveList) {
     // included in checkers_to(), and the king's own square is removed from
     // the occupancy so it cannot step back along the line of a slider check.
     Bitboard b = attacks_bb(KING, ksq) & target;
-    if (b)
+    if (b && Position::useThreatCache)
+    {
+        // UCI option ThreatCache: the same test with the squares attacked by
+        // the opponent through the king, cached in the StateInfo (Pikafish)
+#ifndef NDEBUG
+        for (Bitboard t = b; t;)
+        {
+            const Square to = pop_lsb(t);
+            assert(bool(to & pos.threats_by(ALL_PIECES))
+                   == bool(pos.checkers_to(~us, to, (pos.pieces() ^ ksq) | to)));
+        }
+#endif
+        b &= ~pos.threats_by(ALL_PIECES);
+        while (b)
+            *moveList++ = Move(ksq, pop_lsb(b));
+    }
+    else if (b)
     {
         const Bitboard occupied = pos.pieces() ^ ksq;
         while (b)
