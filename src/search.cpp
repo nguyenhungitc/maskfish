@@ -370,6 +370,8 @@ bool Search::Worker::iterative_deepening() {
     int    delta, iterIdx                        = 0;
     int    failHighRecovery                      = 0;  // UCI option FailHighRecovery
 
+    rootMoveSearched = false;
+
     // The search adds the safe reveal bonus to the value of a quiet move of a
     // dark piece: keep it out of the score reported for the root moves
     for (RootMove& rm : rootMoves)
@@ -1648,6 +1650,8 @@ moves_loop:  // When in check, search starts here
 
         if (rootNode)
         {
+            thisThread->rootMoveSearched = true;
+
             RootMove& rm =
               *std::find(thisThread->rootMoves.begin(), thisThread->rootMoves.end(), move);
 
@@ -1924,6 +1928,17 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     ss->inCheck        = bool(pos.checkers());
     moveCount          = 0;
 
+    // Check for the available remaining time. In Jieqi most of the nodes can be
+    // in the quiescence search (captures of dark pieces are chance nodes): with
+    // checks in search() only, the stop came hundreds of milliseconds late.
+    if (is_mainthread())
+        main_manager()->check_time(*thisThread);
+
+    // A stopped search discards every value: return before anything is written
+    // to the TT (see also the check after each move below)
+    if (threads.stop.load(std::memory_order_relaxed))
+        return VALUE_ZERO;
+
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)
     if (PvNode && thisThread->selDepth < ss->ply + 1)
         thisThread->selDepth = ss->ply + 1;
@@ -2107,6 +2122,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         undo_move(pos, move);
 
         assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
+
+        // The value of a stopped search cannot be trusted: do not use it, nor
+        // store anything in the TT
+        if (threads.stop.load(std::memory_order_relaxed))
+            return VALUE_ZERO;
 
         // Step 8. Check for a new best move
         if (value > bestValue)
@@ -2701,7 +2721,13 @@ void SearchManager::check_time(Search::Worker& worker) {
     if (
       // Later we rely on the fact that we can at least use the mainthread previous
       // root-search score and PV in a multithreaded environment to prove mated-in scores.
-      worker.completedDepth >= 1
+      // A hard limit may also stop the first iteration once a root move has been
+      // searched: in Jieqi, depth 1 of an opening position (a chance node for
+      // every root move, then the quiescence search of captures of dark pieces)
+      // takes about 70k nodes, far more than a small time or node budget. An
+      // aborted depth 1 search labels a loss score as a bound (see
+      // iterative_deepening()).
+      (worker.completedDepth >= 1 || worker.rootMoveSearched)
       && ((worker.limits.use_time_management() && (elapsed > tm.maximum() || stopOnPonderhit))
           || (worker.limits.movetime && elapsed >= worker.limits.movetime)
           || (worker.limits.nodes && worker.threads.nodes_searched() >= worker.limits.nodes)))
