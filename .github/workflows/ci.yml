@@ -35,6 +35,28 @@ jobs:
         working-directory: src
         run: ../tests/invalid_input.sh
 
+  universal:
+    name: Universal binary (x86-64), perft of several builds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        working-directory: src
+        run: make -j"$(nproc)" build ARCH=x86-64-universal COMP=gcc
+      - name: Builds of the binary, selected build
+        working-directory: src
+        run: |
+          MASKFISH_UNIVERSAL_ARCH=list ./maskfish
+          printf "compiler\nquit\n" | ./maskfish
+      - name: Perft (selected build and the baseline ones)
+        working-directory: src
+        run: |
+          PERFT_QUICK=1 ../tests/perft.sh
+          for arch in x86-64 x86-64-sse41-popcnt x86-64-avx2; do
+            echo "== $arch"
+            MASKFISH_UNIVERSAL_ARCH=$arch PERFT_QUICK=1 ../tests/perft.sh
+          done
+
   sanitizers:
     name: Debug build with ASan and UBSan
     runs-on: ubuntu-24.04

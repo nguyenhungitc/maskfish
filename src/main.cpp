@@ -30,6 +30,17 @@
 
 using namespace Maskfish;
 
+#ifdef UNIVERSAL_BINARY
+// One build of a universal binary (see universal/select.h): Maskfish is
+// defined to Maskfish_<arch>, and the entry point selects the main() of a
+// build.
+namespace Maskfish {
+
+int main(int argc, char* argv[]);  // silence 'no previous declaration'
+
+__attribute__((used))  // keep main alive
+#endif
+
 int main(int argc, char* argv[]) {
     std::cout << engine_info() << std::endl;
 
@@ -48,3 +59,11 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
+#ifdef UNIVERSAL_BINARY
+}  // namespace Maskfish
+
+    #ifdef UNIVERSAL_NEEDS_MAIN_SHIM
+int main(int argc, char* argv[]) { return Maskfish::main(argc, argv); }
+    #endif
+#endif

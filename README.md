@@ -224,6 +224,32 @@ a compatible network. When the binary cannot run natively (cross compilation),
 `make profile-build COMP=mingw RUN_PREFIX=wine` (`WINE_PATH` is still accepted
 but deprecated).
 
+### Universal binary
+
+`make -j build ARCH=x86-64-universal` (as Pikafish) builds one binary that runs
+on every x86-64 CPU at the speed of the matching build: it holds the builds
+`x86-64`, `x86-64-sse41-popcnt`, `x86-64-avx2`, `x86-64-bmi2`,
+`x86-64-avxvnni`, `x86-64-avx512bw`, `x86-64-vnni512` and `x86-64-avx512icl`,
+and selects the best one for the CPU when it starts (`compiler` prints the
+selected one; AMD Zen 1/2, whose BMI2 is slow, get `x86-64-avx2`).
+`ARCH=arm64-universal` does the same with `armv8` / `armv8-dotprod`.
+`make macos-lipo` makes a macOS binary for both Intel (universal) and Apple
+silicon.
+
+* Every build is compiled separately in `src/temp_builds/` (about eight times
+  the time of one build); `make clean` deletes them. The architecture options
+  of the network (`threats=yes`, `layers=2`, ...) apply to all of them.
+* `make -j profile-build ARCH=x86-64-universal` runs the PGO bench of every
+  build, which needs a CPU that runs all of them, or
+  `RUN_PREFIX="/path/to/sde -future --"` (Intel SDE).
+* It needs `optimize=yes` and `debug=no` (it uses the LTO-optimized object of
+  every build). On Linux the C++ runtime is linked statically; with
+  `COMP=clang UNIVERSAL_LIBCXX=yes` it is libc++ (as Pikafish's releases).
+* The network is not embedded (as in the other builds).
+* `MASKFISH_UNIVERSAL_ARCH=<build>` in the environment forces a build (the
+  CPU must support it), e.g. to compare them on one machine;
+  `MASKFISH_UNIVERSAL_ARCH=list` lists the builds of the binary.
+
 ### Experimental network architecture
 
 `make -j build nnue=att` builds the engine for a different network (not

@@ -14,6 +14,9 @@ CMakeLists.txt.user
 src/maskfish*
 src/-lstdc++.res
 
+# Builds of a universal binary
+src/temp_builds/
+
 # Neural network for the NNUE evaluation
 **/*.nnue
 **/*.nnue.part
