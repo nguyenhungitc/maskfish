@@ -186,16 +186,31 @@ def leb128_decode(data: bytes, count: int, dtype=np.int64) -> np.ndarray:
     return out
 
 
-def _write_leb(f, values: np.ndarray):
+def _write_leb(f, values: np.ndarray, raw_dtype=None):
+    """A LEB128 block, or with raw_dtype the plain little-endian values (as
+    Pikafish since "Remove leb128": the file is compressed with zstd anyway).
+    The engine reads both."""
+    if raw_dtype is not None:
+        f.write(values.ravel().astype(np.dtype(raw_dtype).newbyteorder("<")).tobytes())
+        return
     payload = leb128_encode(values.ravel())
     f.write(LEB128_MAGIC)
     f.write(struct.pack("<I", len(payload)))
     f.write(payload)
 
 
-def _read_leb(f, count: int, dtype=np.int64) -> np.ndarray:
+def _read_leb(f, count: int, dtype=np.int64, raw_dtype=None) -> np.ndarray:
+    """A LEB128 block, or (no magic string, raw_dtype given) plain values."""
+    pos = f.tell()
     if f.read(len(LEB128_MAGIC)) != LEB128_MAGIC:
-        raise ValueError("missing LEB128 block")
+        if raw_dtype is None:
+            raise ValueError("missing LEB128 block")
+        f.seek(pos)
+        rd = np.dtype(raw_dtype).newbyteorder("<")
+        data = f.read(count * rd.itemsize)
+        if len(data) != count * rd.itemsize:
+            raise ValueError("truncated block")
+        return np.frombuffer(data, dtype=rd).astype(dtype)
     (n,) = struct.unpack("<I", f.read(4))
     return leb128_decode(f.read(n), count, dtype)
 
@@ -280,7 +295,8 @@ def quantize(model) -> dict:
     return q
 
 
-def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with the Maskfish trainer"):
+def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with the Maskfish trainer",
+               leb128: bool = True):
     buf = io.BytesIO()
     desc = description.encode("utf-8")
     buf.write(struct.pack("<III", VERSION, network_hash(), len(desc)))
@@ -289,14 +305,15 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
     buf.write(struct.pack("<I", ft_hash()))
     if np.abs(q["ft_weight"]).max() > 127 or np.abs(q["ft_bias"]).max() > MAX_FT_BIAS:
         raise ValueError("feature transformer parameters out of range")
-    _write_leb(buf, q["ft_bias"].astype(np.int16))
+    raw16, raw32 = (None, None) if leb128 else (np.int16, np.int32)
+    _write_leb(buf, q["ft_bias"].astype(np.int16), raw16)
     buf.write(q["ft_weight"].astype(np.int8).tobytes())
     if F.PSQT:
-        _write_leb(buf, q["psqt"].astype(np.int32))
+        _write_leb(buf, q["psqt"].astype(np.int32), raw32)
     if F.THREATS:
         buf.write(q["thr_weight"].astype(np.int8).tobytes())
         if F.PSQT:
-            _write_leb(buf, q["thr_psqt"].astype(np.int32))
+            _write_leb(buf, q["thr_psqt"].astype(np.int32), raw32)
 
     if F.CTX:
         buf.write(struct.pack("<I", CTX_TOWER_HASH))
@@ -341,19 +358,20 @@ def read_nnue(path: str) -> dict:
     L1 = F.L1
     q = {"description": description, "version": version, "psqt_present": F.PSQT,
          "quant2": F.QUANT2}
-    q["ft_bias"] = _read_leb(f, L1)
+    q["ft_bias"] = _read_leb(f, L1, raw_dtype=np.int16)
     if version == OLD_VERSION:
         q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
     else:
         n = F.NUM_FEATURES * L1
         q["ft_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.NUM_FEATURES, L1).copy()
-    q["psqt"] = (_read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT) if F.PSQT
+    q["psqt"] = (_read_leb(f, F.NUM_FEATURES * PSQT, raw_dtype=np.int32).reshape(F.NUM_FEATURES, PSQT)
+                 if F.PSQT
                  else np.zeros((F.NUM_FEATURES, PSQT), dtype=np.int64))
     if F.THREATS:
         n = F.THREAT_DIMS * L1
         q["thr_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.THREAT_DIMS, L1).copy()
-        q["thr_psqt"] = (_read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT) if F.PSQT
-                         else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
+        q["thr_psqt"] = (_read_leb(f, F.THREAT_DIMS * PSQT, raw_dtype=np.int32).reshape(F.THREAT_DIMS, PSQT)
+                         if F.PSQT else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
 
     def arr(dtype, n):
         return np.frombuffer(f.read(np.dtype(dtype).itemsize * n), dtype=dtype).astype(np.int64)
@@ -617,7 +635,19 @@ def main():
     ap.add_argument("--convert", metavar="ARCH",
                     help="convert a .nnue file into architecture ARCH, adding -meta / -ctx / "
                          "-s32 (same evaluation) or -blend (layer stacks kept)")
+    ap.add_argument("--no-leb128", action="store_true",
+                    help="write the biases and PSQT weights as plain integers instead of LEB128 "
+                         "(as Pikafish; the file is compressed with zstd anyway). Engines from "
+                         "this version on read both. With a .nnue source: just rewrite it")
     args = ap.parse_args()
+    leb128 = not args.no_leb128
+
+    if args.no_leb128 and args.source.endswith(".nnue") and not (args.upgrade or args.to_checkpoint):
+        F.set_arch(detect_arch(args.source))
+        q = read_nnue(args.source)
+        write_nnue(q, args.target, q["description"], leb128=False)
+        print(f"written {args.target} (arch {F.ARCH}, without LEB128)")
+        return
 
     if args.convert:
         src = detect_arch(args.source)
@@ -654,7 +684,7 @@ def main():
         if q["version"] == VERSION:
             raise SystemExit(f"{args.source} already has the current version")
         nw, nb = upgrade(q)
-        write_nnue(q, args.target, q["description"])
+        write_nnue(q, args.target, q["description"], leb128=leb128)
         total = q["ft_weight"].size
         print(f"written {args.target} (arch {F.ARCH}): {nw} of {total} weights "
               f"({100 * nw / total:.4f}%) and {nb} biases clamped"
@@ -673,7 +703,7 @@ def main():
         ckpt = torch.load(args.source, map_location="cpu")
         F.set_arch(ckpt.get("arch", "default"))
         model = NNUE.from_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
-        write_nnue(quantize(model), args.target, args.description)
+        write_nnue(quantize(model), args.target, args.description, leb128=leb128)
     print(f"written {args.target} (arch {F.ARCH})")
 
 

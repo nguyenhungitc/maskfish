@@ -1434,3 +1434,21 @@ should be checked with a match before use. `.pt` checkpoints need no
 conversion: `train.py` clips the weights into the new range
 (`model.clip_weights()`, including the virtual features of the factorization)
 at the first step, and `serialize.py` exports them as usual.
+
+### 11.2. Optional: blocks without LEB128
+
+The biases and the PSQT weights of the feature transformer are written as
+LEB128 blocks (with the `COMPRESSED_LEB128` marker). Like Pikafish ("Remove
+leb128"), they can also be written as plain little-endian integers: the whole
+file is compressed with zstd anyway, so the size hardly changes and loading is
+a little simpler. The engine reads both forms (a block without the marker is
+read as plain integers), so this is not a new file version, but **older engines
+only read LEB128 blocks**: keep the default for networks that older builds must
+load.
+
+```
+python serialize.py net.nnue net-raw.nnue --no-leb128     # rewrite a network
+python serialize.py runs/x/epoch_40.pt net.nnue --no-leb128  # export a checkpoint
+```
+
+The evaluation is the same (bench gives the same node count).
