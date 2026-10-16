@@ -37,6 +37,7 @@
 #include "position.h"
 #include "types.h"
 #include "uci.h"
+#include "ucioption.h"
 #include "nnue/nnue_accumulator.h"
 
 namespace Maskfish {
@@ -63,8 +64,8 @@ int total_material(const Position& pos) {
 // dark piece counting at the average value of its side's pool
 // (Position::dark_value()). As Pikafish's simple_eval(), it stands for the
 // PSQT part of the network in networks without one (make psqt=no) in
-// EvalScaling Complexity.
-[[maybe_unused]] int simple_eval_dark(const Position& pos) {
+// EvalScaling Complexity, and is used by EvalScaling Correlation.
+int simple_eval_dark(const Position& pos) {
     int material[COLOR_NB];
     for (Color c : {WHITE, BLACK})
     {
@@ -85,6 +86,12 @@ int total_material(const Position& pos) {
 
 }  // namespace
 
+Eval::EvalScaling Eval::eval_scaling(const OptionsMap& options) {
+    return options["EvalScaling"] == "Alignment"   ? EvalScaling::Alignment
+         : options["EvalScaling"] == "Correlation" ? EvalScaling::Correlation
+                                                   : EvalScaling::Complexity;
+}
+
 // Evaluate is the evaluator for the outer world. It returns a static evaluation
 // of the position from the point of view of the side to move.
 Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
@@ -93,7 +100,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      Eval::NNUE::AccumulatorCaches& caches,
                      int                            optimism,
                      bool                           jieqiMaterial,
-                     bool                           alignment) {
+                     EvalScaling                    scaling,
+                     bool                           optimismSimple) {
 
     assert(!pos.checkers());
 
@@ -102,7 +110,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     Value nnue = psqt + positional;
     int   v;
 
-    if (alignment)
+    if (scaling == EvalScaling::Alignment)
     {
         // EvalScaling Alignment, Pikafish's "Replace nnueComplexity with
         // simple_eval equivalent" (it does not use the psqt / positional split,
@@ -120,8 +128,24 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                                   + std::int64_t(optimism) * align / 16384);
 
         // Scale the combined evaluation by the total material (JieqiMaterial
-        // only applies to EvalScaling Complexity)
+        // only applies to EvalScaling Complexity and Correlation)
         v = int(base_eval * std::int64_t(80030 + total_material(pos)) / 80030);
+    }
+    else if (scaling == EvalScaling::Correlation)
+    {
+        // EvalScaling Correlation: the same agreement of the network with the
+        // material balance, but with dark pieces at the average value of their
+        // pool (simple_eval_dark()) and the scaling by the major material of
+        // EvalScaling Complexity. Optimism only enters through that agreement.
+        // The trainer does not model it (no train.py --eval-scaling for it).
+        const int material  = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
+        const int se        = simple_eval_dark(pos);
+        const int se_norm   = (se * 1024) / (std::abs(se) + 1024);
+        const int nnue_norm = (nnue * 1024) / (std::abs(nnue) + 1024);
+        const int correl    = (se_norm * nnue_norm) / 512;
+
+        const int base = nnue + (nnue * correl) / 65536 + (optimism * correl) / 16384;
+        v              = int(std::int64_t(base) * (18560 + material) / 33331);
     }
     else
     {
@@ -138,8 +162,13 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         optimism += optimism * std::int64_t(nnueComplexity) / 488;
         nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
 
-        int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
-        v = int((nnue * std::int64_t(18560 + material) + optimism * std::int64_t(2727 + material))
+        // UCI option OptimismSimple (Pikafish "Simplify optimism scaling
+        // formula"): the weight of optimism does not depend on the material; the
+        // constant is its value at the average major material of self-play games
+        // (4990).
+        const int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
+        const int optimismWeight = optimismSimple ? 2727 + 4990 : 2727 + material;
+        v = int((nnue * std::int64_t(18560 + material) + optimism * std::int64_t(optimismWeight))
                 / 33331);
     }
 

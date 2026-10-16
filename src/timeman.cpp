@@ -105,17 +105,30 @@ void TimeManagement::init(Search::LimitsType& limits,
     const int64_t   scaleFactor = useNodesTime ? npmsec : 1;
     const TimePoint scaledTime  = std::max(TimePoint(1), limits.time[us] / scaleFactor);
 
-    // Maximum move horizon
-    int mtg = limits.movestogo ? std::min(limits.movestogo, 50) : 50;
+    // Maximum move horizon, in centi-moves
+    int centiMTG = limits.movestogo ? std::min(limits.movestogo * 100, 6000) : 6000;
 
     // If less than one second, gradually reduce mtg.
     // In cyclic time controls we keep the actual movestogo as horizon.
     if (scaledTime < 1000 && limits.movestogo == 0)
-        mtg = int(scaledTime * 0.05);
+        centiMTG = scaledTime * 6.000;
+
+    // UCI option SimpleMtg ("Simplify mtg in time management", Stockfish then
+    // Pikafish): the horizon is a whole number of moves, at most 50, reduced
+    // as 0.05 * time when less than one second is left in sudden death.
+    if (bool(options["SimpleMtg"]))
+    {
+        int mtg = limits.movestogo ? std::min(limits.movestogo, 50) : 50;
+        if (scaledTime < 1000 && limits.movestogo == 0)
+            mtg = int(scaledTime * 0.05);
+        centiMTG = 100 * mtg;
+    }
 
     // Make sure timeLeft is > 0 since we may use it as a divisor
-    TimePoint timeLeft = std::max(TimePoint(1), limits.time[us] + limits.inc[us] * (mtg - 1)
-                                                  - moveOverhead * (2 + mtg));
+    TimePoint timeLeft =
+      std::max(TimePoint(1),
+               limits.time[us]
+                 + (limits.inc[us] * (centiMTG - 100) - moveOverhead * (200 + centiMTG)) / 100);
 
     // x basetime (+ z increment)
     // If there is a healthy increment, timeLeft can exceed the actual available
@@ -141,8 +154,9 @@ void TimeManagement::init(Search::LimitsType& limits,
     // x moves in y seconds (+ z increment)
     else
     {
-        optScale = std::min((0.88 + ply / 116.4) / mtg, 0.88 * limits.time[us] / timeLeft);
-        maxScale = 1.3 + 0.11 * mtg;
+        optScale =
+          std::min((0.88 + ply / 116.4) / (centiMTG / 100.0), 0.88 * limits.time[us] / timeLeft);
+        maxScale = 1.3 + 0.11 * (centiMTG / 100.0);
     }
 
     // Decrease time usage if behind in time.

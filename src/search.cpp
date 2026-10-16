@@ -309,7 +309,7 @@ void Search::Worker::start_searching() {
     // only when MultiPV is 1
     if (!limits.depth && rootMoves[0].pv[0] != Move::none()
         && (!bool(options["VoteSinglePVOnly"]) || int(options["MultiPV"]) == 1))
-        bestThread = threads.get_best_thread()->worker.get();
+        bestThread = threads.get_best_thread(simpleThreadVote)->worker.get();
 
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
@@ -398,7 +398,10 @@ bool Search::Worker::iterative_deepening() {
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
-    evalAlignment      = options["EvalScaling"] == "Alignment";
+    evalScaling        = Eval::eval_scaling(options);
+    optimismSimple     = bool(options["OptimismSimple"]);
+    pikaFutility       = bool(options["PikaFutility"]);
+    simpleThreadVote   = bool(options["SimpleThreadVote"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
     chanceModel        = options["ChanceModel"] == "Tables" ? ChanceModel::Tables
@@ -1193,9 +1196,30 @@ Value Search::Worker::search(
                  + std::abs(correctionValue) / 115091;
         };
 
-        if (!ss->ttPv && depth < (seekMate ? 6 : 13) && eval - futility_margin(depth) >= beta
-            && eval >= beta
-            && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
+        // UCI option PikaFutility: the futility pruning of Pikafish (Aug-Oct
+        // 2026: "Simplify futility multiplier", "Improve mate finding", the
+        // depth limit 15, the margin without the parent's statScore, the
+        // returned value blended 70/30 between beta and eval).
+        if (pikaFutility)
+        {
+            if (!ss->ttPv && depth < (seekMate ? 6 : 15) && eval >= beta
+                && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
+            {
+                Value futilityMult = std::min(41 + depth * 4, 127);
+                futilityMult -= 33 * !ss->ttHit;
+
+                Value futilityMargin = futilityMult * depth
+                                     - (2500 * improving + 333 * opponentWorsening) * futilityMult
+                                         / 1024
+                                     + std::abs(correctionValue) / 133448;
+
+                if (eval - futilityMargin >= beta)
+                    return (718 * beta + 306 * eval) / 1024;
+            }
+        }
+        else if (!ss->ttPv && depth < (seekMate ? 6 : 13) && eval - futility_margin(depth) >= beta
+                 && eval >= beta && (!ttData.move || ttCapture) && !is_loss(beta)
+                 && !is_win(eval))
             return beta + (eval - beta) / 3;
     }
 
@@ -2740,7 +2764,8 @@ TimePoint Search::Worker::elapsed_time() const { return main_manager()->tm.elaps
 
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()], jieqiMaterial, evalAlignment);
+                          optimism[pos.side_to_move()], jieqiMaterial, evalScaling,
+                          optimismSimple);
 }
 
 namespace {

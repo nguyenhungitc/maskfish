@@ -245,11 +245,25 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
     // Scaling of the network output in the evaluation: Complexity (default,
-    // |psqt - positional| and the major material) or Alignment (Pikafish's
+    // |psqt - positional| and the major material), Alignment (Pikafish's
     // since September 2026: agreement of the network with the material
-    // balance, and the total material; suits networks without PSQT). The
-    // trainer must use the same (train.py --eval-scaling).
-    options.add("EvalScaling", Option("Complexity var Complexity var Alignment", "Complexity"));
+    // balance, and the total material; suits networks without PSQT) or
+    // Correlation (Pikafish's "Replace nnueComplexity with simple_eval
+    // equivalent" with dark pieces at the average value of their pool, and
+    // the major material). The trainer must use the same (train.py
+    // --eval-scaling); it does not model Correlation.
+    options.add("EvalScaling", Option("Complexity var Complexity var Alignment var Correlation",
+                                      "Complexity"));
+    // Pikafish "Simplify mtg in time management": the move horizon in whole
+    // moves, at most 50 (instead of centi-moves, at most 60).
+    options.add("SimpleMtg", Option(false));
+    // Pikafish "Simplify optimism scaling formula": the weight of optimism in
+    // the evaluation does not depend on the material (EvalScaling Complexity).
+    options.add("OptimismSimple", Option(false));
+    // Pikafish's futility pruning (margin, depth limit, returned value).
+    options.add("PikaFutility", Option(false));
+    // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
+    options.add("SimpleThreadVote", Option(false));
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));
@@ -585,7 +599,8 @@ void Engine::eval_raw() const {
     if (!p.checkers())
         finalEval = std::to_string(int(Eval::evaluate(*networks, p, *accumulators, *caches,
                                                       VALUE_ZERO, bool(options["JieqiMaterial"]),
-                                                      options["EvalScaling"] == "Alignment")));
+                                                      Eval::eval_scaling(options),
+                                                      bool(options["OptimismSimple"]))));
 
     sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
               << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " final " << finalEval

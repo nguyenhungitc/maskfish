@@ -32,6 +32,7 @@
 #include <string_view>
 #include <vector>
 
+#include "evaluate.h"
 #include "history.h"
 #include "misc.h"
 #include "nnue/network.h"
@@ -503,7 +504,10 @@ class Worker {
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;
-    bool   evalAlignment      = false;
+    Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
+    bool   optimismSimple     = false;
+    bool   pikaFutility       = false;
+    bool   simpleThreadVote   = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
     ChanceModel         chanceModel  = ChanceModel::Winrate;

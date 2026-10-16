@@ -352,7 +352,10 @@ void ThreadPool::start_thinking(Position&          pos,
     main_thread()->start_searching();
 }
 
-Thread* ThreadPool::get_best_thread() const {
+// simpleVote (UCI option SimpleThreadVote, Pikafish "Simplify thread
+// selection"): the votes do not depend on the depth, and equal votes are
+// decided by the longer PV.
+Thread* ThreadPool::get_best_thread(bool simpleVote) const {
 
     Thread* bestThread = threads.front().get();
     Value   minScore   = VALUE_NONE;
@@ -365,8 +368,9 @@ Thread* ThreadPool::get_best_thread() const {
         minScore = std::min(minScore, th->worker->rootMoves[0].score);
 
     // Vote according to score and depth, and select the best thread
-    auto thread_voting_value = [minScore](Thread* th) {
-        return (th->worker->rootMoves[0].score - minScore + 14) * int(th->worker->completedDepth);
+    auto thread_voting_value = [minScore, simpleVote](Thread* th) {
+        return (th->worker->rootMoves[0].score - minScore + 14)
+             * (simpleVote ? 1 : int(th->worker->completedDepth));
     };
 
     for (auto&& th : threads)
@@ -395,8 +399,9 @@ Thread* ThreadPool::get_best_thread() const {
 
         // We make sure not to pick a thread with truncated principal variation
         const bool betterVotingValue =
-          thread_voting_value(th.get()) * int(newThreadPV.size() > 2)
-          > thread_voting_value(bestThread) * int(bestThreadPV.size() > 2);
+          simpleVote ? newThreadPV.size() > bestThreadPV.size()
+                     : thread_voting_value(th.get()) * int(newThreadPV.size() > 2)
+                         > thread_voting_value(bestThread) * int(bestThreadPV.size() > 2);
 
         if (bestThreadInProvenWin)
         {
