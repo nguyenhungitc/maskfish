@@ -754,6 +754,44 @@ python match.py --engine-a ../src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
+### 7.5. 32 layer stacks (`-s32`) and no PSQT (`-np`)
+
+Two more suffixes, after Pikafish's SFNNv17 ("32 LayerStack buckets",
+"Remove psqt accumulator"), adapted to Jieqi. Suffixes come in the order
+`-s32`, `-l2`, `-np` (e.g. `threats-s32-l2-np`).
+
+- `-s32` (engine: `make stacks=32`): 32 layer stacks and 32 PSQT buckets.
+  Pikafish picks its 32 stacks by visible material composition (rooks,
+  knights and cannons of each side); in Jieqi most of that is hidden in the
+  opening, so the stack is the piece count bucket (as for 16 stacks) times
+  2, plus 1 when more pieces are still dark than the median for that piece
+  count (`DARK_STACK_THRESHOLDS`, measured on self-play games). The stack is
+  stored in the prepared data: **prepare the data again** with `--arch
+  default-s32` (or `threats-s32`, ...).
+- `-np` (engine: `make psqt=no`, `train.py --no-psqt`): no PSQT part. The
+  complexity term of `evaluate()` then uses `simple_eval()` (material of the
+  side to move, a dark piece counting as the average of its pool) in place
+  of the PSQT output, as Pikafish does; `prepare_data.py` stores
+  `simple_eval()` of every position (field `se`), so **data prepared before
+  this change cannot train an `-np` network**.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 stacks=32 && mv maskfish maskfish-s32
+make clean && make -j build ARCH=x86-64-avx2 psqt=no && mv maskfish maskfish-np
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-s32 --arch default-s32
+python verify.py --engine ../src/maskfish-np --arch default-np
+python prepare_data.py data/gen1.txt --out data/train_s32 --arch default-s32
+python train.py data/train_s32 --val data/val_s32 --out runs/s32 --epochs 40
+python train.py data/train --val data/val --out runs/np --no-psqt --epochs 40
+```
+
+Both change the speed of the engine little (`-np` saves the PSQT
+accumulator). Compare by matches against the 16-stack network trained on the
+same data, as in [section 7.4](#74-new-layer-stacks-layers2).
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -772,7 +810,8 @@ sources can be added if it uses this format and internal units (`RawScore`).
 - `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
   to move and of the other side, padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
-  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4);
+  `material`, `rule40` and `se` (inputs of the `evaluate()` scaling, see step
+  4; `se` is `simple_eval()`, used by `-np` networks);
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 
