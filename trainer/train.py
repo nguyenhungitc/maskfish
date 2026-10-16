@@ -6,8 +6,10 @@
 
 Each data argument is a prefix written by prepare_data.py (all its shards are
 used); several prefixes can be given, e.g. the data of several generations.
-The data gives the input features (architecture); --layers 2 trains the
-layer stacks of `make layers=2` on them (architecture "<arch>-l2").
+The data gives the input features and the number of layer stacks
+(architecture); --layers 2 trains the layer stacks of `make layers=2` on them
+(architecture "<arch>-l2"), --no-psqt a network without PSQT part
+(`make psqt=no`, architecture "<arch>-np").
 
 After every epoch: runs/exp1/epoch_N.pt, runs/exp1/last.pt and
 runs/exp1/epoch_N.nnue (ready for the engine's EvalFile option). With
@@ -97,6 +99,8 @@ class Data:
         # material / rule40 for the evaluate() scaling (prepare_data.py since that change)
         self.has_scale = all("material" in m.dtype.names and "rule40" in m.dtype.names
                              for _, m in self.shards)
+        # simple_eval() for the networks without PSQT (prepare_data.py since then)
+        self.has_se = all("se" in m.dtype.names for _, m in self.shards)
         kinds = set()
         for prefix in prefixes:
             try:
@@ -160,15 +164,17 @@ class Data:
             np.cumsum(counts[a:b].reshape(-1)[:-1], out=off[1:])
             threats = (torch.from_numpy(idx).to(device, non_blocking=True),
                        torch.from_numpy(off).to(device, non_blocking=True))
-        material = rule40 = None
+        material = rule40 = se = None
         if self.has_scale:
             material = torch.from_numpy(m["material"].astype(np.float32)).to(device)
             rule40 = torch.from_numpy(m["rule40"].astype(np.float32)).to(device)
+        if self.has_se:
+            se = torch.from_numpy(m["se"].astype(np.float32)).to(device)
         return (f[:, 0].to(device, non_blocking=True), f[:, 1].to(device, non_blocking=True),
                 torch.from_numpy(m["bucket"].astype(np.int64)).to(device),
                 torch.from_numpy(m["score"].astype(np.float32)).to(device),
                 torch.from_numpy(m["result"].astype(np.float32)).to(device), threats,
-                material, rule40)
+                material, rule40, se)
 
 
 def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
@@ -177,10 +183,11 @@ def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
     on, otherwise the raw network output."""
     stm, nstm, bucket, _, _, threats = batch[:6]
     material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
+    se = batch[8] if len(batch) >= 9 and not F.USE_PSQT else None
     if eval_scale and material is not None:
         psqt, positional = model.forward_parts(stm, nstm, bucket, threats)
         return E.evaluate_float(psqt.squeeze(1) * NNUE2SCORE, positional.squeeze(1) * NNUE2SCORE,
-                                material, rule40)
+                                material, rule40, se)
     return model(stm, nstm, bucket, threats).squeeze(1) * NNUE2SCORE
 
 
@@ -224,6 +231,8 @@ def main():
     ap.add_argument("--scaling", type=float, default=361.0)
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
+    ap.add_argument("--no-psqt", action="store_true",
+                    help="network without PSQT part (make psqt=no), architecture '<arch>-np'")
     ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
                     help="layer stacks: 1 (default) or 2 (make layers=2, architecture *-l2)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -272,18 +281,25 @@ def main():
             print(f"warning: data prepared with different material settings {kinds}", flush=True)
     print("loss on: " + ("evaluate() scaling of the network output" if eval_scale
                          else "raw network output"), flush=True)
-    F.set_arch(F.with_layers(train.arch, args.layers))
+    arch = F.compose_arch(train.arch, args.layers, not args.no_psqt)
+    F.set_arch(arch)
+    if eval_scale and not F.USE_PSQT:
+        for name, d in (("train", train), ("validation", val)):
+            if d is not None and not d.has_se:
+                raise SystemExit(f"the {name} data has no simple_eval values, which a network "
+                                 "without PSQT needs: prepare it again from the text files")
     init_q, init_ft_only = None, False
     if args.init_net:
         # A network with the other layer stacks gives only its feature transformer
         init_arch = S.detect_arch(args.init_net)
         if F.feature_arch(init_arch) != train.arch:
             raise SystemExit(f"--init-net is arch '{init_arch}', training '{F.ARCH}' "
-                             f"(data '{train.arch}', --layers {args.layers})")
+                             f"(data '{train.arch}', --layers {args.layers}, "
+                             f"--no-psqt {args.no_psqt})")
         init_ft_only = init_arch != F.ARCH
         F.set_arch(init_arch)
         init_q = S.read_nnue(args.init_net)
-        F.set_arch(F.with_layers(train.arch, args.layers))
+        F.set_arch(arch)
         if init_ft_only:
             print(f"--init-net is arch '{init_arch}': only its feature transformer is used",
                   flush=True)
@@ -295,7 +311,8 @@ def main():
         ck = torch.load(args.resume, map_location="cpu")
         if ck.get("arch", "default") != F.ARCH:
             raise SystemExit(f"checkpoint is arch '{ck.get('arch', 'default')}', training "
-                             f"'{F.ARCH}' (data '{train.arch}', --layers {args.layers})")
+                             f"'{F.ARCH}' (data '{train.arch}', --layers {args.layers}, "
+                             f"--no-psqt {args.no_psqt})")
         # keep the factorization of the run being resumed
         model = NNUE.from_state_dict(ck["model"])
     else:

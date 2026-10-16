@@ -125,7 +125,8 @@ class FeatureTransformer {
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
         // Networks without PSQT (make psqt=no) have a different layout
-        constexpr std::uint32_t PSQTHash = UsePSQT ? 0 : 0x5E0D0000;
+        constexpr std::uint32_t PSQTHash =
+          (UsePSQT ? 0 : 0x5E0D0000) ^ (PSQTBuckets == 32 ? 0x0B320000 : 0);
 #ifdef JIEQI_NNUE_THREATS
         return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2)
              ^ PSQTHash;

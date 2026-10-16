@@ -1,8 +1,10 @@
 """PyTorch model of the engine's NNUE (maskfish/src/nnue/nnue_architecture.h).
 
-    feature transformer: 7560 -> L1 (+16 PSQT buckets), per perspective
+    feature transformer: 7560 -> L1 (+16 PSQT buckets, 32 with "*-s32", none
+                         used with "*-np"), per perspective
     pairwise product:     2 x (L1/2 x L1/2) -> L1
-    layer stack (one of 16, chosen by piece count):
+    layer stack (one of 16, chosen by piece count; 32 with "*-s32", see
+    jieqi_features.layer_stack_bucket()):
         fc0: L1 -> 16   (output 15 is added directly to the result)
         [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
     or, for the "*-l2" architectures (make layers=2), see LayerStacks:
@@ -76,9 +78,9 @@ class LayerStacks(nn.Module):
         fc2: [a0, a1] (128) -> 1, plus the direct term fc0[30] - fc0[31]
     """
 
-    def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
+    def __init__(self, count: int | None = None, l1_fact: bool = False):
         super().__init__()
-        self.count = count
+        self.count = count = F.NUM_LAYER_STACKS if count is None else count
         self.in_dim = F.L1
         self.layers = F.LAYERS
         if self.layers == 2:
@@ -181,7 +183,7 @@ class NNUE(nn.Module):
             self.ft_bias[:L1].uniform_(0.0, 0.5)
             self.ft_bias[L1:].zero_()
             self.ft.weight[:, L1:].zero_()
-            if init_psqt:
+            if init_psqt and F.USE_PSQT:
                 values = torch.tensor(F.feature_material_values()) / NNUE2SCORE
                 self.ft.weight[:F.NUM_FEATURES, L1:] = values.unsqueeze(1)
 
@@ -292,7 +294,10 @@ class NNUE(nn.Module):
             nstm = nstm + t[:, 1]
 
         b = buckets.long().unsqueeze(1)
-        psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        if F.USE_PSQT:
+            psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        else:   # "*-np" architectures (make psqt=no): the PSQT columns are not used
+            psqt = torch.zeros_like(b, dtype=stm.dtype)
 
         s = torch.clamp(stm[:, :L1], 0.0, 1.0)
         o = torch.clamp(nstm[:, :L1], 0.0, 1.0)

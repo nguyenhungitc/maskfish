@@ -71,6 +71,32 @@ def jieqi_major_material(pos: F.JieqiPosition) -> int:
     return total
 
 
+def dark_value(pos: F.JieqiPosition, c: int) -> int:
+    """Position::dark_value(): average value of the pool of a side."""
+    count = value = 0
+    for pt in (F.ROOK, F.ADVISOR, F.CANNON, F.PAWN, F.KNIGHT, F.BISHOP):
+        n = pos.rest[F.make_piece(c, pt)]
+        count += n
+        value += n * F.PIECE_VALUE[pt]
+    return value // count if count else 0
+
+
+def simple_eval(pos: F.JieqiPosition) -> int:
+    """simple_eval() of evaluate.cpp: material of the side to move minus that of
+    the other side (kings excluded), a dark piece counting at dark_value(). It
+    stands for the PSQT part of networks without one (the "*-np"
+    architectures, make psqt=no)."""
+    material = [0, 0]
+    for c in (F.WHITE, F.BLACK):
+        dv = dark_value(pos, c)
+        for s in range(F.SQUARE_NB):
+            pc = pos.board[s]
+            if pc and F.color_of(pc) == c and F.type_of(pc) != F.KING:
+                material[c] += dv if pos.dark[s] else F.PIECE_VALUE[F.type_of(pc)]
+    us = pos.side_to_move
+    return material[us] - material[1 - us]
+
+
 def position_scale_inputs(pos: F.JieqiPosition, jieqi_material: bool = False) -> tuple[int, int]:
     """(material, rule40) of a position, as evaluate() uses them."""
     m = jieqi_major_material(pos) if jieqi_material else major_material(pos)
@@ -88,21 +114,26 @@ def _i32(x: int) -> int:
     return (x + (1 << 31)) % (1 << 32) - (1 << 31)
 
 
-def evaluate_int(psqt: int, positional: int, material: int, rule40: int) -> int:
+def evaluate_int(psqt: int, positional: int, material: int, rule40: int,
+                 se: int | None = None) -> int:
     """Eval::evaluate() with optimism 0, bit-exact (integer arithmetic, with the
     engine's 32-bit ints: they only wrap around for network outputs far beyond
-    the mate range, which a trained network never reaches)."""
+    the mate range, which a trained network never reaches). Networks without
+    PSQT ("*-np"): psqt is 0 and se, simple_eval(), stands for it in the
+    complexity term."""
     nnue = _i32(psqt + positional)
-    complexity = abs(_i32(psqt - positional))
+    complexity = abs(_i32(psqt - positional)) if se is None else abs(_i32(2 * se - nnue))
     nnue = _i32(nnue - _tdiv(nnue * complexity, COMPLEXITY_DIV))
     v = _i32(_tdiv(nnue * (MATERIAL_BASE + material), MATERIAL_DIV))
     v = _i32(v - _tdiv(_i32(v * rule40), RULE40_DIV))
     return max(-VALUE_MATE_IN_MAX_PLY + 1, min(VALUE_MATE_IN_MAX_PLY - 1, v))
 
 
-def evaluate_float(psqt, positional, material, rule40):
+def evaluate_float(psqt, positional, material, rule40, se=None):
     """Differentiable version for training (torch tensors or numpy arrays, internal
     units). Differs from evaluate_int() only by the integer truncations."""
-    nnue = (psqt + positional) * (1.0 - abs(psqt - positional) / COMPLEXITY_DIV)
+    nnue = psqt + positional
+    complexity = abs(psqt - positional) if se is None else abs(2.0 * se - nnue)
+    nnue = nnue * (1.0 - complexity / COMPLEXITY_DIV)
     v = nnue * ((MATERIAL_BASE + material) / MATERIAL_DIV)
     return v * (1.0 - rule40 / RULE40_DIV)

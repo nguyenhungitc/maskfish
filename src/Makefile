@@ -96,6 +96,9 @@ VPATH = $(shell find . -type d | tr '\n' ':')
 # psqt = yes/no       --- -DJIEQI_NNUE_NO_PSQT --- psqt=no: network without the PSQT part of
 #                                                the feature transformer (SFNNv17 of
 #                                                Pikafish; needs a matching net)
+# stacks = 16/32      --- -DJIEQI_NNUE_STACKS32 --- 32 layer stacks (and PSQT buckets): the 16
+#                                                piece count buckets split by the number of
+#                                                dark pieces (needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -158,6 +161,7 @@ nnue = default
 threats = no
 layers = 1
 psqt = yes
+stacks = 16
 bits = 64
 prefetch = no
 popcnt = no
@@ -701,6 +705,9 @@ ifeq ($(threats),yes)
 endif
 ifeq ($(layers),2)
 	CXXFLAGS += -DJIEQI_NNUE_LAYERS2
+endif
+ifeq ($(stacks),32)
+	CXXFLAGS += -DJIEQI_NNUE_STACKS32
 endif
 ifeq ($(psqt),no)
 	CXXFLAGS += -DJIEQI_NNUE_NO_PSQT

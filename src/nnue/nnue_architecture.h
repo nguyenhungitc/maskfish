@@ -58,7 +58,13 @@ constexpr int L2Big = 15;
 #endif
 constexpr int L3Big = 32;
 
+// make stacks=32: 32 layer stacks and PSQT buckets (see
+// HalfKAv2_hm::make_layer_stack_bucket())
+#ifdef JIEQI_NNUE_STACKS32
+constexpr IndexType PSQTBuckets = 32;
+#else
 constexpr IndexType PSQTBuckets = 16;
+#endif
 
 // make psqt=no: networks without the PSQT part of the feature transformer
 // (SFNNv17 of Pikafish). The material then goes through the layer stacks.
@@ -67,7 +73,7 @@ constexpr bool UsePSQT = false;
 #else
 constexpr bool UsePSQT = true;
 #endif
-constexpr IndexType LayerStacks = 16;
+constexpr IndexType LayerStacks = PSQTBuckets;
 
 // If vector instructions are enabled, we update and refresh the
 // accumulator tile by tile such that each tile fits in the CPU's

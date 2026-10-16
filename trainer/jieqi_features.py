@@ -47,49 +47,88 @@ MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62
 
 MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (types.h)
 
-NUM_PSQT_BUCKETS = 16
-NUM_LAYER_STACKS = 16
-
-ARCHS = {
-    # name: (attack buckets, feature hash, mid mirror, threat features, layer stacks)
-    "default": (1, 0x0D17B100, False, False, 1),
-    "att": (4, 0x7A17B104, True, False, 1),
-    "threats": (1, 0x0D17B100, False, True, 1),
-    "att-threats": (4, 0x7A17B104, True, True, 1),
+# Architectures: a base (input features) and optional suffixes, in this order:
+#   -s32: 32 layer stacks (make stacks=32), chosen by piece count and by the
+#         number of dark pieces (see DARK_STACK_THRESHOLDS), also 32 PSQT buckets
+#   -l2:  layer stacks of `make layers=2`
+#   -np:  no PSQT part in the feature transformer (make psqt=no)
+# The data prepared by prepare_data.py depends on the base and on -s32 (the
+# layer stack of each position is stored), not on -l2 / -np.
+BASE_ARCHS = {
+    # name: (attack buckets, feature hash, mid mirror, threat features)
+    "default": (1, 0x0D17B100, False, False),
+    "att": (4, 0x7A17B104, True, False),
+    "threats": (1, 0x0D17B100, False, True),
+    "att-threats": (4, 0x7A17B104, True, True),
 }
+STACKS32_SUFFIX = "-s32"
 LAYERS2_SUFFIX = "-l2"           # same features, layer stacks of `make layers=2`
-for _name, _a in list(ARCHS.items()):
-    ARCHS[_name + LAYERS2_SUFFIX] = _a[:4] + (2,)
+NO_PSQT_SUFFIX = "-np"
 
-ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[ARCH]
-NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
-PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
-L1 = 2048                           # feature transformer outputs (1024 with threats)
+ARCHS = {}
+for _name, _a in BASE_ARCHS.items():
+    for _s32 in (False, True):
+        for _l2 in (False, True):
+            for _np in (False, True):
+                ARCHS[_name + (STACKS32_SUFFIX if _s32 else "") + (LAYERS2_SUFFIX if _l2 else "")
+                      + (NO_PSQT_SUFFIX if _np else "")] = _a + (2 if _l2 else 1,
+                                                                  32 if _s32 else 16, not _np)
+
+
+def _set_globals(name: str):
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_FEATURES
+    global PAD_INDEX, L1, NUM_LAYER_STACKS, NUM_PSQT_BUCKETS, USE_PSQT
+    ARCH = name
+    (ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_LAYER_STACKS,
+     USE_PSQT) = ARCHS[name]
+    NUM_PSQT_BUCKETS = NUM_LAYER_STACKS
+    NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
+    PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
+    L1 = 1024 if THREATS else 2048      # feature transformer outputs
+
+
+_set_globals("default")
 
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_FEATURES
-    global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
-    ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[name]
-    NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
-    PAD_INDEX = NUM_FEATURES
-    L1 = 1024 if THREATS else 2048
+    _set_globals(name)
+
+
+def split_arch(name: str) -> tuple[str, bool, bool, bool]:
+    """(base, 32 stacks, layer stacks 2, no PSQT) of an architecture name."""
+    np_ = name.endswith(NO_PSQT_SUFFIX)
+    if np_:
+        name = name[:-len(NO_PSQT_SUFFIX)]
+    l2 = name.endswith(LAYERS2_SUFFIX)
+    if l2:
+        name = name[:-len(LAYERS2_SUFFIX)]
+    s32 = name.endswith(STACKS32_SUFFIX)
+    if s32:
+        name = name[:-len(STACKS32_SUFFIX)]
+    return name, s32, l2, np_
+
+
+def compose_arch(data: str, layers: int = 1, psqt: bool = True) -> str:
+    """Architecture for data of architecture `data` (base and -s32), these
+    layer stacks and with or without PSQT."""
+    base, s32, _, _ = split_arch(data)
+    return (base + (STACKS32_SUFFIX if s32 else "") + (LAYERS2_SUFFIX if layers == 2 else "")
+            + ("" if psqt else NO_PSQT_SUFFIX))
 
 
 def feature_arch(name: str) -> str:
-    """Architecture of the input features (what prepared data is made for):
-    the name without the layer stacks suffix."""
-    return name[:-len(LAYERS2_SUFFIX)] if name.endswith(LAYERS2_SUFFIX) else name
+    """Architecture of the prepared data (input features and layer stack of
+    each position): the name without the -l2 / -np suffixes."""
+    return compose_arch(name)
 
 
 def with_layers(name: str, layers: int) -> str:
-    """Architecture with these input features and these layer stacks."""
-    return feature_arch(name) + (LAYERS2_SUFFIX if layers == 2 else "")
+    """Architecture with these input features and these layer stacks (with PSQT
+    as in `name`)."""
+    return compose_arch(name, layers, not split_arch(name)[3])
 
 # Engine piece codes (maskfish/src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)
@@ -138,6 +177,15 @@ DARK_REST_INDEX = (_DRI_W, _DRI_B)
 
 LAYER_STACK_BUCKETS = [-1, -1, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
                        6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 13, 14, 15]
+
+# 32 layer stacks (-s32, engine: make stacks=32): the bucket of the piece count
+# above, times 2, + 1 when more dark pieces are left than
+# DARK_STACK_THRESHOLDS[piece count], the median number of dark pieces for that
+# number of pieces in self-play games (both stacks of a pair get about as many
+# positions where there are dark pieces at all; with the same material, a
+# position where more of it is still hidden plays differently)
+DARK_STACK_THRESHOLDS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3,
+                         3, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 16, 17, 19, 21, 23]
 
 
 def make_square(f: int, r: int) -> int:
@@ -365,7 +413,12 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
 
 
 def layer_stack_bucket(pos: JieqiPosition) -> int:
-    return LAYER_STACK_BUCKETS[pos.piece_count()]
+    count = pos.piece_count()
+    b = LAYER_STACK_BUCKETS[count]
+    if NUM_LAYER_STACKS == 32:
+        dark = sum(1 for s in range(SQUARE_NB) if pos.dark[s])
+        b = 2 * b + int(dark > DARK_STACK_THRESHOLDS[count])
+    return b
 
 
 def fen_to_features(fen: str):

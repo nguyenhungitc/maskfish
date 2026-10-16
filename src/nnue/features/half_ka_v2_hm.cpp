@@ -100,7 +100,15 @@ int HalfKAv2_hm::make_cache_index(const Position& pos, Color perspective) {
 
 // Get layer stack bucket
 IndexType HalfKAv2_hm::make_layer_stack_bucket(const Position& pos) {
+#ifdef JIEQI_NNUE_STACKS32
+    // The bucket of the piece count, split by the number of dark pieces: with
+    // the same material, a position where more of it is still hidden plays
+    // differently (trainer: layer_stack_bucket())
+    const int count = pos.count<ALL_PIECES>();
+    return 2 * LayerStackBuckets[count] + (popcount(pos.pieces(DARK)) > DarkStackThresholds[count]);
+#else
     return LayerStackBuckets[pos.count<ALL_PIECES>()];
+#endif
 }
 
 // Get a list of indices for recently changed features

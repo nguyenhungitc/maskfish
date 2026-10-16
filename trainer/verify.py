@@ -119,8 +119,10 @@ def main():
         if e_final is None:
             no_final += 1
         else:
-            material, rule40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
-            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40)
+            pos = F.parse_fen(fen)
+            material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
+            se = None if F.USE_PSQT else E.simple_eval(pos)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, se)
             if r_final == e_final:
                 scaled += 1
             else:
