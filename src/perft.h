@@ -34,9 +34,21 @@ namespace Maskfish::Benchmark {
 //
 // Moving a dark piece reveals it. Such a move is a chance node: it is expanded
 // into one child per kind of piece that can be revealed (each kind is counted
-// once, regardless of how many of that kind are left in the pool). Without
-// this the dark piece would stay hidden on a non-starting square and the check
-// information of the child position would never be computed.
+// once, regardless of how many of that kind are left in the pool), at every
+// ply including the last one. Without this the dark piece would stay hidden on
+// a non-starting square and the check information of the child position would
+// never be computed.
+
+// Number of children of a move: the kinds of piece that a move of a dark piece
+// can reveal, 1 for any other move
+inline u64 perft_children(const Position& pos, Move m) {
+    if (!pos.move_dark(m))
+        return 1;
+
+    Position::RestPieceList restPieces;
+    return u64(pos.rest_pieces(pos.side_to_move(), restPieces));
+}
+
 template<bool Root>
 u64 perft(Position& pos, Depth depth) {
 
@@ -45,12 +57,20 @@ u64 perft(Position& pos, Depth depth) {
     u64        cnt, nodes = 0;
     const bool leaf = (depth == 2);
 
-    auto count = [&]() { return leaf ? MoveList<LEGAL>(pos).size() : perft<false>(pos, depth - 1); };
+    auto count = [&]() {
+        if (!leaf)
+            return perft<false>(pos, depth - 1);
+
+        u64 n = 0;
+        for (const auto& m : MoveList<LEGAL>(pos))
+            n += perft_children(pos, m);
+        return n;
+    };
 
     for (const auto& m : MoveList<LEGAL>(pos))
     {
         if (Root && depth <= 1)
-            cnt = 1, nodes++;
+            cnt = perft_children(pos, m), nodes += cnt;
         else
         {
             [[maybe_unused]] const bool mayCheck = pos.gives_check(m);
