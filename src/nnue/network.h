@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -64,7 +65,9 @@ class Network {
     Network& operator=(const Network& other) = default;
     Network& operator=(Network&& other)      = default;
 
-    void load(const std::string& rootDirectory, std::string evalfilePath);
+    // rootDirectory: the directory of the binary (a path, which does not
+    // convert implicitly to a string on Windows); evalfilePath is UTF-8
+    void load(const std::filesystem::path& rootDirectory, std::string evalfilePath);
     bool save(const std::optional<std::string>& filename) const;
 
     std::size_t get_content_hash() const;
@@ -80,7 +83,7 @@ class Network {
                                  AccumulatorCaches::Cache<FTDimensions>* cache) const;
 
    private:
-    void load_user_net(const std::string&, const std::string&);
+    void load_user_net(const std::filesystem::path&, const std::string&);
 
     void initialize();
 

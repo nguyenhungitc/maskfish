@@ -66,11 +66,13 @@ bool write_parameters(std::ostream& stream, const T& reference) {
 }  // namespace Detail
 
 template<typename Arch, typename Transformer>
-void Network<Arch, Transformer>::load(const std::string& rootDirectory, std::string evalfilePath) {
+void Network<Arch, Transformer>::load(const std::filesystem::path& rootDirectory,
+                                      std::string                  evalfilePath) {
 #if defined(DEFAULT_NNUE_DIRECTORY)
-    std::vector<std::string> dirs = {"", rootDirectory, stringify(DEFAULT_NNUE_DIRECTORY)};
+    std::vector<std::filesystem::path> dirs = {std::filesystem::path{}, rootDirectory,
+                                               path_from_utf8(stringify(DEFAULT_NNUE_DIRECTORY))};
 #else
-    std::vector<std::string> dirs = {"", rootDirectory};
+    std::vector<std::filesystem::path> dirs = {std::filesystem::path{}, rootDirectory};
 #endif
 
     if (evalfilePath.empty())
@@ -213,13 +215,13 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
 
 
 template<typename Arch, typename Transformer>
-void Network<Arch, Transformer>::load_user_net(const std::string& dir,
-                                               const std::string& evalfilePath) {
+void Network<Arch, Transformer>::load_user_net(const std::filesystem::path& dir,
+                                               const std::string&           evalfilePath) {
     // dir has no trailing separator (binary directory), so join with the
     // filesystem operator; an empty dir or an absolute evalfilePath give
-    // evalfilePath unchanged.
-    std::stringstream stream =
-      read_compressed_nnue(std::filesystem::path(dir) / std::filesystem::path(evalfilePath));
+    // evalfilePath unchanged. evalfilePath is UTF-8 (path_from_utf8() also
+    // accepts the ANSI code page of old GUIs on Windows).
+    std::stringstream stream = read_compressed_nnue(dir / path_from_utf8(evalfilePath));
     auto              description = load(stream);
 
     if (description.has_value())
