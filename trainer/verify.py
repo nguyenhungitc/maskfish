@@ -127,6 +127,15 @@ def main():
                 ok = False
                 print("SCALE MISMATCH", fen, "engine evaluate()", e_final, "reference", r_final,
                       f"(material {material}, rule40 {rule40})")
+        if F.CTX:
+            # the trainer recovers the context inputs from the features
+            from model import context_from_features
+            s_f = F.fen_to_features(fen)[0]
+            got = context_from_features(torch.tensor([s_f + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(s_f))]))
+            want = F.context_inputs(F.parse_fen(fen))
+            if [int(v) for v in got[0].tolist()] != want:
+                ok = False
+                print("CONTEXT MISMATCH", fen, "from the features", got[0].tolist(), "expected", want)
         exact += ok
         if model is not None:
             s, n, b, _ = F.fen_to_features(fen)

@@ -29,9 +29,11 @@ Each of them also exists with options of the engine build, as name suffixes
 in this order (e.g. "threats-l2-nopsqt"):
 
 * "-l2": the layer stacks of `make layers=2` (see model.py);
+* "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
+  from AB-JChess, see context_inputs());
 * "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`).
 
-These two only change the model: the input features, and so the prepared
+These three only change the model: the input features, and so the prepared
 data, are those of the name without them (feature_arch()).
 
 If you change the feature set in the engine, change it here too and re-run
@@ -62,6 +64,7 @@ class Arch(NamedTuple):
     mid_mirror: bool
     threats: bool
     layers: int = 1
+    ctx: bool = False
     psqt: bool = True
 
 
@@ -77,6 +80,7 @@ BASE_ARCHS = {
 # of Arch, value with the suffix, whether the prepared data depends on it)
 SUFFIXES = (
     ("-l2", "layers", 2, False),
+    ("-ctx", "ctx", True, False),
     ("-nopsqt", "psqt", False, False),
 )
 LAYERS2_SUFFIX = "-l2"
@@ -120,7 +124,7 @@ def split_arch(name: str) -> tuple[str, dict]:
 
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -128,12 +132,12 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT, NUM_FEATURES
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT, NUM_FEATURES
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT = ARCHS[name]
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
@@ -147,10 +151,10 @@ def feature_arch(name: str) -> str:
                               for v in [fields[f]]})
 
 
-def model_arch(name: str, layers: int = 1, psqt: bool = True) -> str:
+def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True) -> str:
     """Architecture with the input features of `name` and these model options."""
     base, fields = split_arch(feature_arch(name))
-    fields.update(layers=layers, psqt=psqt)
+    fields.update(layers=layers, ctx=ctx, psqt=psqt)
     return arch_name(base, **fields)
 
 
@@ -437,6 +441,56 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
 
 def layer_stack_bucket(pos: JieqiPosition) -> int:
     return LAYER_STACK_BUCKETS[pos.piece_count()]
+
+
+# ---------------------------------------------------------------- inventory context
+#
+# Architectures "-ctx" (make ctx=yes, from AB-JChess): 16 inputs of a small
+# layer (ContextTower in maskfish/src/nnue/nnue_architecture.h) whose outputs
+# are additional inputs of fc0. From the point of view of the side to move:
+# its pool counts by piece type, the opponent's, the numbers of dark pieces of
+# both sides on the board, and the numbers of their dark pieces captured
+# without being identified (pool count minus dark pieces on the board), each
+# divided by its maximum and quantized to 0..127 (round half up).
+
+CONTEXT_INPUTS = 16
+CONTEXT_POOL_MAX = (2, 2, 2, 5, 2, 2)      # rook, advisor, cannon, pawn, knight, bishop
+CONTEXT_DARK_MAX = 16
+CONTEXT_UNKNOWN_MAX = 15
+POOL_TYPES = (ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP)
+
+
+def context_quantize(n: int, d: int) -> int:
+    """round(127 * n / d), half up, at most 127 (engine: ContextTower::make_inputs)."""
+    return min(127, (2 * 127 * n + d) // (2 * d))
+
+
+def context_inputs(pos: JieqiPosition) -> list[int]:
+    us = pos.side_to_move
+    out, pool = [], [0, 0]
+    for c in (us, 1 - us):
+        for pt, d in zip(POOL_TYPES, CONTEXT_POOL_MAX):
+            n = pos.rest[make_piece(c, pt)]
+            pool[c] += n
+            out.append(context_quantize(n, d))
+    dark = [0, 0]
+    for s in range(SQUARE_NB):
+        if pos.board[s] and pos.dark[s]:
+            dark[color_of(pos.board[s])] += 1
+    out.append(context_quantize(dark[us], CONTEXT_DARK_MAX))
+    out.append(context_quantize(dark[1 - us], CONTEXT_DARK_MAX))
+    out.append(context_quantize(max(0, pool[us] - dark[us]), CONTEXT_UNKNOWN_MAX))
+    out.append(context_quantize(max(0, pool[1 - us] - dark[1 - us]), CONTEXT_UNKNOWN_MAX))
+    return out
+
+
+# Where context_inputs() finds its counts among the features of the side to
+# move (feature index modulo PS_NB): the pool features (repeated once per
+# piece), and the dark squares of each side once the board is seen from the
+# side to move (own dark pieces on ranks 0..4, the opponent's on ranks 5..9;
+# the pool features use squares of ranks 1 and 8 where no dark piece stands)
+CONTEXT_OWN_POOL = tuple(PS_DARK + 9 + i for i in range(6))
+CONTEXT_OPP_POOL = tuple(PS_DARK + 72 + i for i in range(6))
 
 
 def fen_to_features(fen: str):

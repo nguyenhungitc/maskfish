@@ -20,6 +20,7 @@
 #include "network.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -135,8 +136,47 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
     const int  bucket = FeatureSet::make_layer_stack_bucket(pos);
     const auto psqt =
       featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-    const auto positional = network[bucket].propagate(transformedFeatures);
+
+    std::uint8_t context[ContextOutputs] = {};
+    if constexpr (UseContext)
+        compute_context(pos, context);
+
+    const auto positional = network[bucket].propagate(transformedFeatures, context);
     return {static_cast<Value>(psqt / OutputScale), static_cast<Value>(positional / OutputScale)};
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::compute_context(const Position& pos, std::uint8_t* context) const {
+    std::uint8_t inputs[ContextInputs];
+    ContextTower::make_inputs(pos, inputs);
+    contextTower.propagate(inputs, context);
+}
+
+
+void ContextTower::make_inputs(const Position& pos, std::uint8_t* inputs) {
+    // Divisors of the inputs (see the declaration), and q = round(127 * n / d)
+    constexpr int PoolMax[6] = {2, 2, 2, 5, 2, 2};
+    auto          q          = [](int n, int d) {
+        return std::uint8_t(std::min(127, (2 * 127 * n + d) / (2 * d)));
+    };
+
+    const Color us = pos.side_to_move();
+    int         k  = 0;
+    int         pool[COLOR_NB] = {};
+    for (Color c : {us, ~us})
+        for (PieceType pt = ROOK; pt < KING; ++pt)
+        {
+            const int n = pos.rest_piece(make_piece(c, pt));
+            pool[c] += n;
+            inputs[k++] = q(n, PoolMax[pt - ROOK]);
+        }
+    const int dark[COLOR_NB] = {popcount(pos.pieces(WHITE, DARK)), popcount(pos.pieces(BLACK, DARK))};
+    inputs[k++] = q(dark[us], 16);
+    inputs[k++] = q(dark[~us], 16);
+    inputs[k++] = q(std::max(0, pool[us] - dark[us]), 15);
+    inputs[k++] = q(std::max(0, pool[~us] - dark[~us]), 15);
+    assert(k == int(ContextInputs));
 }
 
 
@@ -204,7 +244,10 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     {
         const auto materialist =
           featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-        const auto positional = network[bucket].propagate(transformedFeatures);
+        std::uint8_t context[ContextOutputs] = {};
+        if constexpr (UseContext)
+            compute_context(pos, context);
+        const auto positional = network[bucket].propagate(transformedFeatures, context);
 
         t.psqt[bucket]       = static_cast<Value>(materialist / OutputScale);
         t.positional[bucket] = static_cast<Value>(positional / OutputScale);
@@ -273,6 +316,8 @@ std::size_t Network<Arch, Transformer>::get_content_hash() const {
 
     std::size_t h = 0;
     hash_combine(h, featureTransformer);
+    if constexpr (UseContext)
+        hash_combine(h, contextTower.get_content_hash());
     for (auto&& layerstack : network)
         hash_combine(h, layerstack);
     hash_combine(h, evalFile);
@@ -335,6 +380,9 @@ bool Network<Arch, Transformer>::read_parameters(std::istream& stream,
         return false;
     if (!Detail::read_parameters(stream, featureTransformer))
         return false;
+    if constexpr (UseContext)
+        if (!Detail::read_parameters(stream, contextTower))
+            return false;
     for (std::size_t i = 0; i < LayerStacks; ++i)
     {
         if (!Detail::read_parameters(stream, network[i]))
@@ -351,6 +399,9 @@ bool Network<Arch, Transformer>::write_parameters(std::ostream&      stream,
         return false;
     if (!Detail::write_parameters(stream, featureTransformer))
         return false;
+    if constexpr (UseContext)
+        if (!Detail::write_parameters(stream, contextTower))
+            return false;
     for (std::size_t i = 0; i < LayerStacks; ++i)
     {
         if (!Detail::write_parameters(stream, network[i]))

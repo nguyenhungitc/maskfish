@@ -8,8 +8,9 @@ Each data argument is a prefix written by prepare_data.py (all its shards are
 used); several prefixes can be given, e.g. the data of several generations.
 The data gives the input features (architecture); --layers 2 trains the
 layer stacks of `make layers=2` on them (architecture "<arch>-l2"), and
---no-psqt a network without PSQT buckets (`make psqt=no`, "<arch>-nopsqt"),
-which can start from the feature transformer of a network with them
+--ctx the inventory context inputs of AB-JChess (`make ctx=yes`, "<arch>-ctx")
+and --no-psqt a network without PSQT buckets (`make psqt=no`, "<arch>-nopsqt");
+each can start from the feature transformer of a network without them
 (--init-net).
 
 After every epoch: runs/exp1/epoch_N.pt, runs/exp1/last.pt and
@@ -228,6 +229,8 @@ def main():
     ap.add_argument("--init-net", help=".nnue file to start from")
     ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
                     help="layer stacks: 1 (default) or 2 (make layers=2, architecture *-l2)")
+    ap.add_argument("--ctx", action="store_true",
+                    help="inventory context inputs of the layer stacks (make ctx=yes, *-ctx)")
     ap.add_argument("--no-psqt", action="store_true",
                     help="no PSQT buckets (make psqt=no, architecture *-nopsqt)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -276,7 +279,7 @@ def main():
             print(f"warning: data prepared with different material settings {kinds}", flush=True)
     print("loss on: " + ("evaluate() scaling of the network output" if eval_scale
                          else "raw network output"), flush=True)
-    F.set_arch(F.model_arch(train.arch, layers=args.layers, psqt=not args.no_psqt))
+    F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt))
     init_q, init_ft_only = None, False
     if args.init_net:
         # A network with the other layer stacks gives only its feature transformer
@@ -287,7 +290,7 @@ def main():
         init_ft_only = init_arch != F.ARCH
         F.set_arch(init_arch)
         init_q = S.read_nnue(args.init_net)
-        F.set_arch(F.model_arch(train.arch, layers=args.layers, psqt=not args.no_psqt))
+        F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt))
         if init_ft_only:
             print(f"--init-net is arch '{init_arch}': only its feature transformer is used",
                   flush=True)

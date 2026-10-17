@@ -9,6 +9,12 @@
         fc0: L1 -> 32 -> [sqr_crelu, crelu] -> fc1: 64 -> 32 -> [sqr_crelu, crelu]
         fc2: all 128 activations -> 1, plus fc0[30] - fc0[31]
 
+The "*-ctx" architectures (make ctx=yes, AB-JChess's inventory context) also
+have a small layer, ctx_tower: 16 counts describing the uncertainty of the
+position (see jieqi_features.context_inputs(), recovered here from the
+features of the side to move) -> 16 -> clipped ReLU, whose outputs are 16
+more inputs of fc0 in every layer stack (LayerStacks.l1_ctx).
+
 L1 = 2048, or 1024 for the threat architectures, which also have a second
 feature transformer for the 92711 threat features (ft_thr, same outputs and
 PSQT buckets, summed with the first one). The "*-nopsqt" architectures (make
@@ -80,6 +86,7 @@ class LayerStacks(nn.Module):
     def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
         super().__init__()
         self.count = count
+        self.ctx = F.CTX
         self.in_dim = F.L1
         self.layers = F.LAYERS
         if self.layers == 2:
@@ -89,6 +96,10 @@ class LayerStacks(nn.Module):
             self.fc0_out, self.act0 = L2 + 1, L2           # 15 activated + direct term
             self.out_in = L3
         self.l1 = nn.Linear(self.in_dim, self.fc0_out * count)
+        # Context inputs of fc0 ("*-ctx"): every output, also the direct term
+        self.l1_ctx = None
+        if self.ctx:
+            self.l1_ctx = nn.Linear(F.CONTEXT_INPUTS, self.fc0_out * count, bias=False)
         self.l2 = nn.Linear(self.act0 * 2, L3 * count)
         self.output = nn.Linear(self.out_in, count)
         with torch.no_grad():
@@ -111,11 +122,14 @@ class LayerStacks(nn.Module):
         """SqrClippedReLU and ClippedReLU of the engine, concatenated."""
         return torch.clamp(torch.cat([v.pow(2.0) * (127.0 / 128.0), v], dim=1), 0.0, 1.0)
 
-    def forward(self, x: torch.Tensor, buckets: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None) -> torch.Tensor:
         n = x.shape[0]
         idx = torch.arange(n, device=x.device) * self.count + buckets.long()
 
-        l1 = self.l1(x).reshape(n * self.count, self.fc0_out)[idx]
+        l1 = self.l1(x)
+        if self.l1_ctx is not None:
+            l1 = l1 + self.l1_ctx(ctx)
+        l1 = l1.reshape(n * self.count, self.fc0_out)[idx]
         if self.layers == 2:
             if self.l1_fact is not None:
                 l1 = l1 + self.l1_fact(x)
@@ -150,6 +164,40 @@ class LayerStacks(nn.Module):
                 w[:, a:].clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             self.l2.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             self.output.weight.clamp_(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
+            if self.l1_ctx is not None:
+                self.l1_ctx.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+
+
+def context_from_features(stm_idx: torch.Tensor) -> torch.Tensor:
+    """The 16 quantized context inputs (0..127, as floats) of each position,
+    recovered from the (n, MAX_ACTIVE) features of the side to move: exactly
+    jieqi_features.context_inputs() of the position."""
+    idx = stm_idx.long()
+    real = idx != F.PAD_INDEX
+    local = torch.where(real, idx % F.PS_NB, torch.full_like(idx, -1))
+
+    def count(mask):
+        return mask.sum(dim=1)
+
+    own = [count(local == f) for f in F.CONTEXT_OWN_POOL]
+    opp = [count(local == f) for f in F.CONTEXT_OPP_POOL]
+    sq = local - F.PS_DARK
+    dark_sq = (sq >= 0) & (sq < F.SQUARE_NB)
+    rank = torch.div(sq, F.FILE_NB, rounding_mode="floor")
+    pool_sq = (sq >= 9) & (sq < 15) | (sq >= 72) & (sq < 78)
+    dark_us = count(dark_sq & ~pool_sq & (rank < 5))
+    dark_them = count(dark_sq & ~pool_sq & (rank >= 5))
+    pool_us, pool_them = sum(own), sum(opp)
+
+    def q(n, d):   # round(127 * n / d), half up, at most 127
+        return torch.clamp(torch.div(2 * 127 * n + d, 2 * d, rounding_mode="floor"), max=127)
+
+    cols = [q(n, d) for n, d in zip(own, F.CONTEXT_POOL_MAX)]
+    cols += [q(n, d) for n, d in zip(opp, F.CONTEXT_POOL_MAX)]
+    cols += [q(dark_us, F.CONTEXT_DARK_MAX), q(dark_them, F.CONTEXT_DARK_MAX),
+             q(torch.clamp(pool_us - dark_us, min=0), F.CONTEXT_UNKNOWN_MAX),
+             q(torch.clamp(pool_them - dark_them, min=0), F.CONTEXT_UNKNOWN_MAX)]
+    return torch.stack(cols, dim=1).float()
 
 
 def threat_inputs(bags: list) -> tuple:
@@ -176,6 +224,8 @@ class NNUE(nn.Module):
         self.ft_bias = nn.Parameter(torch.zeros(width))
         self.ft_ps = self.ft_kb = None
         self.stacks = LayerStacks()
+        # Inventory context ("*-ctx"): 16 -> 16, clipped ReLU
+        self.ctx_tower = nn.Linear(F.CONTEXT_INPUTS, F.CONTEXT_INPUTS) if F.CTX else None
 
         with torch.no_grad():
             self.ft.weight.uniform_(-0.05, 0.05)
@@ -256,6 +306,9 @@ class NNUE(nn.Module):
             plain.ft_bias.copy_(self.ft_bias.detach().cpu())
             if self.ft_thr is not None:
                 plain.ft_thr.weight.copy_(self.ft_thr.weight.detach().cpu())
+            if self.ctx_tower is not None:
+                plain.ctx_tower.load_state_dict(self.ctx_tower.state_dict())
+                plain.stacks.l1_ctx.weight.copy_(self.stacks.l1_ctx.weight.detach().cpu())
             src, dst = self.stacks, plain.stacks
             l1w = src.l1.weight.detach().cpu().clone()
             if src.l1_fact is not None:
@@ -304,11 +357,16 @@ class NNUE(nn.Module):
         h = L1 // 2
         x = torch.cat([s[:, :h] * s[:, h:], o[:, :h] * o[:, h:]], dim=1) * (127.0 / 128.0)
 
-        return psqt, self.stacks(x, buckets)
+        ctx = None
+        if self.ctx_tower is not None:
+            ctx = torch.clamp(self.ctx_tower(context_from_features(stm_idx) / 127.0), 0.0, 1.0)
+        return psqt, self.stacks(x, buckets, ctx)
 
     def clip_weights(self):
         self.stacks.clip_weights()
         with torch.no_grad():
+            if self.ctx_tower is not None:
+                self.ctx_tower.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
             # Keep the FT weights inside the int8 range of the file: the
             # coalesced weights (with the virtual features), as exported
             L1 = self.l1_size

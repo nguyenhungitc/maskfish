@@ -794,6 +794,37 @@ python match.py --engine-a ../src/maskfish-nopsqt --net-a runs/nopsqt/epoch_40.n
     --engine-b ../src/maskfish --net-b nets/genN.nnue --movetime 100 --sprt 0 5
 ```
 
+### 7.6. Inventory context (`ctx=yes`)
+
+From AB-JChess: the pool counts are already input features, but only through
+the feature transformer, whose output does not change much when one dark
+piece is revealed or captured. The context gives the layer stacks the
+uncertainty of the position directly: 16 values (see
+`jieqi_features.context_inputs()`), from the side to move, go through a small
+layer (`ctx_tower`, 16 → 16, clipped ReLU, shared by the layer stacks) whose
+outputs are 16 more inputs of `fc0` in every layer stack. The trainer
+recovers the 16 values from the features of the side to move, so **prepared
+data can be shared**; `verify.py` checks that they are the ones the engine
+computes.
+
+The architecture names get the suffix `-ctx` (after `-l2`, before
+`-nopsqt`: `default-ctx`, `att-l2-ctx`, `threats-ctx-nopsqt`, ...).
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 ctx=yes && mv maskfish maskfish-ctx
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-ctx --arch default-ctx
+python train.py data/train --val data/val --out runs/ctx --ctx \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python match.py --engine-a ../src/maskfish-ctx --net-a runs/ctx/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue --movetime 100 --sprt 0 5
+```
+
+`--init-net` with a network without context takes its feature transformer;
+the layer stacks and the context layer are trained from scratch.
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and

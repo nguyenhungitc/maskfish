@@ -83,6 +83,9 @@ class Network {
                                  AccumulatorCaches::Cache<FTDimensions>* cache) const;
 
    private:
+    // Outputs of the ContextTower for the position (make ctx=yes)
+    void compute_context(const Position& pos, std::uint8_t* context) const;
+
     void load_user_net(const std::filesystem::path&, const std::string&);
 
     void initialize();
@@ -101,6 +104,9 @@ class Network {
 
     // Evaluation function
     Arch network[LayerStacks];
+
+    // Inventory context (make ctx=yes), shared by the layer stacks
+    ContextTower contextTower;
 
     EvalFile evalFile;
 

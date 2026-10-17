@@ -348,6 +348,16 @@ vice versa. Train such a network with `train.py --no-psqt` (section 7.5 of
 the [trainer README](trainer/README.md)), like AB-JChess's networks, which
 have no PSQT part either. The default build keeps the PSQT outputs.
 
+`make -j build ctx=yes` (combinable with the options above) adds the
+**inventory context** of AB-JChess: 16 values describing the uncertainty of
+the position, from the side to move (its pool counts by piece type, the
+opponent's, the numbers of dark pieces of both sides on the board, and the
+numbers of their dark pieces captured without being identified), go through
+a small layer (16 → 16, clipped ReLU) shared by the layer stacks, whose
+outputs are 16 more inputs of the first layer of every layer stack. The cost
+is negligible. Train such a network with `train.py --ctx` (section 7.6 of the
+[trainer README](trainer/README.md)).
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

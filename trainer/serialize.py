@@ -12,13 +12,17 @@ File layout (maskfish/src/nnue/network.cpp, nnue_feature_transformer.h, layers/)
       LEB128 int32 threat psqt[92711][16]    (scale 600 * 16, not with "*-nopsqt")
     The engine doubles the feature transformer outputs (biases + weights),
     so 1.0 is 254 before the clipped ReLU.
+    context architectures only ("*-ctx", make ctx=yes):
+    u32 context tower hash (0x0C7A16C7)
+      int32 bias[16] (scale 64*127), int8 weight[16][16] (scale 64)
     16 x layer stack:
       u32 architecture hash
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
+           "*-ctx" only: int8 context weight[16][16]  (scale 64)
       fc1: int32 bias[32]  (scale 64*127), int8 weight[32][32]   (30 used)
       fc2: int32 bias[1]   (scale 600*16), int8 weight[1][32]    (scale 600*16/127)
     or, layer stacks 2 (architectures "*-l2", make layers=2):
-      fc0: int32 bias[32], int8 weight[32][L1]
+      fc0: int32 bias[32], int8 weight[32][L1] ("*-ctx": int8 context weight[32][16])
       fc1: int32 bias[32], int8 weight[32][64]
       fc2: int32 bias[1],  int8 weight[1][128]   (same scales)
 
@@ -64,11 +68,17 @@ def stack_dims(layers: int | None = None) -> dict:
     return {"fc0_out": L2 + 1, "act0": L2, "fc1_in": 2 * L2, "fc1_file": 32, "fc2_in": L3}
 
 
-def arch_hash(l1: int | None = None, layers: int | None = None) -> int:
+CTX_ARCH_HASH = 0x0C7A0000    # engine: ContextArchHash, xored into the layer stacks hash
+CTX_TOWER_HASH = 0x0C7A16C7   # engine: ContextTower::get_hash_value()
+
+
+def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None = None) -> int:
     """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
-    (0x63336B4A for L1 = 2048, 0x63336A4A for 1024)."""
+    (0x63336B4A for L1 = 2048, 0x63336A4A for 1024; xored with CTX_ARCH_HASH
+    with the context inputs)."""
     m = 0xFFFFFFFF
     l1 = F.L1 if l1 is None else l1
+    ctx = F.CTX if ctx is None else ctx
 
     def affine(prev, outputs):
         h = (0xCC03DAE4 + outputs) & m
@@ -80,7 +90,7 @@ def arch_hash(l1: int | None = None, layers: int | None = None) -> int:
     h = 0xEC42E90D ^ (l1 * 2)
     h = crelu(affine(h, stack_dims(layers)["fc0_out"]))
     h = crelu(affine(h, L3))
-    return affine(h, 1)
+    return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0)
 
 
 NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
@@ -224,6 +234,11 @@ def quantize(model) -> dict:
         l2b = st.l2.bias.detach().cpu().double().numpy().reshape(STACKS, L3)
         ow = st.output.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc2_in"])
         ob = st.output.bias.detach().cpu().double().numpy().reshape(STACKS)
+        if F.CTX:
+            cw = model.ctx_tower.weight.detach().cpu().double().numpy()
+            cb = model.ctx_tower.bias.detach().cpu().double().numpy()
+            l1c = st.l1_ctx.weight.detach().cpu().double().numpy().reshape(
+                STACKS, d["fc0_out"], F.CONTEXT_INPUTS)
 
     hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
     q["fc0_bias"] = np.round(l1b * hb).astype(np.int64)
@@ -237,7 +252,13 @@ def quantize(model) -> dict:
     q["fc2_bias"] = np.round(ob * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
     q["fc2_weight"] = np.round(np.clip(ow, -MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
                                * OUTPUT_WEIGHT_SCALE).astype(np.int64)
-    for k in ("fc0_weight", "fc1_weight", "fc2_weight"):
+    if F.CTX:
+        q["ctx_bias"] = np.round(cb * hb).astype(np.int64)
+        q["ctx_weight"] = np.round(np.clip(cw, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                                   * HIDDEN_WEIGHT_SCALE).astype(np.int64)
+        q["fc0_ctx"] = np.round(np.clip(l1c, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                                * HIDDEN_WEIGHT_SCALE).astype(np.int64)
+    for k in ("fc0_weight", "fc1_weight", "fc2_weight") + (("ctx_weight", "fc0_ctx") if F.CTX else ()):
         assert np.abs(q[k]).max() <= 127, k
     return q
 
@@ -260,11 +281,18 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
         if F.PSQT:
             _write_leb(buf, q["thr_psqt"].astype(np.int32))
 
+    if F.CTX:
+        buf.write(struct.pack("<I", CTX_TOWER_HASH))
+        buf.write(q["ctx_bias"].astype("<i4").tobytes())
+        buf.write(q["ctx_weight"].astype(np.int8).tobytes())
+
     ahash = arch_hash()
     for k in range(STACKS):
         buf.write(struct.pack("<I", ahash))
         buf.write(q["fc0_bias"][k].astype("<i4").tobytes())
         buf.write(q["fc0_weight"][k].astype(np.int8).tobytes())
+        if F.CTX:
+            buf.write(q["fc0_ctx"][k].astype(np.int8).tobytes())
         buf.write(q["fc1_bias"][k].astype("<i4").tobytes())
         buf.write(q["fc1_weight"][k].astype(np.int8).tobytes())
         buf.write(q["fc2_bias"][k:k + 1].astype("<i4").tobytes())
@@ -312,7 +340,16 @@ def read_nnue(path: str) -> dict:
     def arr(dtype, n):
         return np.frombuffer(f.read(np.dtype(dtype).itemsize * n), dtype=dtype).astype(np.int64)
 
-    keys = ("fc0_bias", "fc0_weight", "fc1_bias", "fc1_weight", "fc2_bias", "fc2_weight")
+    n_ctx = F.CONTEXT_INPUTS
+    if F.CTX:
+        (ch,) = struct.unpack("<I", f.read(4))
+        if ch != CTX_TOWER_HASH:
+            raise ValueError("context tower hash mismatch")
+        q["ctx_bias"] = arr("<i4", n_ctx)
+        q["ctx_weight"] = arr(np.int8, n_ctx * n_ctx).reshape(n_ctx, n_ctx)
+
+    keys = ("fc0_bias", "fc0_weight", "fc1_bias", "fc1_weight", "fc2_bias", "fc2_weight") \
+        + (("fc0_ctx",) if F.CTX else ())
     parts = {k: [] for k in keys}
     d = stack_dims()
     for _ in range(STACKS):
@@ -321,6 +358,8 @@ def read_nnue(path: str) -> dict:
             raise ValueError("architecture hash mismatch")
         parts["fc0_bias"].append(arr("<i4", d["fc0_out"]))
         parts["fc0_weight"].append(arr(np.int8, d["fc0_out"] * L1).reshape(d["fc0_out"], L1))
+        if F.CTX:
+            parts["fc0_ctx"].append(arr(np.int8, d["fc0_out"] * n_ctx).reshape(d["fc0_out"], n_ctx))
         parts["fc1_bias"].append(arr("<i4", L3))
         parts["fc1_weight"].append(arr(np.int8, L3 * d["fc1_file"]).reshape(L3, d["fc1_file"]))
         parts["fc2_bias"].append(arr("<i4", 1)[0])
@@ -333,7 +372,7 @@ def read_nnue(path: str) -> dict:
 def _arch_network_hashes() -> dict:
     out = {}
     for name, a in F.ARCHS.items():
-        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers)
+        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx)
     return out
 
 
@@ -393,6 +432,11 @@ def load_into_model(q: dict, model, ft_only: bool = False):
                 getattr(model, name).weight.zero_()
         if ft_only:
             return
+        if model.ctx_tower is not None and "ctx_weight" in q:
+            model.ctx_tower.weight[:] = torch.tensor(q["ctx_weight"] / HIDDEN_WEIGHT_SCALE)
+            model.ctx_tower.bias[:] = torch.tensor(q["ctx_bias"] / hb)
+            model.stacks.l1_ctx.weight[:] = torch.tensor(
+                q["fc0_ctx"].reshape(-1, F.CONTEXT_INPUTS) / HIDDEN_WEIGHT_SCALE)
         st = model.stacks
         st.l1.weight[:] = torch.tensor(q["fc0_weight"].reshape(-1, L1) / HIDDEN_WEIGHT_SCALE)
         st.l1.bias[:] = torch.tensor(q["fc0_bias"].reshape(-1) / hb)
@@ -443,6 +487,10 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
 
     d = stack_dims()
     fc0 = q["fc0_bias"][bucket] + q["fc0_weight"][bucket] @ x
+    if F.CTX:
+        ci = np.array(F.context_inputs(F.parse_fen(fen)), dtype=np.int64)
+        co = np.clip((q["ctx_bias"] + q["ctx_weight"] @ ci) >> 6, 0, 127)
+        fc0 = fc0 + q["fc0_ctx"][bucket] @ co
     h = np.zeros(d["fc1_file"], dtype=np.int64)
     h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]])
     fc1 = q["fc1_bias"][bucket] + q["fc1_weight"][bucket] @ h

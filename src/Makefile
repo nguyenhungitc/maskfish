@@ -107,6 +107,8 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 # psqt = yes/no       --- -DJIEQI_NNUE_NO_PSQT --- psqt=no: network without the PSQT part of
 #                                                the feature transformer (SFNNv17 of
 #                                                Pikafish; needs a matching net)
+# ctx = yes/no        --- -DJIEQI_NNUE_CTX   --- ctx=yes: inventory context inputs of the
+#                                                layer stacks (AB-JChess; needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -175,6 +177,7 @@ nnue = default
 threats = no
 layers = 1
 psqt = yes
+ctx = no
 bits = 64
 prefetch = no
 popcnt = no
@@ -729,6 +732,9 @@ ifeq ($(layers),2)
 endif
 ifeq ($(psqt),no)
 	CXXFLAGS += -DJIEQI_NNUE_NO_PSQT
+endif
+ifeq ($(ctx),yes)
+	CXXFLAGS += -DJIEQI_NNUE_CTX
 endif
 
 ### 3.2.1 Floating point
@@ -1541,7 +1547,7 @@ $(TEMP_DIR):
 # one of the goal.
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
-                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
                    ldflags=$(ENV_LDFLAGS) extraldflags=$(EXTRALDFLAGS) \
