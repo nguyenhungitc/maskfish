@@ -73,28 +73,38 @@ inline int non_pawn_index(const Position& pos) {
 // instead of a naked value to directly call history update operator<<() on
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
-// when we update values with the << operator
-template<typename T, int D>
+// when we update values with the << operator.
+//
+// The tables that the threads of a NUMA node may share (UCI option
+// SharedHistory, see Search::HistoryTables) are read and written by several
+// threads without locks: their entries (Shared = true) are relaxed atomics,
+// which compile to plain loads and stores but make these races well defined,
+// as in Stockfish and Pikafish. An update reads the entry once, so that a
+// value written meanwhile by another thread cannot mix with it (the result
+// then stays in [-D, D]; such an update may only be lost).
+template<typename T, int D, bool Shared = false>
 class StatsEntry {
 
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
     static_assert(D <= std::numeric_limits<T>::max(), "D overflows T");
 
-    T entry;
+    std::conditional_t<Shared, RelaxedAtomic<T>, T> entry;
 
    public:
     StatsEntry& operator=(const T& v) {
         entry = v;
         return *this;
     }
-    operator const T&() const { return entry; }
+    operator T() const { return entry; }
 
     void operator<<(int bonus) {
         // Make sure that bonus is in range [-D, D]
-        int clampedBonus = std::clamp(bonus, -D, D);
-        entry += clampedBonus - entry * std::abs(clampedBonus) / D;
+        const int clampedBonus = std::clamp(bonus, -D, D);
+        const T   val          = entry;
+        const T   newVal       = T(val + clampedBonus - val * std::abs(clampedBonus) / D);
 
-        assert(std::abs(entry) <= D);
+        assert(std::abs(newVal) <= D);
+        entry = newVal;
     }
 };
 
@@ -105,6 +115,10 @@ enum StatsType {
 
 template<typename T, int D, std::size_t... Sizes>
 using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
+
+// Tables that may be shared between threads (see StatsEntry)
+template<typename T, int D, std::size_t... Sizes>
+using SharedStats = MultiArray<StatsEntry<T, D, true>, Sizes...>;
 
 // ButterflyHistory records how often quiet moves have been successful or unsuccessful
 // during the current search, and is used for reduction and move ordering decisions.
@@ -120,7 +134,8 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, 1 << 14>;
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+// (shared: it makes up the continuation histories)
+using PieceToHistory = SharedStats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
@@ -129,7 +144,7 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
-using PawnHistory = Stats<std::int16_t, 8192, PAWN_HISTORY_SIZE, PIECE_NB, SQUARE_NB>;
+using PawnHistory = SharedStats<std::int16_t, 8192, PAWN_HISTORY_SIZE, PIECE_NB, SQUARE_NB>;
 
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
@@ -147,12 +162,13 @@ namespace Detail {
 
 template<CorrHistType>
 struct CorrHistTypedef {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, CORRECTION_HISTORY_SIZE, COLOR_NB>;
+    using type =
+      SharedStats<std::int16_t, CORRECTION_HISTORY_LIMIT, CORRECTION_HISTORY_SIZE, COLOR_NB>;
 };
 
 template<>
 struct CorrHistTypedef<PieceTo> {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+    using type = SharedStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
 };
 
 template<>
@@ -162,8 +178,11 @@ struct CorrHistTypedef<Continuation> {
 
 template<>
 struct CorrHistTypedef<NonPawn> {
-    using type =
-      Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, CORRECTION_HISTORY_SIZE, COLOR_NB, COLOR_NB>;
+    using type = SharedStats<std::int16_t,
+                             CORRECTION_HISTORY_LIMIT,
+                             CORRECTION_HISTORY_SIZE,
+                             COLOR_NB,
+                             COLOR_NB>;
 };
 
 }
