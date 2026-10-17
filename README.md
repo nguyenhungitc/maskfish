@@ -182,6 +182,17 @@ default and described next to their definition in `src/engine.cpp`:
 `SharedHistory`. Test them with `trainer/match.py --opt-a Name=true`; the ones
 that fail should be removed rather than kept as dead options.
 
+#### Options ported from AB-JChess
+
+Further ideas of [AB-JChess](https://github.com/lxsgx23/AB-JChess) (GPL-3.0),
+each behind an option that is off by default (the default search is unchanged,
+same bench signature). They have not been tested for Maskfish yet: validate
+each one with SPRT before changing its default.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `CorrHistReset` | `false` | Reset the correction histories at the start of every search (otherwise they are kept until `ucinewgame`). |
+
 ### Debugging commands
 
 `d` prints the board (`X` / `x` for dark pieces), the FEN and the hash key.

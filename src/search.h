@@ -366,6 +366,8 @@ class Worker {
     // Returns whether the last PV sent to the GUI is up to date
     bool iterative_deepening();
 
+    void reset_correction_histories();
+
     void do_move(Position& pos, const Move move, StateInfo& st);
     void prefetch_correction_histories(const Stack* ss, const Position& pos, Move move) const;
     void do_move(Position& pos, const Move move, StateInfo& st, const bool givesCheck);

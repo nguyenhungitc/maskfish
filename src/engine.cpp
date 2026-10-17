@@ -137,6 +137,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("TTPenalize", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
     options.add("ChanceBranchDepth", Option(false));
+    // Reset the correction histories at the start of every search (they are
+    // otherwise kept until ucinewgame).
+    options.add("CorrHistReset", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).

@@ -230,6 +230,12 @@ void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
 
+    // UCI option CorrHistReset: forget the correction histories of earlier
+    // searches. Shared histories are reset by the Worker that owns them.
+    // (Idea from AB-JChess.)
+    if (bool(options["CorrHistReset"]) && (!sharedHistories || ownsSharedHistories))
+        reset_correction_histories();
+
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
     {
@@ -797,13 +803,7 @@ void Search::Worker::clear() {
     if (!sharedHistories || ownsSharedHistories)
     {
         pawnHistory.fill(-1083);
-        pawnCorrectionHistory.fill(6);
-        minorPieceCorrectionHistory.fill(0);
-        nonPawnCorrectionHistory.fill(0);
-
-        for (auto& to : continuationCorrectionHistory)
-            for (auto& h : to)
-                h.fill(7);
+        reset_correction_histories();
 
         for (bool inCheck : {false, true})
             for (StatsType c : {NoCaptures, Captures})
@@ -816,6 +816,18 @@ void Search::Worker::clear() {
         reductions[i] = int(2321 / (849 / 10.0) * std::log(i));
 
     refreshTable.clear(networks[numaAccessToken]);
+}
+
+// Initial values of the correction histories (also used by the UCI option
+// CorrHistReset)
+void Search::Worker::reset_correction_histories() {
+    pawnCorrectionHistory.fill(6);
+    minorPieceCorrectionHistory.fill(0);
+    nonPawnCorrectionHistory.fill(0);
+
+    for (auto& to : continuationCorrectionHistory)
+        for (auto& h : to)
+            h.fill(7);
 }
 
 
