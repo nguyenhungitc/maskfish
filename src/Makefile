@@ -109,6 +109,9 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 #                                                Pikafish; needs a matching net)
 # ctx = yes/no        --- -DJIEQI_NNUE_CTX   --- ctx=yes: inventory context inputs of the
 #                                                layer stacks (AB-JChess; needs a matching net)
+# lsblend = yes/no    --- -DJIEQI_NNUE_BLEND --- lsblend=yes: layer stacks selected by the
+#                                                uncertainty phase and interpolated (AB-JChess;
+#                                                needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -178,6 +181,7 @@ threats = no
 layers = 1
 psqt = yes
 ctx = no
+lsblend = no
 bits = 64
 prefetch = no
 popcnt = no
@@ -735,6 +739,9 @@ ifeq ($(psqt),no)
 endif
 ifeq ($(ctx),yes)
 	CXXFLAGS += -DJIEQI_NNUE_CTX
+endif
+ifeq ($(lsblend),yes)
+	CXXFLAGS += -DJIEQI_NNUE_BLEND
 endif
 
 ### 3.2.1 Floating point
@@ -1547,7 +1554,7 @@ $(TEMP_DIR):
 # one of the goal.
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
-                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
                    ldflags=$(ENV_LDFLAGS) extraldflags=$(EXTRALDFLAGS) \

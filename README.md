@@ -358,6 +358,15 @@ outputs are 16 more inputs of the first layer of every layer stack. The cost
 is negligible. Train such a network with `train.py --ctx` (section 7.6 of the
 [trainer README](trainer/README.md)).
 
+`make -j build lsblend=yes` (combinable with the options above) selects the
+layer stacks as **AB-JChess**: the bucket of the piece count is raised by an
+"uncertainty phase" (numbers of dark pieces on the board and of rooks,
+cannons and knights left in the pools), and the evaluation is interpolated
+between that layer stack and the next one, according to where the three
+counts are within their intervals. About half of the positions then use two
+layer stacks (the engine is about 10% slower). The prepared data changes:
+see section 7.7 of the [trainer README](trainer/README.md).
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

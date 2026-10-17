@@ -45,6 +45,8 @@ import jieqi_features as F
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
                        ("material", np.int16), ("rule40", np.uint8)])
+# "-blend" architectures: also the interpolation weight of the layer stacks
+META_DTYPE_BLEND = np.dtype(META_DTYPE.descr + [("blend", np.uint8)])
 CHUNK_LINES = 16384
 
 
@@ -68,7 +70,7 @@ def parse_chunk(lines: list[str]):
     Returns (features, meta, threats, lines read, positions filtered out,
     malformed lines, a few malformed lines with their error)."""
     feats = np.full((len(lines), 2, F.MAX_ACTIVE), F.PAD_INDEX, dtype=np.int16)
-    meta = np.zeros(len(lines), dtype=META_DTYPE)
+    meta = np.zeros(len(lines), dtype=META_DTYPE_BLEND if F.BLEND else META_DTYPE)
     counts = np.zeros((len(lines), 2), dtype=np.uint8)
     threats = []
     n = filtered = malformed = 0
@@ -83,7 +85,7 @@ def parse_chunk(lines: list[str]):
             pos = F.parse_fen(fen)
             stm = pos.side_to_move
             s, o = F.active_features(pos, stm), F.active_features(pos, 1 - stm)
-            b = F.layer_stack_bucket(pos)
+            b, blend = F.layer_stack_selection(pos) if F.BLEND else (F.layer_stack_bucket(pos), 0)
             if len(s) > F.MAX_ACTIVE or len(o) > F.MAX_ACTIVE:
                 filtered += 1
                 continue
@@ -102,7 +104,8 @@ def parse_chunk(lines: list[str]):
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
-        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255))
+        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255)) \
+            + ((blend,) if F.BLEND else ())
         if F.THREATS:
             counts[n] = (len(ts), len(to))
             threats.append(ts)

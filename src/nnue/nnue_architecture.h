@@ -84,6 +84,15 @@ constexpr IndexType ContextOutputs = 16;
 // Xored into the hash of the layer stacks when they have context inputs
 constexpr std::uint32_t ContextArchHash = 0x0C7A0000u;
 
+// make lsblend=yes: layer stacks selected and interpolated as in AB-JChess
+// (see HalfKAv2_hm::make_layer_stack_selection()); xored into their hash
+#ifdef JIEQI_NNUE_BLEND
+constexpr bool UseLayerStackBlend = true;
+#else
+constexpr bool UseLayerStackBlend = false;
+#endif
+constexpr std::uint32_t BlendArchHash = 0x0B1E0000u;
+
 struct ContextTower {
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() { return 0x0C7A16C7u; }
@@ -184,7 +193,8 @@ struct NetworkArchitecture {
         hashValue = decltype(ac_1)::get_hash_value(hashValue);
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
-        return UseContext ? hashValue ^ ContextArchHash : hashValue;
+        return hashValue ^ (UseContext ? ContextArchHash : 0)
+             ^ (UseLayerStackBlend ? BlendArchHash : 0);
     }
 
     // Read network parameters
@@ -310,7 +320,8 @@ struct NetworkArchitecture {
         hashValue = decltype(ac_1)::get_hash_value(hashValue);
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
-        return UseContext ? hashValue ^ ContextArchHash : hashValue;
+        return hashValue ^ (UseContext ? ContextArchHash : 0)
+             ^ (UseLayerStackBlend ? BlendArchHash : 0);
     }
 
     // Read network parameters

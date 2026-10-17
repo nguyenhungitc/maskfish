@@ -141,7 +141,21 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
     if constexpr (UseContext)
         compute_context(pos, context);
 
-    const auto positional = network[bucket].propagate(transformedFeatures, context);
+    auto positional = network[bucket].propagate(transformedFeatures, context);
+
+    // make lsblend=yes: interpolation with the next layer stack (the PSQT
+    // bucket stays the floor one)
+    if constexpr (UseLayerStackBlend)
+    {
+        const int blend = FeatureSet::make_layer_stack_selection(pos).blend;
+        if (blend)
+        {
+            const auto next = network[bucket + 1].propagate(transformedFeatures, context);
+            positional =
+              std::int32_t((std::int64_t(positional) * (256 - blend) + std::int64_t(next) * blend)
+                           / 256);
+        }
+    }
     return {static_cast<Value>(psqt / OutputScale), static_cast<Value>(positional / OutputScale)};
 }
 

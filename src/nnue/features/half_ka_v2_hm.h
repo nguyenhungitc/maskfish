@@ -222,6 +222,17 @@ class HalfKAv2_hm {
     // Get layer stack bucket
     static IndexType make_layer_stack_bucket(const Position& pos);
 
+    // make lsblend=yes: the layer stack selection of AB-JChess. The bucket
+    // (floor) is the one of the piece count, raised by an "uncertainty phase"
+    // (numbers of dark pieces and of rooks, cannons and knights in the pools),
+    // and the evaluation is interpolated between the layer stacks floor and
+    // floor + 1 with the weight blend / 256 (blend in 0..254, 0 for bucket 15),
+    // from the position of the three counts within their intervals.
+    struct LayerStackSelection {
+        int floor, blend;
+    };
+    static LayerStackSelection make_layer_stack_selection(const Position& pos);
+
     // Get a list of indices for recently changed features
     template<Color Perspective>
     static void append_changed_indices(

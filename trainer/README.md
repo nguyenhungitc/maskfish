@@ -825,6 +825,40 @@ python match.py --engine-a ../src/maskfish-ctx --net-a runs/ctx/epoch_40.nnue \
 `--init-net` with a network without context takes its feature transformer;
 the layer stacks and the context layer are trained from scratch.
 
+### 7.7. Layer stack selection of AB-JChess (`lsblend=yes`)
+
+The layer stack of a position is chosen by its number of pieces. AB-JChess
+raises that bucket by an "uncertainty phase": +1 to +4 for the number of dark
+pieces on the board (1, 5, 9, 17 or more), +1 to +3 for the number of rooks,
+cannons and knights left in the pools (2, 5, 9 or more), at most 15. And it
+interpolates between the chosen layer stack and the next one, with a weight
+given by the position of the three counts within their intervals (the
+evaluation then changes smoothly with them instead of jumping at the
+boundaries of the buckets). See `jieqi_features.layer_stack_selection()`;
+about half of the positions use two layer stacks, which costs the engine
+about 10 % of its speed.
+
+The architecture names get the suffix `-blend`, first (`default-blend`,
+`att-blend-l2-ctx`, ...). **The prepared data changes** (layer stack and
+interpolation weight of each position): prepare it with `--arch
+default-blend` (or `att-blend`, ...); the other options (`--layers 2`,
+`--ctx`, `--no-psqt`) are given to `train.py`.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 lsblend=yes && mv maskfish maskfish-blend
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-blend --arch default-blend
+python prepare_data.py data/gen*.txt --out data/train-blend --arch default-blend
+python train.py data/train-blend --out runs/blend --epochs 40 --epoch-size 10000000 \
+    --init-net nets/genN.nnue
+```
+
+`--init-net` with a network without `-blend` (same feature set) takes its
+feature transformer. `--stack-balance` weights the layer stacks of the new
+selection.
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -843,7 +877,9 @@ sources can be added if it uses this format and internal units (`RawScore`).
 - `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
   to move and of the other side, padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
-  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4);
+  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4),
+  and `blend` (interpolation weight of the layer stacks) for the `-blend`
+  architectures;
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 

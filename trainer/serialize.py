@@ -69,16 +69,19 @@ def stack_dims(layers: int | None = None) -> dict:
 
 
 CTX_ARCH_HASH = 0x0C7A0000    # engine: ContextArchHash, xored into the layer stacks hash
+BLEND_ARCH_HASH = 0x0B1E0000  # engine: BlendArchHash (make lsblend=yes)
 CTX_TOWER_HASH = 0x0C7A16C7   # engine: ContextTower::get_hash_value()
 
 
-def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None = None) -> int:
+def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None = None,
+              blend: bool | None = None) -> int:
     """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
     (0x63336B4A for L1 = 2048, 0x63336A4A for 1024; xored with CTX_ARCH_HASH
     with the context inputs)."""
     m = 0xFFFFFFFF
     l1 = F.L1 if l1 is None else l1
     ctx = F.CTX if ctx is None else ctx
+    blend = F.BLEND if blend is None else blend
 
     def affine(prev, outputs):
         h = (0xCC03DAE4 + outputs) & m
@@ -90,7 +93,7 @@ def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None
     h = 0xEC42E90D ^ (l1 * 2)
     h = crelu(affine(h, stack_dims(layers)["fc0_out"]))
     h = crelu(affine(h, L3))
-    return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0)
+    return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0) ^ (BLEND_ARCH_HASH if blend else 0)
 
 
 NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
@@ -372,7 +375,7 @@ def read_nnue(path: str) -> dict:
 def _arch_network_hashes() -> dict:
     out = {}
     for name, a in F.ARCHS.items():
-        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx)
+        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx, a.blend)
     return out
 
 
@@ -458,6 +461,28 @@ def _tdiv(a: int, b: int) -> int:
     return q if (a >= 0) == (b > 0) else -q
 
 
+def _stack_eval(q: dict, bucket: int, x: np.ndarray, ctx_out) -> int:
+    """Output of a layer stack (OutputScale units), like NetworkArchitecture::propagate()."""
+    def sqr_crelu(v):   # SqrClippedReLU and ClippedReLU, concatenated
+        return np.concatenate([np.minimum(127, (v * v) >> 19), np.clip(v >> 6, 0, 127)])
+
+    d = stack_dims()
+    fc0 = q["fc0_bias"][bucket] + q["fc0_weight"][bucket] @ x
+    if ctx_out is not None:
+        fc0 = fc0 + q["fc0_ctx"][bucket] @ ctx_out
+    h = np.zeros(d["fc1_file"], dtype=np.int64)
+    h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]])
+    fc1 = q["fc1_bias"][bucket] + q["fc1_weight"][bucket] @ h
+    if F.LAYERS == 2:
+        h2 = np.concatenate([h, sqr_crelu(fc1)])
+        direct = int(fc0[L2_V2 - 2]) - int(fc0[L2_V2 - 1])
+    else:
+        h2 = np.clip(fc1 >> 6, 0, 127)
+        direct = int(fc0[L2])
+    fc2 = int(q["fc2_bias"][bucket] + q["fc2_weight"][bucket] @ h2)
+    return fc2 + _tdiv(direct * (600 * 16), 127 * 64)
+
+
 def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
     """Bit-exact integer evaluation, like Network::evaluate() in the engine.
     Returns (psqt, positional, bucket) in internal units."""
@@ -482,27 +507,16 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
         psqt_acc.append(ps[bucket])
     x = np.concatenate(transformed)                  # uint8 in the engine
 
-    def sqr_crelu(v):   # SqrClippedReLU and ClippedReLU, concatenated
-        return np.concatenate([np.minimum(127, (v * v) >> 19), np.clip(v >> 6, 0, 127)])
-
-    d = stack_dims()
-    fc0 = q["fc0_bias"][bucket] + q["fc0_weight"][bucket] @ x
+    ctx_out = None
     if F.CTX:
         ci = np.array(F.context_inputs(F.parse_fen(fen)), dtype=np.int64)
-        co = np.clip((q["ctx_bias"] + q["ctx_weight"] @ ci) >> 6, 0, 127)
-        fc0 = fc0 + q["fc0_ctx"][bucket] @ co
-    h = np.zeros(d["fc1_file"], dtype=np.int64)
-    h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]])
-    fc1 = q["fc1_bias"][bucket] + q["fc1_weight"][bucket] @ h
-    if F.LAYERS == 2:
-        h2 = np.concatenate([h, sqr_crelu(fc1)])
-        direct = int(fc0[L2_V2 - 2]) - int(fc0[L2_V2 - 1])
-    else:
-        h2 = np.clip(fc1 >> 6, 0, 127)
-        direct = int(fc0[L2])
-    fc2 = int(q["fc2_bias"][bucket] + q["fc2_weight"][bucket] @ h2)
-    fwd = _tdiv(direct * (600 * 16), 127 * 64)
-    positional = fc2 + fwd
+        ctx_out = np.clip((q["ctx_bias"] + q["ctx_weight"] @ ci) >> 6, 0, 127)
+    positional = _stack_eval(q, bucket, x, ctx_out)
+    if F.BLEND:
+        blend = F.layer_stack_selection(F.parse_fen(fen))[1]
+        if blend:
+            nxt = _stack_eval(q, bucket + 1, x, ctx_out)
+            positional = _tdiv(positional * (256 - blend) + nxt * blend, 256)
     psqt = _tdiv(int(psqt_acc[0] - psqt_acc[1]), 2)
     return _tdiv(psqt, 16), _tdiv(positional, 16), bucket
 

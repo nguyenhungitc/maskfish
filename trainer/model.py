@@ -122,32 +122,45 @@ class LayerStacks(nn.Module):
         """SqrClippedReLU and ClippedReLU of the engine, concatenated."""
         return torch.clamp(torch.cat([v.pow(2.0) * (127.0 / 128.0), v], dim=1), 0.0, 1.0)
 
-    def forward(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None, blend=None) -> torch.Tensor:
+        """Output of the layer stack of each sample. blend ("-blend"
+        architectures): interpolation weights (n,) in 0..254, the output is then
+        that of stack b + (that of stack b + 1 - that of stack b) * blend / 256."""
         n = x.shape[0]
-        idx = torch.arange(n, device=x.device) * self.count + buckets.long()
-
-        l1 = self.l1(x)
+        l1_all = self.l1(x)
         if self.l1_ctx is not None:
-            l1 = l1 + self.l1_ctx(ctx)
-        l1 = l1.reshape(n * self.count, self.fc0_out)[idx]
+            l1_all = l1_all + self.l1_ctx(ctx)
+        l1_all = l1_all.reshape(n * self.count, self.fc0_out)
+        fact = self.l1_fact(x) if self.l1_fact is not None else None
+        b = buckets.long()
+        out = self._forward_stack(l1_all, fact, b)
+        if blend is not None:
+            nxt = self._forward_stack(l1_all, fact, torch.clamp(b + 1, max=self.count - 1))
+            out = out + (nxt - out) * (blend.float() / 256.0).unsqueeze(1)
+        return out
+
+    def _forward_stack(self, l1_all: torch.Tensor, fact, buckets: torch.Tensor) -> torch.Tensor:
+        n = buckets.shape[0]
+        idx = torch.arange(n, device=l1_all.device) * self.count + buckets
+        l1 = l1_all[idx]
         if self.layers == 2:
-            if self.l1_fact is not None:
-                l1 = l1 + self.l1_fact(x)
+            if fact is not None:
+                l1 = l1 + fact
             a0 = self._activate(l1)
             l2 = self.l2(a0).reshape(n * self.count, L3)[idx]
             h = torch.cat([a0, self._activate(l2)], dim=1)
             direct = l1[:, L2_V2 - 2] - l1[:, L2_V2 - 1]
         else:
             l1x, l1out = l1.split(L2, dim=1)
-            if self.l1_fact is not None:
-                l1x = l1x + self.l1_fact(x)
+            if fact is not None:
+                l1x = l1x + fact
             a0 = self._activate(l1x)
             l2 = self.l2(a0).reshape(n * self.count, L3)[idx]
             h = torch.clamp(l2, 0.0, 1.0)
             direct = l1out.squeeze(1)
 
-        w = self.output.weight[buckets.long()]          # (n, out_in)
-        b = self.output.bias[buckets.long()]            # (n,)
+        w = self.output.weight[buckets]          # (n, out_in)
+        b = self.output.bias[buckets]            # (n,)
         out = (h * w).sum(dim=1) + b
         return (out + direct).unsqueeze(1)
 
@@ -322,16 +335,17 @@ class NNUE(nn.Module):
         return plain
 
     def forward(self, stm_idx: torch.Tensor, nstm_idx: torch.Tensor,
-                buckets: torch.Tensor, threats=None) -> torch.Tensor:
+                buckets: torch.Tensor, threats=None, blend=None) -> torch.Tensor:
         """stm_idx / nstm_idx: (n, MAX_ACTIVE) feature indices padded with
         PAD_INDEX. threats (threat architectures): (indices, offsets) of the 2n
         bags of threat features (stm, nstm, stm, nstm, ...). Returns the
         evaluation for the side to move, network units (psqt + positional)."""
-        psqt, positional = self.forward_parts(stm_idx, nstm_idx, buckets, threats)
+        psqt, positional = self.forward_parts(stm_idx, nstm_idx, buckets, threats, blend)
         return psqt + positional
 
     def forward_parts(self, stm_idx: torch.Tensor, nstm_idx: torch.Tensor,
-                      buckets: torch.Tensor, threats=None) -> tuple[torch.Tensor, torch.Tensor]:
+                      buckets: torch.Tensor, threats=None,
+                      blend=None) -> tuple[torch.Tensor, torch.Tensor]:
         """Like forward(), but returns the two parts of the network output
         separately, (psqt, positional), each (n, 1) in network units: the
         engine's evaluate() scaling needs both (see eval_scale.py)."""
@@ -360,7 +374,9 @@ class NNUE(nn.Module):
         ctx = None
         if self.ctx_tower is not None:
             ctx = torch.clamp(self.ctx_tower(context_from_features(stm_idx) / 127.0), 0.0, 1.0)
-        return psqt, self.stacks(x, buckets, ctx)
+        if F.BLEND and blend is None:
+            raise ValueError("this architecture needs the layer stack interpolation weights")
+        return psqt, self.stacks(x, buckets, ctx, blend if F.BLEND else None)
 
     def clip_weights(self):
         self.stacks.clip_weights()

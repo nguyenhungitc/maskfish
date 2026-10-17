@@ -28,12 +28,15 @@ Four architectures exist (select with set_arch() before building a model):
 Each of them also exists with options of the engine build, as name suffixes
 in this order (e.g. "threats-l2-nopsqt"):
 
+* "-blend": the layer stack selection of AB-JChess (`make lsblend=yes`, see
+  layer_stack_selection()), which changes the prepared data (layer stack and
+  interpolation weight of each position);
 * "-l2": the layer stacks of `make layers=2` (see model.py);
 * "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
   from AB-JChess, see context_inputs());
 * "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`).
 
-These three only change the model: the input features, and so the prepared
+The last three only change the model: the input features, and so the prepared
 data, are those of the name without them (feature_arch()).
 
 If you change the feature set in the engine, change it here too and re-run
@@ -63,6 +66,7 @@ class Arch(NamedTuple):
     feature_hash: int
     mid_mirror: bool
     threats: bool
+    blend: bool = False
     layers: int = 1
     ctx: bool = False
     psqt: bool = True
@@ -79,6 +83,7 @@ BASE_ARCHS = {
 # Options of the engine build, as name suffixes in this order: (suffix, field
 # of Arch, value with the suffix, whether the prepared data depends on it)
 SUFFIXES = (
+    ("-blend", "blend", True, True),
     ("-l2", "layers", 2, False),
     ("-ctx", "ctx", True, False),
     ("-nopsqt", "psqt", False, False),
@@ -124,7 +129,7 @@ def split_arch(name: str) -> tuple[str, dict]:
 
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -132,12 +137,13 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT, NUM_FEATURES
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT
+    global NUM_FEATURES
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, CTX, PSQT = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT = ARCHS[name]
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
@@ -149,6 +155,12 @@ def feature_arch(name: str) -> str:
     base, fields = split_arch(name)
     return arch_name(base, **{f: v for (_, f, _, data) in SUFFIXES if data
                               for v in [fields[f]]})
+
+
+def input_arch(name: str) -> str:
+    """Architecture of the feature transformer inputs alone: networks with the
+    same input_arch() can share their feature transformer (train.py --init-net)."""
+    return split_arch(name)[0]
 
 
 def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True) -> str:
@@ -440,7 +452,55 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
 
 
 def layer_stack_bucket(pos: JieqiPosition) -> int:
+    if BLEND:
+        return layer_stack_selection(pos)[0]
     return LAYER_STACK_BUCKETS[pos.piece_count()]
+
+
+# Layer stack selection of the "-blend" architectures (make lsblend=yes, from
+# AB-JChess; engine: HalfKAv2_hm::make_layer_stack_selection()). The bucket of
+# the piece count is raised by an "uncertainty phase" (numbers of dark pieces
+# and of rooks, cannons and knights in the pools), and the evaluation is
+# interpolated between the layer stacks floor and floor + 1 with the weight
+# blend / 256, from the position of the three counts within their intervals.
+PIECE_INTERVALS = ((2, 7), (7, 9), (9, 11), (11, 13), (13, 15), (15, 17), (17, 19), (19, 21),
+                   (21, 23), (23, 25), (25, 27), (27, 29), (29, 31), (31, 32), (32, 33), (33, 34))
+DARK_THRESHOLDS = (0, 1, 5, 9, 17, 33)
+STRONG_THRESHOLDS = (0, 2, 5, 9, 19)
+
+
+def _residual(v: int, thresholds) -> tuple[int, int]:
+    k = 0
+    while k + 1 < len(thresholds) and thresholds[k + 1] <= v:
+        k += 1
+    if k >= len(thresholds) - 1:
+        return 0, 1
+    lower, upper = thresholds[k], thresholds[k + 1]
+    return min(upper - lower - 1, max(0, v - lower)), upper - lower
+
+
+def layer_stack_selection(pos: JieqiPosition) -> tuple[int, int]:
+    """(floor, blend): layer stacks floor and floor + 1, weight blend / 256."""
+    pieces = max(2, min(32, pos.piece_count()))
+    dark = sum(1 for s in range(SQUARE_NB) if pos.board[s] and pos.dark[s])
+    strong = sum(pos.rest[make_piece(c, pt)] for c in (WHITE, BLACK)
+                 for pt in (ROOK, CANNON, KNIGHT))
+    dark_phase = 4 if dark >= 17 else 3 if dark >= 9 else 2 if dark >= 5 else 1 if dark >= 1 else 0
+    strong_phase = 3 if strong >= 9 else 2 if strong >= 5 else 1 if strong >= 2 else 0
+    base = LAYER_STACK_BUCKETS[pieces]
+    floor = max(0, min(15, base + dark_phase + strong_phase))
+    if floor == 15:
+        return 15, 0
+    lower, upper = PIECE_INTERVALS[base]
+    r1 = (min(upper - lower - 1, max(0, pieces - lower)), upper - lower)
+    r2 = _residual(dark, DARK_THRESHOLDS)
+    r3 = _residual(strong, STRONG_THRESHOLDS)
+    den = r1[1] * r2[1] * r3[1]
+    num = 85 * (r1[0] * r2[1] * r3[1] + r2[0] * r1[1] * r3[1] + r3[0] * r1[1] * r2[1])
+    blend = (2 * num + den) // (2 * den)        # round(255 * (r1 + r2 + r3) / 3), half up
+    if blend >= 255:
+        return min(15, floor + 1), 0
+    return floor, max(0, min(254, blend))
 
 
 # ---------------------------------------------------------------- inventory context

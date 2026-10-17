@@ -141,9 +141,11 @@ def main():
             s, n, b, _ = F.fen_to_features(fen)
             pad = lambda l: l + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(l))
             thr = threat_inputs(list(F.fen_to_threats(fen))) if F.THREATS else None
+            blend = (torch.tensor([F.layer_stack_selection(F.parse_fen(fen))[1]])
+                     if F.BLEND else None)
             with torch.no_grad():
                 v = model(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
-                          torch.tensor([b]), thr).item() * NNUE2SCORE
+                          torch.tensor([b]), thr, blend).item() * NNUE2SCORE
             worst = max(worst, abs(v - (e_psqt + e_pos)))
     engine.quit()
     if tmp:

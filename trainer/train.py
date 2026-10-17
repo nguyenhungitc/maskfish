@@ -85,7 +85,8 @@ class Data:
         if len(archs) != 1:
             raise SystemExit(f"data prefixes have different architectures: {sorted(archs)}")
         self.arch = archs.pop()
-        self.has_threats = F.ARCHS[self.arch][3]
+        self.has_threats = F.ARCHS[self.arch].threats
+        self.has_blend = F.ARCHS[self.arch].blend
         self.shards = []
         self.threats = []   # per shard: (flat indices, counts (N, 2), position starts) or None
         for prefix in prefixes:
@@ -167,11 +168,14 @@ class Data:
         if self.has_scale:
             material = torch.from_numpy(m["material"].astype(np.float32)).to(device)
             rule40 = torch.from_numpy(m["rule40"].astype(np.float32)).to(device)
+        blend = None
+        if self.has_blend:
+            blend = torch.from_numpy(m["blend"].astype(np.int64)).to(device)
         return (f[:, 0].to(device, non_blocking=True), f[:, 1].to(device, non_blocking=True),
                 torch.from_numpy(m["bucket"].astype(np.int64)).to(device),
                 torch.from_numpy(m["score"].astype(np.float32)).to(device),
                 torch.from_numpy(m["result"].astype(np.float32)).to(device), threats,
-                material, rule40)
+                material, rule40, blend)
 
 
 def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
@@ -180,11 +184,12 @@ def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
     on, otherwise the raw network output."""
     stm, nstm, bucket, _, _, threats = batch[:6]
     material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
+    blend = batch[8] if len(batch) >= 9 else None
     if eval_scale and material is not None:
-        psqt, positional = model.forward_parts(stm, nstm, bucket, threats)
+        psqt, positional = model.forward_parts(stm, nstm, bucket, threats, blend)
         return E.evaluate_float(psqt.squeeze(1) * NNUE2SCORE, positional.squeeze(1) * NNUE2SCORE,
                                 material, rule40)
-    return model(stm, nstm, bucket, threats).squeeze(1) * NNUE2SCORE
+    return model(stm, nstm, bucket, threats, blend).squeeze(1) * NNUE2SCORE
 
 
 def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True):
@@ -284,7 +289,7 @@ def main():
     if args.init_net:
         # A network with the other layer stacks gives only its feature transformer
         init_arch = S.detect_arch(args.init_net)
-        if F.feature_arch(init_arch) != train.arch:
+        if F.input_arch(init_arch) != F.input_arch(train.arch):
             raise SystemExit(f"--init-net is arch '{init_arch}', training '{F.ARCH}' "
                              f"(data '{train.arch}')")
         init_ft_only = init_arch != F.ARCH
