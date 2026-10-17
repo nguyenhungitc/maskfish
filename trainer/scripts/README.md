@@ -6,9 +6,11 @@ without manual steps:
 | Script | What it does |
 | --- | --- |
 | `pipeline.sh` | Runs **one generation**: build → bit-exact check → generate data → prepare → train → verify → SPRT → promote |
-| `autotune.sh` | Runs **generation after generation** with `pipeline.sh`, tests every engine option and trainer flag, measures each new network against AB-JChess and jieqi, and stops when the Elo stops rising *and* both engines are beaten convincingly |
+| `autotune.sh` | Runs **generation after generation** with `pipeline.sh` in stages (AB-JChess games → AB-JChess scores → self-play), measures each new network against AB-JChess, tests the engine options once the net is strong, and stops when the Elo stops rising |
 | `hw_probe.py` | Hardware probe used by `pipeline.sh` (CPU, RAM, disk, GPU, largest batch that fits in VRAM) |
 | `pipeline.env.example` | Configuration template shared by both scripts |
+| `autotune.env.example` | Settings of the stages and option tests |
+| `optpatch.py` | Source rewriting used for the option patches |
 
 Both scripts report every step to Telegram and can be stopped and restarted
 at any time. Run them from the `trainer/` directory (they `cd` there
@@ -31,20 +33,19 @@ themselves, so any working directory works).
 - Python with `numpy`, `zstandard`, `torch` (`pip install -r requirements.txt`);
   a CUDA build of torch to train on the GPU. A `trainer/.venv` is used
   automatically if it exists.
-- For `autotune.sh`, the two reference engines. Default layout (next to
-  `src/` and `trainer/`):
+- AB-JChess (https://github.com/lxsgx23/AB-JChess) for `--source ab|distill`
+  and for `autotune.sh`. Default layout (next to `src/` and `trainer/`):
 
   ```
   maskfish/
     jieqi/
       abjchess                    AB-JChess binary (Linux build)
       abjchess-20261010.nnue      AB-JChess network (the newest abjchess*.nnue is used)
-      jieqi                       jieqi engine binary (https://github.com/nguyenhungitc/jieqi)
     src/  trainer/ ...
   ```
 
-  Other locations are set with `AB_ENGINE`, `AB_NET`, `JQ_ENGINE` (or
-  `JIEQI_DIR`) in `autotune.env`.
+  Other locations are set with `AB_ENGINE`, `AB_NET` (or `JIEQI_DIR`) in
+  `pipeline.env`.
 
 ## 2. Configuration
 
@@ -156,178 +157,170 @@ run `--train-only` there: the missing files are prepared first.
 
 ## 4. autotune.sh — the full loop
 
-`autotune.sh` is a single self-contained file (its Python helper is embedded
-and extracted to `autotune/optpatch.py` at run time). It never edits your
-working tree: option changes are made in a separate git worktree and
-delivered as patches.
+`autotune.sh` trains Maskfish in stages, using AB-JChess first as a teacher
+and then only as a yardstick, and tests the engine options once the net is
+strong enough. It never edits your working tree: option changes are made in a
+separate git worktree and delivered as patches.
 
 ### 4.1. Usage
 
 ```
+scripts/autotune.sh --reset            # archive ALL old results (autotune, nets, data, runs, logs)
+                                       # to trainer/archive-DATE/ and start from zero
 scripts/autotune.sh                    # run / resume
 nohup scripts/autotune.sh --supervise >> autotune/supervise.log 2>&1 &   # recommended for long runs
 scripts/autotune.sh --install-cron     # also restart after a reboot (@reboot crontab entry)
-scripts/autotune.sh --status           # current state and every decision so far
+scripts/autotune.sh --status           # stage, current net, Elo vs AB-JChess, every decision
 scripts/autotune.sh --stop             # stop safely; run again to resume
 scripts/autotune.sh --report           # rewrite autotune/REPORT.md and send it to Telegram
-scripts/autotune.sh --init-config      # write scripts/autotune.env (template)
+scripts/autotune.sh --init-config      # write scripts/autotune.env from autotune.env.example
+scripts/autotune.sh --dry-run          # print what the next round would run
 scripts/autotune.sh --test-telegram
 ```
 
-Before the first run, `nets/gen0.nnue` must exist (`scripts/pipeline.sh -g 0`
-creates it). The loop starts from the highest `nets/genN.nnue`.
+Nothing has to exist before the first run except AB-JChess
+(`jieqi/abjchess` and `jieqi/abjchess*.nnue`, see section 1).
 
-### 4.2. One round
+### 4.2. Stages
 
-1. **Measure** the current net against AB-JChess and jieqi (once per
-   generation): `EXT_PAIRS` game pairs per engine at `EXT_MOVETIME` ms per
-   move, always the same openings (`EXT_SEED`), so that generations are
-   compared fairly.
-2. **Engine option tests** (once, from generation `OPT_AT_GEN`, see 4.3).
-3. **Generate data** with the current net: `pipeline.sh -g N --gen-only`.
+| Stage | Data (`pipeline.sh --source`) | Leaves the stage when |
+| --- | --- | --- |
+| **1 · ab** | AB-JChess plays both sides (`AB_GEN_NODES`) and scores the positions; Maskfish is only the referee for the board. `GEN0_GAMES` games, then train from scratch → SPRT against the material-only `gen0` | a net wins (→ gen1) |
+| **2 · distill** | The current Maskfish net plays (`DISTILL_NODES`), AB-JChess scores every position kept (`AB_LABEL_NODES`) | a new net measures ≥ `NEAR_AB_ELO` against AB-JChess, or `DISTILL_PATIENCE` failed attempts in a row |
+| **3 · self** | The net plays and scores its own games (`SELF_NODES`) | — (runs until the end) |
+| **4 · options** | Option cycles (4.4), interleaved with stages 2–3 | — |
+
+Every new net is measured against AB-JChess (`EXT_PAIRS` pairs at
+`EXT_MOVETIME` ms per move, same openings every time).
+
+AB-JChess prints its scores on a win-probability scale of its own. Its scale
+is fitted once on its own games (gen0, saved in `data/ab.scale`) and every
+file it scored is prepared with `--score-scale SCALING / ab.scale`, so all
+the data is in Maskfish units. Each text file says who scored it in
+`FILE.src`; the scale used for each prepared prefix is in `PREFIX.scale`.
+
+### 4.3. One round
+
+1. If a net was promoted but not measured yet: measure it against AB-JChess.
+2. If an option cycle is due (4.4): run it.
+3. **Generate data** for the current stage: `pipeline.sh -g N --source S --gen-only`.
    Later attempts of the same generation add a new batch (`--tag aK`).
-4. **Trainer flag tests** (once, see 4.4).
-5. **Train → verify → SPRT → promote**: `pipeline.sh -g N --train-only`,
-   with the accepted engine options in the data generation and in the SPRT,
-   and the accepted trainer flags in `TRAIN_ARGS`.
-6. If a new net was promoted, it is measured against the two engines (step 1).
-   If no epoch won the SPRT, the next attempt changes strategy in turn:
-   more data and continue training → more data, train from scratch with 1.5×
-   the epochs → more data, half the learning rate and λ 0.9 (from the 5th
-   attempt also 1.5× the nodes).
+4. **Train → verify → SPRT → promote**: `pipeline.sh -g N --train-only`, on
+   the data of the last `TRAIN_WINDOW` generations, with the options in use.
+   A candidate is promoted on SPRT H1, or, when the SPRT has no decision
+   after `MATCH_MAX_PAIRS` pairs, if its Elo − 95 % error is above 0.
+5. A new net is measured against AB-JChess. Failed attempts change strategy in
+   turn: more data and continue training → more data, from scratch with 1.5×
+   the epochs → more data, half the learning rate and λ 0.9.
+6. In stage self, `PATIENCE` failures in a row raise the level (games ×
+   (1 + level/2), nodes × (1 + level/4), up to `LEVEL_CAP`).
 
-### 4.3. Engine option tests
+### 4.4. Engine option tests
 
-The options are read from `src/engine.cpp` (`options.add(...)`), so new
-options are picked up automatically.
+The first cycle starts once a net reaches `OPT_START_ELO` against AB-JChess
+(or in stage self); then a new cycle runs every `OPT_EVERY` new nets, and once
+more before stopping. The options are read from `src/engine.cpp`
+(`options.add(...)`), so new options are picked up automatically: booleans are
+tested with the opposite of their default, numeric options with the values
+of `OPT_INT_TESTS`, groups from `OPT_GROUP_TESTS`. `OPT_EXCLUDE` are never
+tested: output only, several threads only (`SharedHistory`,
+`SimpleThreadVote`), time management only (`StopEarly`, `SimpleMtg`: no
+effect with a node limit, test them with `match.py --tc`), speed only
+(`ThreatCache`, `ThreatsIncremental`: same search, compare the speed with
+`bench`; a fixed-node SPRT would see 0 Elo and remove them), data format
+(`JieqiMaterial`), and `SeekMate`, which does not aim at playing strength.
+Accepted options are used for the data too, except `NO_DATA_OPTS`
+(`RevealQuiet*` and `RevealQsearchEvasions`, and `EvalScaling`: the data
+is made with the scaling the training uses, `EVAL_SCALING` of pipeline.env;
+the group `EvalCorrelation` tests `EvalScaling=Correlation`, which the
+trainer does not model).
 
-- **Boolean options**: the opposite of the default is tested.
-- **Numeric options**: the values of `OPT_INT_TESTS` (e.g.
-  `ChanceRiskAversion:10,20,-10`).
-- **Option groups**: `OPT_GROUP_TESTS` (e.g. all `RevealQuiet*` set to 0).
-- **Not tested** (`OPT_EXCLUDE`): `Ponder`, `UCI_ShowWDL`, `RawScore`,
-  `SharedHistory` (only matters with several threads), `StopEarly` (time
-  management only), `JieqiMaterial` (needs data prepared with
-  `--jieqi-material`).
-
-Each value plays an SPRT `OPT_SPRT` (default `[0, 5]`) against the current
-settings, same net, `OPT_NODES` nodes per move:
+Each value plays an SPRT `OPT_SPRT` (default `[0, 3]`) with the current net,
+at `OPT_NODES` nodes per move, against the options in use, for at most
+`OPT_MAX_PAIRS` pairs:
 
 | Result | Action |
 | --- | --- |
-| H1, and the Elo against AB-JChess + jieqi does not drop (`OPT_EXT_CONFIRM`) | **Kept**: used from now on, and a patch makes it the default in `src/engine.cpp` |
-| H0 or no decision after `OPT_MAX_PAIRS` pairs | **Removed**: a patch deletes the option from the code. Numeric options are only removed if listed in `OPT_INT_REMOVABLE`; groups are never removed |
+| H1 | **On by default**: used from now on, and a verified patch changes the default in `src/engine.cpp` |
+| H0 with Elo ≤ 0 | **Removed**: a verified patch deletes the option (numeric options only if in `OPT_INT_REMOVABLE`) |
+| H0 with Elo > 0 | Left as it is (a gain smaller than the SPRT bound, if any); not retested |
+| No decision | Left as it is and **tested again** in up to `OPT_RETRY` later cycles (with a stronger net). The undecided options with a positive estimate are also tested **together** in one SPRT (`OPT_GROUP`); if the group wins, all of them become defaults |
+
+Why these rules: Jieqi games are very noisy (about 2 % draws, a pair score
+standard deviation of ~0.35), so an option worth +3 Elo needs ~10 000 pairs to
+be proven. Treating "not proven yet" as "useless" removed good options in
+the previous version; now only an option that is shown to be no better
+(H0) is removed. There is no confirmation against the outside engines
+either: 100 pairs (±50 Elo) cannot see a few Elo and only added noise.
 
 Removing an option means: the `options.add` call and its comment go, the
 member variable becomes `static constexpr` with the default value, and the
-dead branches are folded (`if (opt) …`, `opt ? a : b`, `opt && …`, …).
-Every patch is **built and checked with `bench`**: the patched engine must
-search exactly the same number of nodes as the original engine with the
-accepted options set. If not (or if folding is impossible), it retries
-without folding; if it still differs, nothing is committed and Telegram says
-the option has to be edited by hand.
-
-### 4.4. Trainer flag tests
-
-Every variant of `TRAIN_VARIANTS` is trained on the same prepared data, from
-the same net, for `ABL_EPOCHS` epochs, like a baseline without the flag; the
-variant's net then plays an SPRT `ABL_SPRT` against the baseline's net.
-
-| Default variants | Tested values | Removable |
-| --- | --- | --- |
-| `--no-factorize` | on | yes |
-| `--factorize-kb` | on | yes |
-| `--no-l1-fact` | on | yes |
-| `--stack-balance` | 8, 16 | yes |
-| `--output-lr-scale` | 0.05, 0.2 | no |
-| `--lambda` | 0.9, 0.75 | no |
-
-A winner becomes the default in `train.py` (patch) and is used for the
-following generations; a removable loser is deleted from `train.py` (the
-`add_argument` goes, `args.x` becomes its default value, constant `if`
-blocks are folded).
+dead branches are folded. Every patch is **built and checked with `bench`**:
+the patched engine must search exactly as many nodes as the original engine
+with the options in use. If not, nothing is committed and Telegram says the
+option has to be edited by hand (it is still used in the runs).
 
 ### 4.5. When does it stop?
 
-After every round:
+In stage self, at level `LEVEL_CAP`, after `PATIENCE` failed attempts in a
+row, one more option cycle runs with the current net. If it brings no gain,
+the run **finishes**: no new net can be found with the largest data / search
+budget and no option helps, so the Elo is at its maximum for this setup.
+Telegram then receives the final results, `REPORT.md` and the combined patch.
+`MAX_HOURS` puts an optional time limit on a run.
 
-- **Improvement** = the average Elo against the two engines rose by more
-  than `EXT_EPS` compared with the best net so far. The best net is copied to
-  `nets/best.nnue`.
-- **Plateau** = `PATIENCE` rounds in a row without improvement (a failed SPRT
-  also counts as a round without improvement).
-- **Convincing win** = against **both** engines, Elo − 95 % error ≥
-  `WIN_MIN_ELO`.
-
-The run **finishes** only when the plateau is reached **and** the best net
-wins convincingly against both engines. A plateau without a convincing win
-raises the scale level instead (data × (1 + level/2), nodes × (1 + level/4),
-up to `LEVEL_CAP`) and the loop continues. `MAX_HOURS` puts an optional time
-limit on a run.
-
-When it finishes, Telegram receives the final results, `REPORT.md` and the
-combined patch.
+To go further afterwards: raise `LEVEL_CAP`, `GAMES` or `SELF_NODES`, try
+another architecture (`NNUE_ARCH`, `LAYERS`), delete `ST[finished]` from
+`autotune/state.sh`, and run again.
 
 ### 4.6. Settings
 
-Set in `scripts/autotune.env` (generation, training and SPRT settings come from
-`pipeline.env`).
+In `scripts/autotune.env` (see `autotune.env.example`); data, training and SPRT
+settings come from `pipeline.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `JIEQI_DIR` | `../jieqi` | Directory of the reference engines |
-| `AB_ENGINE`, `AB_NET`, `AB_OPTS` | `$JIEQI_DIR/abjchess`, newest `abjchess*.nnue`, `ChasingRule=github` | AB-JChess |
-| `JQ_ENGINE`, `JQ_OPTS` | `$JIEQI_DIR/jieqi`, empty | jieqi |
-| `EXT_MOVETIME` | 200 | ms per move against the reference engines |
-| `EXT_PAIRS` | 200 | Game pairs per engine and measurement |
-| `EXT_HASH` / `EXT_SEED` | 64 / 20261015 | Hash (MB) / fixed opening seed |
-| `WIN_MIN_ELO` | 50 | Convincing win threshold (Elo − error) |
-| `EXT_EPS` | 5 | Minimum average Elo gain that counts as an improvement |
-| `PATIENCE` | 3 | Rounds without improvement = maximum reached |
-| `LEVEL_CAP` | 8 | Maximum scale-up level |
-| `MAX_HOURS` | 0 | Time limit (0 = none) |
-| `OPT_AT_GEN` | 1 | First generation for the option tests (earlier on a plateau) |
-| `OPT_NODES` / `OPT_SPRT` / `OPT_MAX_PAIRS` | `MATCH_NODES` / `0 5` / 3000 | Option SPRT |
-| `OPT_EXT_CONFIRM` / `OPT_EXT_PAIRS` / `OPT_EXT_TOL` | 1 / 100 / 0 | Confirmation of a winning option against the reference engines |
-| `OPT_EXCLUDE` | see 4.3 | Options never tested |
-| `OPT_INT_TESTS` / `OPT_INT_REMOVABLE` | `ChanceRiskAversion:10,20,-10` / `ChanceRiskAversion` | Numeric options |
-| `OPT_GROUP_TESTS` | `RevealQuietOff:RevealQuietBase=0+RevealQuietSafety=0+RevealQuietHighValue=0` | Option groups |
-| `OPT_ONLY` | empty | Only test these options |
-| `TRAIN_ABL` | 1 | Test the trainer flags |
-| `ABL_EPOCHS` / `ABL_EPOCH_SIZE` / `ABL_SPRT` / `ABL_MAX_PAIRS` | `EPOCHS/2` / `EPOCH_SIZE` / `0 5` / 3000 | Trainer flag tests |
-| `TRAIN_VARIANTS` | see 4.4 | `id\|flag\|values\|removable` (bash array) |
+| `AB_ENGINE`, `AB_NET`, `AB_OPTS` | `../jieqi/abjchess`, newest `abjchess*.nnue`, `ChasingRule=github` | AB-JChess (also in `pipeline.env`) |
+| `AB_GEN_NODES` / `AB_LABEL_NODES` / `AB_ADJUDICATE` (pipeline.env) | 10000 / 20000 / 1500 | AB-JChess nodes when it plays / when it scores; adjudication threshold in AB-JChess units |
+| `GEN0_GAMES` / `GEN0_EPOCHS` | `GAMES` / `EPOCHS` | Stage ab |
+| `DISTILL_NODES` | `NODES` | Maskfish nodes per move in stage distill |
+| `NEAR_AB_ELO` / `DISTILL_PATIENCE` | -30 / 3 | End of stage distill |
+| `SELF_NODES` | 2 × `NODES` | Maskfish nodes per move in stage self |
+| `PATIENCE` / `LEVEL_CAP` | 3 / 4 | Failures before a scale-up / highest level |
+| `TRAIN_WINDOW` | 4 | Train on the data of the last N generations (0 = all) |
+| `EXT_MOVETIME` / `EXT_PAIRS` / `EXT_SEED` | 200 / 400 / 20261017 | Measurement against AB-JChess |
+| `OPT_START_ELO` / `OPT_EVERY` | `NEAR_AB_ELO` / 3 | When option cycles run |
+| `OPT_NODES` / `OPT_SPRT` / `OPT_MAX_PAIRS` | `MATCH_NODES` / `0 3` / 12000 | Option SPRT |
+| `OPT_RETRY` / `OPT_GROUP` | 2 / 1 | Undecided options: retests, group test |
+| `OPT_EXCLUDE`, `OPT_INT_TESTS`, `OPT_INT_REMOVABLE`, `OPT_GROUP_TESTS`, `OPT_ONLY` | see the example | What is tested |
+| `NO_DATA_OPTS` | `RevealQuiet RevealQsearchEvasions EvalScaling` | Accepted options (name prefixes) never used to generate data |
 | `BENCH_ARGS` | `16 1 13` | `bench` used to verify the patches |
-| `RETRY_MAX` | 5 | Retries of a failed `pipeline.sh` call |
-| `KEEP_ATTEMPT_PT` | 0 | Keep the checkpoints of failed attempts |
+| `MAX_HOURS` / `RETRY_MAX` | 0 / 5 | Time limit / retries of a failed `pipeline.sh` call |
 
 ### 4.7. Recovery
 
 All progress is written to `autotune/state.sh` after every step; finished
-matches are kept in `autotune/results/` and reused. Running the same command
-again (or the restart done by `--supervise`, or by cron after a reboot)
-continues exactly where it stopped: no finished match, data batch or patch is
-redone, `pipeline.sh` resumes the data and the training itself. An interrupted
-match is restarted from its beginning.
+matches are kept in `autotune/results/` and reused; data generation resumes
+from the finished games (`.partK` files); training resumes from `last.pt`.
+Running the same command again (or the restart done by `--supervise`, or by
+cron after a reboot) continues where it stopped. An interrupted match is
+restarted from its beginning.
 
-`--supervise` restarts after an error (after 1, 2, … 5 minutes, then every 10 minutes) but not
-when a reference engine or a file is missing (exit code 5).
-
-To redo a part, edit `autotune/state.sh` while nothing runs, e.g. delete the
-`ST[opt_done]` and `ST[opt_<Name>]` lines to test the options again with a
-newer net.
+`--supervise` restarts after an error (after 1, 2, … 5 minutes, then every 10
+minutes) but not when AB-JChess or a file is missing (exit code 5).
 
 ### 4.8. Telegram messages
 
 | Icon | When |
 | --- | --- |
 | 🚀 | Start / resume |
-| 🎯 ✅ | Measurement against the reference engines, Elo per engine, best so far |
-| 🔬 | Engine option tests: start, every decision (✅ kept / ❎ removed, with the patch attached), end |
-| 🧪 | Trainer flag tests |
 | ▶ ✅ 📈 | Steps of `pipeline.sh` (its own messages, including training progress) |
 | 🏆 / ↩ | New net promoted / no epoch won the SPRT |
-| ⛰ | Plateau without a convincing win → scale-up |
-| ⏸ ❌ 🔁 | Stopped / error / automatic restart |
+| 🎯 📊 | Measurement against AB-JChess |
+| 🔁 | Next stage |
+| 🔬 ✅ ❎ 🧩 | Option cycle: start, every decision (with the patch), group test, end |
+| ⛰ | Scale-up / last option cycle |
+| ⏸ ❌ | Stopped / error / automatic restart |
 | 🏁 | Finished: final results, report and combined patch |
 
 ## 5. Files and directories
@@ -336,10 +329,10 @@ All in `trainer/`:
 
 | Path | Content |
 | --- | --- |
-| `nets/genN.nnue` | Promoted networks; `nets/best.nnue` = best against the reference engines |
-| `data/genN*.txt`, `data/valN*.txt`, `data/prep-<arch>/` | Text and prepared data |
+| `nets/genN.nnue` | Promoted networks (`gen0` = material only); the highest N is the current net |
+| `data/ab.scale` | Score scale of AB-JChess (fitted on its gen0 games) |
+| `data/genN*.txt`, `data/valN*.txt`, `data/prep-<arch>/` | Text and prepared data; `FILE.src` = who played / scored it |
 | `runs/gen(N+1)/` | Training output of the current attempt (`runs/gen(N+1).tryK` = earlier attempts) |
-| `runs/abl-gN/` | Trainer flag test runs |
 | `logs/genN/` | `pipeline.sh` logs, one file per step |
 | `autotune/state.sh` | Saved state of `autotune.sh` |
 | `autotune/autotune.log`, `autotune/logs/` | Log of the loop; pipeline, build and patch logs |
@@ -371,7 +364,7 @@ Rebuild the engine afterwards and check with `bench` (or `verify.py`).
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `Cannot start: AB-JChess not found` / `jieqi engine not found` | Set `AB_ENGINE` / `JQ_ENGINE`, or put the binaries in `jieqi/`. They must be Linux builds (not `.exe`); a missing executable bit is fixed automatically |
+| `Cannot start: AB-JChess not found` | Set `AB_ENGINE` / `AB_NET`, or put the binary and its network in `jieqi/`. They must be Linux builds (not `.exe`); a missing executable bit is fixed automatically |
 | `engine ... does not answer UCI` | Wrong binary or missing library: try `printf 'uci\nisready\nquit\n' \| jieqi/abjchess` |
 | `No CUDA` in the environment check | Install a CUDA build of torch, or set `DEVICE=cpu` / `REQUIRE_GPU=0` in `pipeline.env` (very slow) |
 | `Engine and trainer are NOT bit-exact` | The engine and the trainer disagree: use the same commit for both, rebuild; see `trainer/README.md` section 11 |
@@ -379,4 +372,6 @@ Rebuild the engine afterwards and check with `bench` (or `verify.py`).
 | `uncommitted changes` warning | `src/` or `trainer/*.py` differ from `HEAD`: patches are made on `HEAD`, the `bench` check may then fail. Commit first |
 | `autotune is already running` | Another run holds `autotune/.lock`; `--status` shows its pid |
 | Telegram messages missing | `scripts/pipeline.sh --test-telegram`; check `TG_BOT_TOKEN` / `TG_CHAT_ID` and that `curl` is installed |
-| The run never finishes | The goal is not reached yet: check `--status` (plateau, level, Elo per generation). Lower `WIN_MIN_ELO`, raise `EXT_PAIRS` (smaller error), or set `MAX_HOURS` |
+| `no UCI option X` | An option in `AB_OPTS`, `GEN_OPTS`, `MATCH_OPTS` or `--opt` does not exist in that engine (misspelt, or a binary older than the option: rebuild). Options are no longer ignored silently |
+| Stuck in stage ab | gen1 must beat the material-only gen0: every failed attempt adds `GEN0_GAMES` more AB-JChess games; check the SPRT lines in `logs/gen0/` |
+| The run never finishes | It ends at level `LEVEL_CAP` after `PATIENCE` failures and an option cycle without gain: check `--status`; lower `LEVEL_CAP` / `PATIENCE` or set `MAX_HOURS` |

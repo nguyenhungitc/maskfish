@@ -1090,7 +1090,8 @@ python ftperm.py nets/gen3.nnue --data data/gen3.txt.zst --stats-only   # report
   second on the test machine vary more than that). Well-trained networks are
   sparser, so the gain should be larger: measure with `bench` on your machine.
 - Run it on the network that will be used (`scripts/pipeline.sh` does it
-  after promoting the SPRT winner, `FTPERM=1`). The permuted `.nnue` no
+  after promoting the SPRT winner with `FTPERM=1` in pipeline.env; off by
+  default). The permuted `.nnue` no
   longer matches the training checkpoint column for column, so compare it
   with `verify.py` without `--checkpoint`; training can continue from it
   (`--init-net`) or from the checkpoint as before.

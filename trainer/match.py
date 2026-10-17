@@ -124,11 +124,12 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
 
 
 def make_engine(path, net, opts, hash_mb):
-    o = {"Threads": 1, "Hash": hash_mb, "RawScore": "true"}
+    o = {"Threads": 1, "Hash": hash_mb}
     if net:
         o["EvalFile"] = os.path.abspath(net)
     o.update(opts)
-    return U.Engine(path, o)
+    # RawScore only exists in this engine (adjudication compares internal units)
+    return U.Engine(path, o, optional={"RawScore": "true"})
 
 
 def worker_init(args):
@@ -219,7 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--engine-a")
     ap.add_argument("--engine-b")
     ap.add_argument("--net-a")
-    ap.add_argument("--net-b", help="default: same as --net-a")
+    ap.add_argument("--net-b", help="default: same as --net-a when B is the same engine, "
+                                     "otherwise B's own default network")
     ap.add_argument("--opt-a", nargs="*", default=[], help="UCI options of A, Name=Value")
     ap.add_argument("--opt-b", nargs="*", default=[], help="UCI options of B, Name=Value")
     ap.add_argument("--nodes", type=int, default=20000)
@@ -251,7 +253,9 @@ def finalize_args(args):
     args.engine_b = args.engine_b or args.engine or args.engine_a
     if not args.engine_a:
         raise SystemExit("--engine or --engine-a is required")
-    args.net_b = args.net_b or args.net_a
+    # another engine keeps its own network unless --net-b is given
+    if not args.net_b and os.path.realpath(args.engine_b) == os.path.realpath(args.engine_a):
+        args.net_b = args.net_a
     if not isinstance(args.opt_a, dict):
         args.opt_a = parse_opts(args.opt_a)
     if not isinstance(args.opt_b, dict):
@@ -289,6 +293,15 @@ def main():
     print(f"go {args.go}, {args.workers} workers"
           + (f", SPRT [{args.sprt[0]}, {args.sprt[1]}] bounds [{lower:.2f}, {upper:.2f}]"
              if args.sprt else ""), flush=True)
+
+    # check both engines and their options once here (an error in the pool
+    # initializer would make multiprocessing respawn the workers forever)
+    try:
+        for path, net, opts in ((args.engine_a, args.net_a, args.opt_a),
+                                (args.engine_b, args.net_b, args.opt_b)):
+            make_engine(path, net, opts, 1).quit()
+    except U.UnknownOption as e:
+        raise SystemExit(f"error: {e}")
 
     pairs, decision, line = [], None, "no game finished"
     games_iter = play_pairs(args, args.pairs, args.seed)
