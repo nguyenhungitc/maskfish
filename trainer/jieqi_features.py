@@ -324,7 +324,9 @@ def parse_fen(fen: str) -> JieqiPosition:
                     raise ValueError(f"bad FEN piece {ch!r}: {fen}")
                 pos.board[s] = idx
             f += 1
-    pos.side_to_move = WHITE if len(parts) < 2 or parts[1] == 'w' else BLACK
+    # As Position::set() in the engine: only "b" is black; anything else (also
+    # a missing field, or "r" for red as in some xiangqi FENs) is white
+    pos.side_to_move = BLACK if len(parts) > 1 and parts[1] == 'b' else WHITE
     if len(parts) > 2 and parts[2] != '-':
         tok = parts[2]
         i = 0

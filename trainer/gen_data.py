@@ -57,7 +57,7 @@ def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int
     for ply in range(args.max_plies):
         engine.set_position(views[ply % 2])        # the view of the side to move
         fen, in_check = engine.board_info()
-        stm = 1 if fen.split()[1] == "w" else -1
+        stm = -1 if fen.split()[1] == "b" else 1   # as the engine reads a FEN
 
         repeated = repetitions.push(fen, in_check)
         if repeated is not None:
