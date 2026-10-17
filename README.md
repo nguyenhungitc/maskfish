@@ -195,6 +195,8 @@ each one with SPRT before changing its default.
 | `FrequentTimeCheck` | `false` | Check the time every 64 nodes instead of 512, to overrun short time limits less. |
 | `VoteSinglePVOnly` | `false` | With several threads, choose the best thread by vote only when `MultiPV` is 1; in MultiPV analysis the main thread's lines are reported. |
 | `RevealQsearchEvasions` | `false` | Also add the safe reveal bonus (`RevealQuiet*`) to quiet moves of dark pieces that evade a check in the quiescence search. |
+| `ChanceModel` | `Winrate` | How the outcomes of a chance node are averaged. `Winrate`: in win-rate space (`ChanceScaling`). `Tables`: as AB-JChess, with score ↔ mass lookup tables (`ChanceTables`; without tables, `Winrate` is used). `Linear`: average of the scores clamped to ±2000, AB-JChess's `AggressiveLevel` 10 when combined with `ChanceRiskAversion` 3. `ChanceRiskAversion` applies to every model. |
+| `ChanceTables` | `<empty>` | Directory holding the tables of `ChanceModel Tables` (`probability_score_to_mass.i32le` and `probability_mass_to_score.i32le`, AB-JChess's format). Make them with [`trainer/chance_tables.py`](trainer/chance_tables.py): `fit` from self-play data, `logistic` (equivalent to `Winrate`) or `extract` from an AB-JChess network. |
 
 ### Debugging commands
 

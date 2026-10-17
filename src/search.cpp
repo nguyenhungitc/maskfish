@@ -27,7 +27,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
+#include <iterator>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -384,6 +388,13 @@ bool Search::Worker::iterative_deepening() {
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
+    chanceModel        = options["ChanceModel"] == "Tables" ? ChanceModel::Tables
+                       : options["ChanceModel"] == "Linear" ? ChanceModel::Linear
+                                                            : ChanceModel::Winrate;
+    // Without tables, ChanceModel Tables averages in win-rate space
+    chanceTables = chanceModel == ChanceModel::Tables ? chance_tables() : nullptr;
+    if (chanceModel == ChanceModel::Tables && !chanceTables)
+        chanceModel = ChanceModel::Winrate;
     revealQuiet        = {int(options["RevealQuietBase"]), int(options["RevealQuietPhase"]),
                           int(options["RevealQuietSafety"]), int(options["RevealQuietHighValue"]),
                           int(options["RevealQuietDiversity"])};
@@ -2260,6 +2271,12 @@ Value Search::Worker::aggregate_chance(
     if (allLoss)
         return vmax;
 
+    if (chanceModel == ChanceModel::Tables)
+        return std::clamp(aggregate_tables(values, counts, n, total, kind), vmin, vmax);
+
+    if (chanceModel == ChanceModel::Linear)
+        return std::clamp(aggregate_linear(values, counts, n, total, kind), vmin, vmax);
+
     double winrateSum = 0.0, winrateSqSum = 0.0;
     for (int i = 0; i < n; ++i)
     {
@@ -2288,6 +2305,120 @@ Value Search::Worker::aggregate_chance(
                                                 chanceScaling, Rounding::Up));
 }
 
+
+namespace {
+
+// Rounds x (a bound of the aggregate, or the aggregate itself) according to kind:
+// a lower bound down, an upper bound up, an exact value towards zero (as the
+// integer divisions of AB-JChess). floor <= trunc <= ceil, so the bounds stay
+// bounds of the exact value.
+double round_chance(double x, int kindSign) {
+    return kindSign < 0 ? std::floor(x) : kindSign > 0 ? std::ceil(x) : std::trunc(x);
+}
+
+}  // namespace
+
+// ChanceModel Linear: the average of the outcomes clamped to +-2000 (the
+// AggressiveLevel 10 of AB-JChess), plus ChanceRiskAversion times their
+// standard deviation (at most 2000, the bound used for Lower / Upper).
+// AB-JChess's level 10 subtracts 4/128 of sqrt(sum of the squared deviations)
+// for the side causing the chance event, i.e. about 3% of the standard
+// deviation times sqrt(number of outcomes).
+Value Search::Worker::aggregate_linear(
+  const Value* values, const int* counts, int n, int total, ChanceBound kind) const {
+
+    constexpr int Bound = 2000;
+
+    std::int64_t sum   = 0;
+    double       sqSum = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const int v = std::clamp(int(values[i]), -Bound, Bound);
+        sum += std::int64_t(v) * counts[i];
+        sqSum += double(v) * v * counts[i];
+    }
+
+    const double mean = double(sum) / total;
+    double       x;
+
+    if (kind == ChanceBound::Exact)
+    {
+        x = mean;
+        if (chanceRisk != 0.0)
+            x += chanceRisk * std::sqrt(std::max(0.0, sqSum / total - mean * mean));
+        return Value(chanceRisk != 0.0 ? std::trunc(x) : double(sum / total));
+    }
+
+    if (kind == ChanceBound::Lower)
+        return Value(round_chance(mean + std::min(chanceRisk, 0.0) * Bound, -1));
+
+    return Value(round_chance(mean + std::max(chanceRisk, 0.0) * Bound, 1));
+}
+
+// ChanceModel Tables, as AB-JChess: from the point of view of the side whose
+// move caused the chance event (the parent node), the outcomes are converted
+// to "masses" with the table score -> mass, averaged, and converted back with
+// the table mass -> score. Outcomes all beyond the range of the tables on the
+// same side are averaged linearly. With ChanceRiskAversion, the standard
+// deviation of the masses (at most 950) is taken into account as in the
+// other models. Both tables being non-decreasing, the aggregate is
+// non-decreasing in every outcome.
+Value Search::Worker::aggregate_tables(
+  const Value* values, const int* counts, int n, int total, ChanceBound kind) const {
+
+    assert(chanceTables);
+    const ChanceTables& t = *chanceTables;
+
+    // Sign of the rounding of a value from the point of view of the side to
+    // move here: down for a lower bound, up for an upper bound
+    const int kindSign = kind == ChanceBound::Lower ? -1 : kind == ChanceBound::Upper ? 1 : 0;
+
+    Value vmin = values[0], vmax = values[0];
+    for (int i = 0; i < n; ++i)
+    {
+        vmin = std::min(vmin, values[i]);
+        vmax = std::max(vmax, values[i]);
+    }
+
+    if (vmin > ChanceTables::ScoreMax || vmax < ChanceTables::ScoreMin)
+    {
+        std::int64_t sum = 0;
+        for (int i = 0; i < n; ++i)
+            sum += std::int64_t(values[i]) * counts[i];
+        return Value(kindSign ? round_chance(double(sum) / total, kindSign) : double(sum / total));
+    }
+
+    // Masses of the parent (scores of the outcomes negated)
+    std::int64_t massSum   = 0;
+    double       massSqSum = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const int m = t.mass(-int(values[i]));
+        massSum += std::int64_t(m) * counts[i];
+        massSqSum += double(m) * m * counts[i];
+    }
+
+    const double mean = double(massSum) / total;
+    constexpr double MaxDeviation = (ChanceTables::MassMax - ChanceTables::MassMin) / 2.0;
+    double           parentMass;
+
+    // A lower bound here is an upper bound of the parent's mass, and vice versa
+    if (kind == ChanceBound::Exact)
+    {
+        if (chanceRisk == 0.0)
+            parentMass = double(massSum / total);
+        else
+            parentMass = std::trunc(
+              mean - chanceRisk * std::sqrt(std::max(0.0, massSqSum / total - mean * mean)));
+    }
+    else if (kind == ChanceBound::Lower)
+        parentMass = round_chance(mean - std::min(chanceRisk, 0.0) * MaxDeviation, 1);
+    else
+        parentMass = round_chance(mean - std::max(chanceRisk, 0.0) * MaxDeviation, -1);
+
+    const int score = t.score(int(parentMass));
+    return Value(std::clamp(-score, int(VALUE_MATED_IN_MAX_PLY) + 1, int(VALUE_MATE_IN_MAX_PLY) - 1));
+}
 
 // Searches the outcomes of a chance node and returns their aggregate.
 // searchOutcome(i, alpha, beta) searches outcome i, from the point of view of
@@ -2893,5 +3024,67 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
     return pv.size() > 1;
 }
 
+
+namespace {
+
+// Tables of ChanceModel Tables (UCI option ChanceTables), only changed
+// between searches
+std::unique_ptr<const Search::ChanceTables> LoadedChanceTables;
+
+// Reads a file of little-endian int32 values, which must have 'count' of them
+bool read_i32le(const std::filesystem::path& path, std::size_t count, std::vector<std::int32_t>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return false;
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(f)),
+                                     std::istreambuf_iterator<char>());
+    if (bytes.size() != count * 4)
+        return false;
+    out.resize(count);
+    for (std::size_t i = 0; i < count; ++i)
+        out[i] = std::int32_t(std::uint32_t(bytes[4 * i]) | std::uint32_t(bytes[4 * i + 1]) << 8
+                              | std::uint32_t(bytes[4 * i + 2]) << 16
+                              | std::uint32_t(bytes[4 * i + 3]) << 24);
+    return true;
+}
+
+}  // namespace
+
+const Search::ChanceTables* Search::chance_tables() { return LoadedChanceTables.get(); }
+
+std::string Search::load_chance_tables(const std::string& directory) {
+    LoadedChanceTables.reset();
+    if (directory.empty() || directory == "<empty>")
+        return "ChanceTables: no tables (ChanceModel Tables averages in win-rate space)";
+
+    const std::filesystem::path dir = path_from_utf8(directory);
+    auto                        t   = std::make_unique<ChanceTables>();
+
+    if (!read_i32le(dir / "probability_score_to_mass.i32le",
+                    ChanceTables::ScoreMax - ChanceTables::ScoreMin + 1, t->scoreToMass)
+        || !read_i32le(dir / "probability_mass_to_score.i32le",
+                       ChanceTables::MassMax - ChanceTables::MassMin + 1, t->massToScore))
+        return "ChanceTables: cannot read probability_score_to_mass.i32le (4001 int32) and "
+               "probability_mass_to_score.i32le (1901 int32) in "
+             + directory;
+
+    const auto nonDecreasing = [](const std::vector<std::int32_t>& v) {
+        return std::is_sorted(v.begin(), v.end());
+    };
+    if (!nonDecreasing(t->scoreToMass) || !nonDecreasing(t->massToScore))
+        return "ChanceTables: the tables in " + directory
+             + " are not non-decreasing (trainer/chance_tables.py --monotone repairs them)";
+
+    for (const int m : t->scoreToMass)
+        if (m < ChanceTables::MassMin || m > ChanceTables::MassMax)
+            return "ChanceTables: a mass in " + directory + " is outside -950..950";
+
+    for (const int v : t->massToScore)
+        if (v <= VALUE_MATED_IN_MAX_PLY || v >= VALUE_MATE_IN_MAX_PLY)
+            return "ChanceTables: a score in " + directory + " is in the mate range";
+
+    LoadedChanceTables = std::move(t);
+    return "ChanceTables: loaded from " + directory;
+}
 
 }  // namespace Maskfish

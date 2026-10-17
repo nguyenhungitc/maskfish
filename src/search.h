@@ -200,6 +200,39 @@ struct SharedState {
 
 class Worker;
 
+// How the outcomes of a chance node are averaged (UCI option ChanceModel)
+enum class ChanceModel : u8 {
+    Winrate,  // in win-rate space, sigmoid(score / ChanceScaling) (default)
+    Tables,   // in "mass" space, with the lookup tables of ChanceTables (AB-JChess)
+    Linear    // linear average of the scores clamped to +-2000 (AB-JChess,
+              // AggressiveLevel 10 with ChanceRiskAversion)
+};
+
+// Score <-> mass lookup tables for ChanceModel Tables, in the format of
+// AB-JChess's networks (probability_score_to_mass.i32le with 4001 entries
+// for the scores -2000..2000, probability_mass_to_score.i32le with 1901
+// entries for the masses -950..950, little-endian int32). Both tables must
+// be non-decreasing: the bounds computed by the chance nodes rely on it.
+struct ChanceTables {
+    static constexpr int ScoreMin = -2000, ScoreMax = 2000;
+    static constexpr int MassMin = -950, MassMax = 950;
+
+    std::vector<std::int32_t> scoreToMass;  // ScoreMax - ScoreMin + 1 entries
+    std::vector<std::int32_t> massToScore;  // MassMax - MassMin + 1 entries
+
+    int mass(int score) const {
+        return scoreToMass[std::clamp(score, ScoreMin, ScoreMax) - ScoreMin];
+    }
+    int score(int mass) const { return massToScore[std::clamp(mass, MassMin, MassMax) - MassMin]; }
+};
+
+// Loads the tables from a directory holding the two files (an empty path
+// unloads them). Returns a message for the GUI. Must not be called during a
+// search.
+std::string load_chance_tables(const std::string& directory);
+// The loaded tables, or nullptr
+const ChanceTables* chance_tables();
+
 // TT key for a position searched for the given observer (the side whose
 // knowledge of the pool the search models, see HiddenCaptureModel). All 64
 // bits change, so that the entries of the two observers fall in different
@@ -482,6 +515,8 @@ class Worker {
     bool   jieqiMaterial      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
+    ChanceModel         chanceModel  = ChanceModel::Winrate;
+    const ChanceTables* chanceTables = nullptr;  // with ChanceModel::Tables
 
     // Aggregates the outcomes of a chance node (flip_search, hidden_capture_search),
     // from their exact values or from bounds of them
@@ -491,6 +526,11 @@ class Worker {
         Upper
     };
     Value aggregate_chance(
+      const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+    // ChanceModel Linear and Tables (see aggregate_chance())
+    Value aggregate_linear(
+      const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+    Value aggregate_tables(
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
 
     // Searches the outcomes of a chance node, see search.cpp

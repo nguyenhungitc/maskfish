@@ -40,6 +40,7 @@ code is written specifically for this engine's feature set and file format.
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
+| `chance_tables.py` | Score ↔ mass tables for the engine option `ChanceModel Tables` (fitted to self-play data, logistic, or copied from an AB-JChess network) |
 | `rescore.py` | Has another engine (e.g. AB-JChess) re-score positions |
 | `serialize.py` | Writes / reads `.nnue` files, converts `.nnue` into a checkpoint |
 | `jieqi_features.py` | Input features, a copy of Maskfish's `src/nnue/features/half_ka_v2_hm` |
@@ -420,6 +421,20 @@ observed win rates with the predicted ones. Use that value for:
 
 Fit it again after every generation. Check with `match.py` that the new value
 does not weaken the engine before making it the default.
+
+The same data can also give lookup tables for the engine option
+`ChanceModel Tables` (AB-JChess's averaging of chance nodes in "mass" space,
+not tested for Maskfish yet):
+
+```
+python chance_tables.py fit data/gen1.txt --out tables/gen1
+python match.py ... --opt-a ChanceModel=Tables ChanceTables=$PWD/tables/gen1
+```
+
+`chance_tables.py logistic --scale <s>` writes tables equivalent to the default
+averaging (a reference), and `chance_tables.py extract <AB-JChess .nnue>`
+copies the tables of an AB-JChess network (in the score units of its
+networks: they fit Maskfish's only roughly).
 
 ### Step 8. Next generation
 

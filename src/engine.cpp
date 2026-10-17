@@ -242,6 +242,16 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // standard deviation of the outcomes' win rates: > 0 avoids uncertain
     // reveals and captures, < 0 seeks them.
     options.add("ChanceRiskAversion", Option(0, -100, 100));
+    // How the outcomes of a chance node are averaged (from AB-JChess): Winrate
+    // (default), Tables (score <-> mass tables of ChanceTables) or Linear
+    // (average of the scores, AggressiveLevel 10 of AB-JChess). Tables
+    // without loaded tables falls back to Winrate.
+    options.add("ChanceModel", Option("Winrate var Winrate var Tables var Linear", "Winrate"));
+    // Directory of the tables of ChanceModel Tables (made by
+    // trainer/chance_tables.py)
+    options.add("ChanceTables", Option("", [](const Option& o) {
+                    return std::optional<std::string>(Search::load_chance_tables(std::string(o)));
+                }));
 
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
