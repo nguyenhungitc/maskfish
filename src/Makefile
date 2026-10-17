@@ -1517,17 +1517,41 @@ profile-build: $(UNIVERSAL_EXE)
 $(TEMP_DIR):
 	@mkdir -p $@
 
+# Configuration of the universal binary. The builds in temp_builds/ are made by
+# sub-makes, so the targets below do not see their dependencies on their own:
+# every build depends on the sources, the Makefile and this file, which is
+# rewritten (and so rebuilds everything) only when one of these variables
+# changes: compiler, network architecture options, PGO or not, flags, ... It is
+# recursively expanded, so that UOBJ_TGT (set for build / profile-build) is the
+# one of the goal.
+UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
+universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) \
+                   libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
+                   cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
+                   ldflags=$(ENV_LDFLAGS) extraldflags=$(EXTRALDFLAGS) \
+                   top=$(TRACKED_TOP)
+
+.PHONY: universal-config-check
+universal-config-check:
+
+# printf rather than $(file ...), which make 3.81 (macOS) does not have
+$(UNIVERSAL_CONFIG): universal-config-check | $(TEMP_DIR)
+	@printf '%s\n' '$(subst ','\'',$(strip $(universal_config)))' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
 # Download the network once in src/ (the PGO bench of every build uses it).
 $(NET_SENTINEL): | $(TEMP_DIR)
 	@cd $(CURDIR) && $(SHELL) ../scripts/net.sh
 	@touch $@
 
-$(UNIVERSAL_ENTRY_OBJ): $(UNIVERSAL_ENTRY_SRC) $(UNIVERSAL_SRC_DIR)/select.h | $(TEMP_DIR)
+$(UNIVERSAL_ENTRY_OBJ): $(UNIVERSAL_ENTRY_SRC) $(UNIVERSAL_SRC_DIR)/select.h $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 	$(CXX) -O2 -std=c++20 $(mac_target_flags) $(UNIVERSAL_SLICE_CXXFLAGS) $(EXTRACXXFLAGS) -c $< -o $@
 
 # Symlink tracked top-level items from src/ (and the network, for the PGO
-# bench) into temp_builds/<arch>/.
-$(TEMP_DIR)/%/.setup: | $(TEMP_DIR)
+# bench) into temp_builds/<arch>/. Done again when the configuration changes
+# (it holds the list of these items).
+$(TEMP_DIR)/%/.setup: $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 	@rm -rf $(TEMP_DIR)/$*
 	@mkdir -p $(TEMP_DIR)/$*
 	@$(foreach f,$(TRACKED_TOP),ln -s $(CURDIR)/$(f) $(TEMP_DIR)/$*/$(f);)
@@ -1537,7 +1561,9 @@ $(TEMP_DIR)/%/.setup: | $(TEMP_DIR)
 # Per-arch maskfish.o
 .SECONDARY: $(patsubst %,$(TEMP_DIR)/%/.setup,$(UNIVERSAL_ARCHES))
 
-$(TEMP_DIR)/%/maskfish.o: $(TEMP_DIR)/%/.setup $(NET_SENTINEL)
+# (the sub-make starts with objclean: a change rebuilds the whole build)
+$(TEMP_DIR)/%/maskfish.o: $(TEMP_DIR)/%/.setup $(NET_SENTINEL) $(UNIVERSAL_CONFIG) \
+                          $(SRCS) $(HEADERS) Makefile
 	+ENV_CXXFLAGS='$(ENV_CXXFLAGS) $(call arch-cxxflags,$*)' \
 	    $(MAKE) -C $(TEMP_DIR)/$* $(UOBJ_TGT) \
 		        ARCH=$* CXX=$(CXX) COMP=$(COMP) UNIVERSAL_SLICE=true
@@ -1561,7 +1587,7 @@ else
 endif
 endif
 
-$(UNIVERSAL_EXE): $(UNIVERSAL_ENTRY_OBJ) $(ARCH_OBJS)
+$(UNIVERSAL_EXE): $(UNIVERSAL_ENTRY_OBJ) $(ARCH_OBJS) $(UNIVERSAL_CONFIG)
 	$(CXX) -o $@ $(UNIVERSAL_ENTRY_OBJ) $(ARCH_OBJS) $(UNIVERSAL_COMMON_OBJ) $(UNIVERSAL_FINAL_FLAGS) $(EXTRALDFLAGS)
 	@echo "Universal binary built: $@"
 

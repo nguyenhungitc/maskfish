@@ -267,7 +267,9 @@ make -j build ARCH=arm64-universal COMP=ndk       # Android (NDK r27c or later)
 
 * Every build is compiled separately in `src/temp_builds/` (about eight times
   the time of one build); `make clean` deletes them. The architecture options
-  of the network (`threats=yes`, `layers=2`, ...) apply to all of them.
+  of the network (`threats=yes`, `layers=2`, ...) apply to all of them. They
+  are all made again when a source file, the Makefile or a build option
+  (compiler, network options, PGO or not, flags) changes, and only then.
 * `make -j profile-build ARCH=x86-64-universal` runs the PGO bench of every
   build, which needs a CPU that runs all of them, or
   `RUN_PREFIX="/path/to/sde -future --"` (Intel SDE). Cross builds use
