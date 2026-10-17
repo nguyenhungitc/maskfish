@@ -34,7 +34,6 @@ import math
 import multiprocessing as mp
 import os
 import random
-import sys
 import time
 
 import jieqi_features as F

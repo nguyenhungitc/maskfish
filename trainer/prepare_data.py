@@ -22,7 +22,8 @@ shuffled before it is written, so the memory needed is about
 2 x 260 bytes x shard size (2 x 500 bytes with threats) whatever the amount of
 data. train.py draws its batches from random shards, which mixes the data
 across shards.
-Lines that do not parse are skipped.
+Lines that do not parse are skipped, counted and reported (the first ones
+are printed); any other error stops the script.
 
 Data scored by another engine (AB-JChess, see rescore.py) uses that engine's
 score scale: convert it with --score-scale 361/s, where s is the scale that
@@ -35,6 +36,7 @@ import argparse
 import itertools
 import multiprocessing as mp
 import os
+import sys
 
 import numpy as np
 
@@ -54,30 +56,49 @@ def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: 
     _JIEQI_MATERIAL = jieqi_material
 
 
+# Malformed lines (wrong field count, bad numbers, bad FEN: ValueError; a
+# board with more than 32 pieces: IndexError in layer_stack_bucket()) are
+# skipped and counted. Any other exception is a bug and is not hidden.
+MALFORMED_ERRORS = (ValueError, IndexError)
+MAX_EXAMPLES = 5   # malformed lines printed, at most
+
+
 def parse_chunk(lines: list[str]):
-    """Parses lines into compact arrays (done in the worker processes)."""
+    """Parses lines into compact arrays (done in the worker processes).
+    Returns (features, meta, threats, lines read, positions filtered out,
+    malformed lines, a few malformed lines with their error)."""
     feats = np.full((len(lines), 2, F.MAX_ACTIVE), F.PAD_INDEX, dtype=np.int16)
     meta = np.zeros(len(lines), dtype=META_DTYPE)
     counts = np.zeros((len(lines), 2), dtype=np.uint8)
     threats = []
-    n = 0
+    n = filtered = malformed = 0
+    examples = []
     for line in lines:
         try:
             fen, score, result = (x.strip() for x in line.split("|"))
             score, result = int(round(float(score) * _SCORE_SCALE)), int(float(result))
             if abs(score) > _MAX_SCORE or result not in (-1, 0, 1):
+                filtered += 1
                 continue
             pos = F.parse_fen(fen)
             stm = pos.side_to_move
             s, o = F.active_features(pos, stm), F.active_features(pos, 1 - stm)
             b = F.layer_stack_bucket(pos)
             if len(s) > F.MAX_ACTIVE or len(o) > F.MAX_ACTIVE:
+                filtered += 1
                 continue
             material, rule40 = E.position_scale_inputs(pos, _JIEQI_MATERIAL)
             if F.THREATS:
                 phys = F.physical_threats(pos)
                 ts, to = F.active_threats(pos, stm, phys), F.active_threats(pos, 1 - stm, phys)
-        except Exception:
+                # (the counts are stored as uint8, the engine reads at most MAX_THREATS)
+                if len(ts) > F.MAX_THREATS or len(to) > F.MAX_THREATS:
+                    filtered += 1
+                    continue
+        except MALFORMED_ERRORS as e:
+            malformed += 1
+            if len(examples) < MAX_EXAMPLES:
+                examples.append(f"{line.strip()[:120]!r}: {type(e).__name__}: {e}")
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
@@ -90,7 +111,7 @@ def parse_chunk(lines: list[str]):
     thr = None
     if F.THREATS:
         thr = (np.fromiter((i for t in threats for i in t), dtype=np.uint32), counts[:n])
-    return feats[:n], meta[:n], thr, len(lines)
+    return feats[:n], meta[:n], thr, len(lines), filtered, malformed, examples
 
 
 def read_chunks(paths: list[str]):
@@ -151,12 +172,17 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     shard, buf_f, buf_m, buf_t, buffered = 0, [], [], [], 0
-    total_in = total_out = 0
+    total_in = total_out = total_filtered = total_malformed = 0
+    examples = []
     with mp.Pool(args.workers, initializer=_init_worker,
                  initargs=(args.arch, args.max_score, args.score_scale,
                            args.jieqi_material)) as pool:
-        for feats, meta, thr, n_in in pool.imap(parse_chunk, read_chunks(args.inputs)):
+        for feats, meta, thr, n_in, n_filtered, n_malformed, ex in pool.imap(
+                parse_chunk, read_chunks(args.inputs)):
             total_in += n_in
+            total_filtered += n_filtered
+            total_malformed += n_malformed
+            examples.extend(ex[:MAX_EXAMPLES - len(examples)])
             buf_f.append(feats)
             buf_m.append(meta)
             buf_t.append(thr)
@@ -173,7 +199,13 @@ def main():
         f.write(F.feature_arch(args.arch) + "\n")   # the layer stacks do not matter
     with open(args.out + ".material", "w") as f:
         f.write(("jieqi" if args.jieqi_material else "major") + "\n")
-    print(f"{total_out} positions ({total_in - total_out} skipped) in {shard} shard(s) -> {args.out}-*.npy")
+    print(f"{total_out} positions in {shard} shard(s) -> {args.out}-*.npy "
+          f"({total_filtered} filtered out by score, result or feature count, "
+          f"{total_malformed} malformed lines skipped)")
+    if total_malformed:
+        print(f"warning: {total_malformed} of {total_in} lines are malformed, e.g.:", file=sys.stderr)
+        for e in examples:
+            print(f"  {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
