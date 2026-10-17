@@ -38,6 +38,7 @@
 #include "nnue_architecture.h"
 #include "nnue_common.h"
 #include "nnue_misc.h"
+#include "nnz_helper.h"
 
 namespace Maskfish::Eval::NNUE {
 
@@ -130,10 +131,12 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
 
     ASSERT_ALIGNED(transformedFeatures, alignment);
 
+    NNZInfo<FTDimensions> nnzInfo;
+
     const int  bucket = FeatureSet::make_layer_stack_bucket(pos);
-    const auto psqt =
-      featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-    const auto positional = network[bucket].propagate(transformedFeatures);
+    const auto psqt       = featureTransformer.transform(pos, accumulatorStack, cache,
+                                                         transformedFeatures, bucket, nnzInfo);
+    const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo);
     return {static_cast<Value>(psqt / OutputScale), static_cast<Value>(positional / OutputScale)};
 }
 
@@ -200,9 +203,10 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     t.correctBucket = FeatureSet::make_layer_stack_bucket(pos);
     for (IndexType bucket = 0; bucket < LayerStacks; ++bucket)
     {
-        const auto materialist =
-          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-        const auto positional = network[bucket].propagate(transformedFeatures);
+        NNZInfo<FTDimensions> nnzInfo;
+        const auto materialist = featureTransformer.transform(pos, accumulatorStack, cache,
+                                                              transformedFeatures, bucket, nnzInfo);
+        const auto positional  = network[bucket].propagate(transformedFeatures, nnzInfo);
 
         t.psqt[bucket]       = static_cast<Value>(materialist / OutputScale);
         t.positional[bucket] = static_cast<Value>(positional / OutputScale);

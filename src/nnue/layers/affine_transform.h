@@ -41,7 +41,7 @@
 
 namespace Maskfish::Eval::NNUE::Layers {
 
-#if defined(USE_SSSE3) || defined(USE_NEON_DOTPROD)
+#if defined(USE_SSSE3) || defined(USE_NEON_DOTPROD) || defined(USE_LSX)
     #define ENABLE_SEQ_OPT
 #endif
 
@@ -153,8 +153,22 @@ class AffineTransform {
     }
 
     static constexpr IndexType get_weight_index_scrambled(IndexType i) {
-        return (i / 4) % (PaddedInputDimensions / 4) * OutputDimensions * 4
-             + i / PaddedInputDimensions * 4 + i % 4;
+        IndexType inputIndex = i % PaddedInputDimensions;
+
+#if defined(USE_PAIR_ACTIVATIONS)
+        // At load time, pre-permute the weights to match the per-128-bit-lane
+        // interleaving that SqrClippedReLU::propagate_pair() produces, so no
+        // shuffle is needed at runtime.
+        const IndexType block = inputIndex / 32;
+        const IndexType chunk = (inputIndex % 32) / 4;
+    #if defined(USE_PAIR_ACTIVATIONS_512)
+        inputIndex = block * 32 + ((chunk % 4) * 2 + chunk / 4) * 4 + inputIndex % 4;
+    #else
+        inputIndex = block * 32 + ((chunk % 2) * 4 + chunk / 2) * 4 + inputIndex % 4;
+    #endif
+#endif
+        return inputIndex / 4 * OutputDimensions * 4 + i / PaddedInputDimensions * 4
+             + inputIndex % 4;
     }
 
     static constexpr IndexType get_weight_index(IndexType i) {
@@ -219,6 +233,14 @@ class AffineTransform {
         #define vec_add_dpbusd_32(acc, a, b) \
             SIMD::dotprod_m128_add_dpbusd_epi32(acc, vreinterpretq_s8_s32(a), \
                                                 vreinterpretq_s8_s32(b))
+    #elif defined(USE_LASX)
+            using vec_t = __m256i;
+        #define vec_set_32 __lasx_xvreplgr2vr_w
+        #define vec_add_dpbusd_32 SIMD::lasx_m256_add_dpbusd_epi32
+    #elif defined(USE_LSX)
+            using vec_t = __m128i;
+        #define vec_set_32 __lsx_vreplgr2vr_w
+        #define vec_add_dpbusd_32 SIMD::lsx_m128_add_dpbusd_epi32
     #endif
 
             static constexpr IndexType OutputSimdWidth = sizeof(vec_t) / sizeof(OutputType);
@@ -307,6 +329,16 @@ class AffineTransform {
             SIMD::dotprod_m128_add_dpbusd_epi32(acc, vreinterpretq_s8_s32(a), \
                                                 vreinterpretq_s8_s32(b))
         #define vec_hadd SIMD::neon_m128_hadd
+    #elif defined(USE_LASX)
+            using vec_t = __m256i;
+        #define vec_setzero() __lasx_xvldi(0)
+        #define vec_add_dpbusd_32 SIMD::lasx_m256_add_dpbusd_epi32
+        #define vec_hadd SIMD::lasx_m256_hadd
+    #elif defined(USE_LSX)
+            using vec_t = __m128i;
+        #define vec_setzero() __lsx_vldi(0)
+        #define vec_add_dpbusd_32 SIMD::lsx_m128_add_dpbusd_epi32
+        #define vec_hadd SIMD::lsx_m128_hadd
     #endif
 
             const auto inputVector = reinterpret_cast<const vec_t*>(input);
@@ -330,6 +362,49 @@ class AffineTransform {
     #undef vec_add_dpbusd_32
     #undef vec_hadd
         }
+#elif defined(USE_RVV)
+        // Dot product of each row of weights with the input
+        const std::int8_t* wIt = weights;
+
+    #define RVV_PROPAGATE_SINGLE(m2, m1) \
+        do \
+        { \
+            vint32m1_t     zero = __riscv_vmv_s_x_i32m1(0, 1); \
+            std::size_t    vl   = __riscv_vsetvl_e8##m1(InputDimensions); \
+            vuint8##m1##_t in   = __riscv_vle8_v_u8##m1(input, vl); \
+            for (IndexType i = 0; i < OutputDimensions; ++i, wIt += PaddedInputDimensions) \
+            { \
+                vint8##m1##_t  w    = __riscv_vle8_v_i8##m1(wIt, vl); \
+                vint16##m2##_t prod = __riscv_vwmulsu(w, in, vl); \
+                output[i]           = biases[i] + __riscv_vmv_x(__riscv_vwredsum(prod, zero, vl)); \
+            } \
+        } while (0)
+
+        const std::size_t VL1 = __riscv_vsetvlmax_e16m1();
+        if (InputDimensions <= VL1)
+            RVV_PROPAGATE_SINGLE(m1, mf2);
+        else if (InputDimensions <= VL1 * 2)
+            RVV_PROPAGATE_SINGLE(m2, m1);
+        else if (InputDimensions <= VL1 * 4)
+            RVV_PROPAGATE_SINGLE(m4, m2);
+        else
+        {
+            for (IndexType i = 0; i < OutputDimensions; ++i, wIt += PaddedInputDimensions)
+            {
+                vint32m1_t sum = __riscv_vmv_s_x_i32m1(0, 1);
+                for (std::size_t vl, j = 0; j < InputDimensions; j += vl)
+                {
+                    vl              = __riscv_vsetvl_e8m2(InputDimensions - j);
+                    vuint8m2_t in   = __riscv_vle8_v_u8m2(input + j, vl);
+                    vint8m2_t  w    = __riscv_vle8_v_i8m2(wIt + j, vl);
+                    vint16m4_t prod = __riscv_vwmulsu(w, in, vl);
+                    sum             = __riscv_vwredsum(prod, sum, vl);
+                }
+                output[i] = biases[i] + __riscv_vmv_x(sum);
+            }
+        }
+
+    #undef RVV_PROPAGATE_SINGLE
 #else
         // Use old implementation for the other architectures.
         affine_transform_non_ssse3<InputDimensions, PaddedInputDimensions, OutputDimensions>(

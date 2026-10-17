@@ -10,9 +10,11 @@ File layout (maskfish/src/nnue/network.cpp, nnue_feature_transformer.h, layers/)
       threat architectures only:
       raw    int8  threat weights[92711][L1] (scale 127)
       LEB128 int32 threat psqt[92711][16]    (scale 600 * 16)
+    (no psqt sections for the "*-np" architectures, make psqt=no; 32 PSQT
+    buckets for "*-s32", make stacks=32)
     The engine doubles the feature transformer outputs (biases + weights),
     so 1.0 is 254 before the clipped ReLU.
-    16 x layer stack:
+    16 (32 for "*-s32") x layer stack:
       u32 architecture hash
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
       fc1: int32 bias[32]  (scale 64*127), int8 weight[32][32]   (30 used)
@@ -83,9 +85,15 @@ def arch_hash(l1: int | None = None, layers: int | None = None) -> int:
     return affine(h, 1)
 
 
+NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
+STACKS32_HASH = 0x0B320000    # engine: same, make stacks=32
+
+
 def ft_hash() -> int:
-    """Feature transformer hash: feature set hash(es) ^ (L1 * 2)."""
+    """Feature transformer hash: feature set hash(es) ^ (L1 * 2), and the
+    layout (no PSQT, 32 PSQT buckets / layer stacks)."""
     h = F.FEATURE_HASH ^ (F.THREAT_HASH if F.THREATS else 0)
+    h ^= (0 if F.USE_PSQT else NO_PSQT_HASH) ^ (STACKS32_HASH if F.NUM_LAYER_STACKS == 32 else 0)
     return h ^ (F.L1 * 2)
 
 
@@ -94,9 +102,16 @@ def network_hash() -> int:
 
 
 ARCH_HASH = arch_hash(2048)   # kept for compatibility (default architecture)
-PSQT = F.NUM_PSQT_BUCKETS
-STACKS = F.NUM_LAYER_STACKS
 FC1_PADDED_IN = 32
+
+
+def __getattr__(name):
+    # PSQT / STACKS depend on the current architecture (F.set_arch())
+    if name == "PSQT":
+        return F.NUM_PSQT_BUCKETS
+    if name == "STACKS":
+        return F.NUM_LAYER_STACKS
+    raise AttributeError(name)
 
 
 # ---------------------------------------------------------------- LEB128
@@ -152,16 +167,31 @@ def leb128_decode(data: bytes, count: int, dtype=np.int64) -> np.ndarray:
     return out
 
 
-def _write_leb(f, values: np.ndarray):
+def _write_leb(f, values: np.ndarray, raw_dtype=None):
+    """A LEB128 block, or with raw_dtype the plain little-endian values (as
+    Pikafish since "Remove leb128": the file is compressed with zstd anyway).
+    The engine reads both."""
+    if raw_dtype is not None:
+        f.write(values.ravel().astype(np.dtype(raw_dtype).newbyteorder("<")).tobytes())
+        return
     payload = leb128_encode(values.ravel())
     f.write(LEB128_MAGIC)
     f.write(struct.pack("<I", len(payload)))
     f.write(payload)
 
 
-def _read_leb(f, count: int, dtype=np.int64) -> np.ndarray:
+def _read_leb(f, count: int, dtype=np.int64, raw_dtype=None) -> np.ndarray:
+    """A LEB128 block, or (no magic string, raw_dtype given) plain values."""
+    pos = f.tell()
     if f.read(len(LEB128_MAGIC)) != LEB128_MAGIC:
-        raise ValueError("missing LEB128 block")
+        if raw_dtype is None:
+            raise ValueError("missing LEB128 block")
+        f.seek(pos)
+        rd = np.dtype(raw_dtype).newbyteorder("<")
+        data = f.read(count * rd.itemsize)
+        if len(data) != count * rd.itemsize:
+            raise ValueError("truncated block")
+        return np.frombuffer(data, dtype=rd).astype(dtype)
     (n,) = struct.unpack("<I", f.read(4))
     return leb128_decode(f.read(n), count, dtype)
 
@@ -195,6 +225,8 @@ def quantize(model) -> dict:
         q["ft_weight"] = ftw.to(torch.int8).cpu().numpy()
         del ftw
         q["psqt"] = np.round(w[:, L1:].cpu().double().numpy() * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+        if not F.USE_PSQT:
+            q["psqt"][:] = 0                         # not in the file
         if F.THREATS:
             tw = model.ft_thr.weight.detach()
             tq = torch.round(tw[:, :L1].float() * FT_SCALE)
@@ -204,22 +236,24 @@ def quantize(model) -> dict:
             del tq
             q["thr_psqt"] = np.round(tw[:, L1:].cpu().double().numpy()
                                      * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+            if not F.USE_PSQT:
+                q["thr_psqt"][:] = 0
 
         d = stack_dims()
         st = model.stacks
-        l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"], L1)
-        l1b = st.l1.bias.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"])
-        l2w = st.l2.weight.detach().cpu().double().numpy().reshape(STACKS, L3, d["fc1_in"])
-        l2b = st.l2.bias.detach().cpu().double().numpy().reshape(STACKS, L3)
-        ow = st.output.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc2_in"])
-        ob = st.output.bias.detach().cpu().double().numpy().reshape(STACKS)
+        l1w = st.l1.weight.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS, d["fc0_out"], L1)
+        l1b = st.l1.bias.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS, d["fc0_out"])
+        l2w = st.l2.weight.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS, L3, d["fc1_in"])
+        l2b = st.l2.bias.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS, L3)
+        ow = st.output.weight.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS, d["fc2_in"])
+        ob = st.output.bias.detach().cpu().double().numpy().reshape(F.NUM_LAYER_STACKS)
 
     hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
     q["fc0_bias"] = np.round(l1b * hb).astype(np.int64)
     q["fc0_weight"] = np.round(np.clip(l1w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
                                * HIDDEN_WEIGHT_SCALE).astype(np.int64)
     q["fc1_bias"] = np.round(l2b * hb).astype(np.int64)
-    fc1 = np.zeros((STACKS, L3, d["fc1_file"]), dtype=np.int64)
+    fc1 = np.zeros((F.NUM_LAYER_STACKS, L3, d["fc1_file"]), dtype=np.int64)
     fc1[:, :, :d["fc1_in"]] = np.round(np.clip(l2w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
                                        * HIDDEN_WEIGHT_SCALE)
     q["fc1_weight"] = fc1
@@ -231,7 +265,8 @@ def quantize(model) -> dict:
     return q
 
 
-def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with the Maskfish trainer"):
+def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with the Maskfish trainer",
+               leb128: bool = True):
     buf = io.BytesIO()
     desc = description.encode("utf-8")
     buf.write(struct.pack("<III", VERSION, network_hash(), len(desc)))
@@ -240,15 +275,18 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
     buf.write(struct.pack("<I", ft_hash()))
     if np.abs(q["ft_weight"]).max() > 127 or np.abs(q["ft_bias"]).max() > MAX_FT_BIAS:
         raise ValueError("feature transformer parameters out of range")
-    _write_leb(buf, q["ft_bias"].astype(np.int16))
+    raw16, raw32 = (None, None) if leb128 else (np.int16, np.int32)
+    _write_leb(buf, q["ft_bias"].astype(np.int16), raw16)
     buf.write(q["ft_weight"].astype(np.int8).tobytes())
-    _write_leb(buf, q["psqt"].astype(np.int32))
+    if F.USE_PSQT:
+        _write_leb(buf, q["psqt"].astype(np.int32), raw32)
     if F.THREATS:
         buf.write(q["thr_weight"].astype(np.int8).tobytes())
-        _write_leb(buf, q["thr_psqt"].astype(np.int32))
+        if F.USE_PSQT:
+            _write_leb(buf, q["thr_psqt"].astype(np.int32), raw32)
 
     ahash = arch_hash()
-    for k in range(STACKS):
+    for k in range(F.NUM_LAYER_STACKS):
         buf.write(struct.pack("<I", ahash))
         buf.write(q["fc0_bias"][k].astype("<i4").tobytes())
         buf.write(q["fc0_weight"][k].astype(np.int8).tobytes())
@@ -282,17 +320,20 @@ def read_nnue(path: str) -> dict:
         raise ValueError("feature transformer hash mismatch")
     L1 = F.L1
     q = {"description": description, "version": version}
-    q["ft_bias"] = _read_leb(f, L1)
+    q["ft_bias"] = _read_leb(f, L1, raw_dtype=np.int16)
     if version == OLD_VERSION:
         q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
     else:
         n = F.NUM_FEATURES * L1
         q["ft_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.NUM_FEATURES, L1).copy()
-    q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
+    PSQT = F.NUM_PSQT_BUCKETS
+    q["psqt"] = (_read_leb(f, F.NUM_FEATURES * PSQT, raw_dtype=np.int32).reshape(F.NUM_FEATURES, PSQT) if F.USE_PSQT
+                 else np.zeros((F.NUM_FEATURES, PSQT), dtype=np.int64))
     if F.THREATS:
         n = F.THREAT_DIMS * L1
         q["thr_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.THREAT_DIMS, L1).copy()
-        q["thr_psqt"] = _read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT)
+        q["thr_psqt"] = (_read_leb(f, F.THREAT_DIMS * PSQT, raw_dtype=np.int32).reshape(F.THREAT_DIMS, PSQT)
+                         if F.USE_PSQT else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
 
     def arr(dtype, n):
         return np.frombuffer(f.read(np.dtype(dtype).itemsize * n), dtype=dtype).astype(np.int64)
@@ -300,7 +341,7 @@ def read_nnue(path: str) -> dict:
     keys = ("fc0_bias", "fc0_weight", "fc1_bias", "fc1_weight", "fc2_bias", "fc2_weight")
     parts = {k: [] for k in keys}
     d = stack_dims()
-    for _ in range(STACKS):
+    for _ in range(F.NUM_LAYER_STACKS):
         (ah,) = struct.unpack("<I", f.read(4))
         if ah != arch_hash():
             raise ValueError("architecture hash mismatch")
@@ -317,9 +358,13 @@ def read_nnue(path: str) -> dict:
 
 def _arch_network_hashes() -> dict:
     out = {}
-    for name, (_, h, _, threats, layers) in F.ARCHS.items():
-        l1 = 1024 if threats else 2048
-        out[name] = (h ^ (F.THREAT_HASH if threats else 0) ^ (l1 * 2)) ^ arch_hash(l1, layers)
+    current = F.ARCH
+    try:
+        for name in F.ARCHS:
+            F.set_arch(name)
+            out[name] = network_hash()
+    finally:
+        F.set_arch(current)
     return out
 
 
@@ -352,11 +397,29 @@ def upgrade(q: dict) -> tuple[int, int]:
     return clamped
 
 
+def _psqt_for_model(psqt: np.ndarray, n: int):
+    """PSQT weights of a network (in internal units) for the PSQT buckets of the
+    current architecture: unchanged with as many buckets, each of 16 buckets
+    copied to its pair of 32 (-s32 from a 16 stack network), zeros without
+    PSQT (-np: the PSQT columns of the model are unused). n: PSQT columns of
+    the model."""
+    import torch
+    from model import NNUE2SCORE, OUTPUT_SCALE
+    if not F.USE_PSQT:
+        return torch.zeros(psqt.shape[0], n)
+    if psqt.shape[1] * 2 == n:
+        psqt = np.repeat(psqt, 2, axis=1)
+    elif psqt.shape[1] != n:
+        raise ValueError(f"cannot map {psqt.shape[1]} PSQT buckets to {n}")
+    return torch.tensor(psqt / (NNUE2SCORE * OUTPUT_SCALE))
+
+
 def load_into_model(q: dict, model, ft_only: bool = False):
     """Dequantize a network into a model (to continue training from it). The
     training-only factorized parts, if any, are set to zero. ft_only: only the
-    feature transformer (from a network with the same input features but the
-    other layer stacks); the layer stacks of the model are kept."""
+    feature transformer (from a network with the same input features but
+    other layer stacks, or 16 layer stacks for -s32, or with PSQT for -np);
+    the layer stacks of the model are kept."""
     import torch
     from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
                        NNUE2SCORE, OUTPUT_SCALE)
@@ -364,13 +427,13 @@ def load_into_model(q: dict, model, ft_only: bool = False):
     L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
-        model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+        model.ft.weight[:F.NUM_FEATURES, L1:] = _psqt_for_model(q["psqt"], model.ft.weight.shape[1] - L1)
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
-            model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+            model.ft_thr.weight[:, L1:] = _psqt_for_model(q["thr_psqt"], model.ft_thr.weight.shape[1] - L1)
         for name in ("ft_ps", "ft_kb"):
             if getattr(model, name, None) is not None:
                 getattr(model, name).weight.zero_()
@@ -407,7 +470,7 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
     psqt_acc = []
     for feats, thr_feats in zip((stm_f, nstm_f), thr):
         acc = q["ft_bias"].astype(np.int64)         # half units, like the engine
-        ps = np.zeros(PSQT, dtype=np.int64)
+        ps = np.zeros(F.NUM_PSQT_BUCKETS, dtype=np.int64)
         for i in feats:
             acc += q["ft_weight"][i].astype(np.int64)
             ps += q["psqt"][i]
@@ -451,7 +514,19 @@ def main():
                     help="convert a .nnue file into a checkpoint to continue training")
     ap.add_argument("--upgrade", action="store_true",
                     help="convert a .nnue file of the old version (16-bit HalfKA weights)")
+    ap.add_argument("--no-leb128", action="store_true",
+                    help="write the biases and PSQT weights as plain integers instead of LEB128 "
+                         "(as Pikafish; the file is compressed with zstd anyway). Engines from "
+                         "this version on read both. With a .nnue source: just rewrite it")
     args = ap.parse_args()
+    leb128 = not args.no_leb128
+
+    if args.no_leb128 and args.source.endswith(".nnue") and not (args.upgrade or args.to_checkpoint):
+        F.set_arch(detect_arch(args.source))
+        q = read_nnue(args.source)
+        write_nnue(q, args.target, q["description"], leb128=False)
+        print(f"written {args.target} (arch {F.ARCH}, without LEB128)")
+        return
 
     if args.upgrade:
         F.set_arch(detect_arch(args.source))
@@ -459,7 +534,7 @@ def main():
         if q["version"] == VERSION:
             raise SystemExit(f"{args.source} already has the current version")
         nw, nb = upgrade(q)
-        write_nnue(q, args.target, q["description"])
+        write_nnue(q, args.target, q["description"], leb128=leb128)
         total = q["ft_weight"].size
         print(f"written {args.target} (arch {F.ARCH}): {nw} of {total} weights "
               f"({100 * nw / total:.4f}%) and {nb} biases clamped"
@@ -478,7 +553,7 @@ def main():
         ckpt = torch.load(args.source, map_location="cpu")
         F.set_arch(ckpt.get("arch", "default"))
         model = NNUE.from_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
-        write_nnue(quantize(model), args.target, args.description)
+        write_nnue(quantize(model), args.target, args.description, leb128=leb128)
     print(f"written {args.target} (arch {F.ARCH})")
 
 

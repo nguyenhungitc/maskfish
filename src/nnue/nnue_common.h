@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <type_traits>
 
 #include "../misc.h"
@@ -45,6 +46,16 @@
 
 #elif defined(USE_NEON)
     #include <arm_neon.h>
+
+#elif defined(USE_LASX)
+    #include <lasxintrin.h>
+    #include <lsxintrin.h>
+
+#elif defined(USE_LSX)
+    #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    #include <riscv_vector.h>
 #endif
 
 namespace Maskfish::Eval::NNUE {
@@ -82,6 +93,12 @@ constexpr std::size_t SimdWidth = 32;
 constexpr std::size_t SimdWidth = 16;
 
 #elif defined(USE_NEON)
+constexpr std::size_t SimdWidth = 16;
+
+#elif defined(USE_LASX)
+constexpr std::size_t SimdWidth = 32;
+
+#elif defined(USE_LSX)
 constexpr std::size_t SimdWidth = 16;
 #endif
 
@@ -190,10 +207,42 @@ inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) 
     // file fails the stream instead of triggering an assert.
     char leb128MagicString[Leb128MagicStringSize];
     stream.read(leb128MagicString, Leb128MagicStringSize);
-    if (stream.gcount() != std::streamsize(Leb128MagicStringSize)
-        || strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
+    if (stream.gcount() != std::streamsize(Leb128MagicStringSize))
     {
         stream.setstate(std::ios::failbit);
+        return;
+    }
+
+    // Without the magic string, the block holds the values as plain
+    // little-endian integers (Pikafish "Remove leb128": the whole file is
+    // compressed with zstd anyway; trainer: serialize.py --no-leb128). The
+    // bytes already read are the start of the first values.
+    if (strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
+    {
+        const std::size_t total = count * sizeof(IntType);
+        if (total < Leb128MagicStringSize)
+        {
+            stream.setstate(std::ios::failbit);
+            return;
+        }
+        auto bytes = std::make_unique<char[]>(total);
+        std::memcpy(bytes.get(), leb128MagicString, Leb128MagicStringSize);
+        stream.read(bytes.get() + Leb128MagicStringSize,
+                    std::streamsize(total - Leb128MagicStringSize));
+        if (stream.gcount() != std::streamsize(total - Leb128MagicStringSize))
+        {
+            stream.setstate(std::ios::failbit);
+            return;
+        }
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            std::make_unsigned_t<IntType> v = 0;
+            for (std::size_t b = 0; b < sizeof(IntType); ++b)
+                v |= std::make_unsigned_t<IntType>(
+                       std::uint8_t(bytes[i * sizeof(IntType) + b]))
+                  << (8 * b);
+            out[i] = IntType(v);
+        }
         return;
     }
 

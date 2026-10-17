@@ -1,8 +1,10 @@
 """PyTorch model of the engine's NNUE (maskfish/src/nnue/nnue_architecture.h).
 
-    feature transformer: 7560 -> L1 (+16 PSQT buckets), per perspective
+    feature transformer: 7560 -> L1 (+16 PSQT buckets, 32 with "*-s32", none
+                         used with "*-np"), per perspective
     pairwise product:     2 x (L1/2 x L1/2) -> L1
-    layer stack (one of 16, chosen by piece count):
+    layer stack (one of 16, chosen by piece count; 32 with "*-s32", see
+    jieqi_features.layer_stack_bucket()):
         fc0: L1 -> 16   (output 15 is added directly to the result)
         [sqr_crelu(15), crelu(15)] -> fc1: 30 -> 32 -> crelu -> fc2: 32 -> 1
     or, for the "*-l2" architectures (make layers=2), see LayerStacks:
@@ -64,6 +66,17 @@ MAX_FT_WEIGHT = 127.0 / FT_SCALE
 MAX_FT_BIAS = 16383.0 / FT_SCALE
 
 
+def fq_round(x: torch.Tensor, scale: float) -> torch.Tensor:
+    """Quantization-aware training (--qat): x rounded to the grid 1 / scale in
+    the forward pass, unchanged gradient (straight-through estimator)."""
+    return x + (torch.round(x * scale) / scale - x).detach()
+
+
+def fq_floor(x: torch.Tensor, scale: float) -> torch.Tensor:
+    """Like fq_round(), rounded down: the engine's right shifts."""
+    return x + (torch.floor(x * scale) / scale - x).detach()
+
+
 class LayerStacks(nn.Module):
     """All 16 layer stacks, evaluated for the bucket of each sample.
 
@@ -76,9 +89,9 @@ class LayerStacks(nn.Module):
         fc2: [a0, a1] (128) -> 1, plus the direct term fc0[30] - fc0[31]
     """
 
-    def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
+    def __init__(self, count: int | None = None, l1_fact: bool = False):
         super().__init__()
-        self.count = count
+        self.count = count = F.NUM_LAYER_STACKS if count is None else count
         self.in_dim = F.L1
         self.layers = F.LAYERS
         if self.layers == 2:
@@ -96,6 +109,8 @@ class LayerStacks(nn.Module):
         self.l1_fact = None
         if l1_fact:
             self.add_l1_fact()
+        # Quantization-aware training (train.py --qat): not saved
+        self.qat = False
 
     def add_l1_fact(self):
         """Shared fc0 component, zeroed. Layer stacks 1: outputs 0..14 only
@@ -111,6 +126,8 @@ class LayerStacks(nn.Module):
         return torch.clamp(torch.cat([v.pow(2.0) * (127.0 / 128.0), v], dim=1), 0.0, 1.0)
 
     def forward(self, x: torch.Tensor, buckets: torch.Tensor) -> torch.Tensor:
+        if self.qat:
+            return self.forward_qat(x, buckets)
         n = x.shape[0]
         idx = torch.arange(n, device=x.device) * self.count + buckets.long()
 
@@ -134,6 +151,52 @@ class LayerStacks(nn.Module):
         w = self.output.weight[buckets.long()]          # (n, out_in)
         b = self.output.bias[buckets.long()]            # (n,)
         out = (h * w).sum(dim=1) + b
+        return (out + direct).unsqueeze(1)
+
+    def forward_qat(self, x: torch.Tensor, buckets: torch.Tensor) -> torch.Tensor:
+        """forward() with the quantization of the engine simulated (--qat): the
+        weights and biases rounded as serialize.quantize() writes them (the
+        shared fc0 part added first, as in the exported network), and the
+        activations rounded down to the 1/127 steps of the engine's uint8
+        activations (SqrClippedReLU, ClippedReLU: right shifts). Gradients go
+        straight through the roundings."""
+        n = x.shape[0]
+        idx = torch.arange(n, device=x.device) * self.count + buckets.long()
+        b = buckets.long()
+        hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
+
+        w1 = self.l1.weight.view(self.count, self.fc0_out, self.in_dim)
+        if self.l1_fact is not None:
+            fact = self.l1_fact.weight.unsqueeze(0)
+            w1 = torch.cat([w1[:, :self.act0] + fact, w1[:, self.act0:]], dim=1)
+        w1 = fq_round(w1.clamp(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT), HIDDEN_WEIGHT_SCALE)
+        b1 = fq_round(self.l1.bias, hb)
+        l1 = torch.nn.functional.linear(x, w1.reshape(-1, self.in_dim), b1)
+        l1 = l1.reshape(n * self.count, self.fc0_out)[idx]
+
+        w2 = fq_round(self.l2.weight.clamp(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT),
+                      HIDDEN_WEIGHT_SCALE)
+        b2 = fq_round(self.l2.bias, hb)
+
+        def act(v):
+            return fq_floor(self._activate(v), QUANTIZED_ONE)
+
+        if self.layers == 2:
+            a0 = act(l1)
+            l2 = torch.nn.functional.linear(a0, w2, b2).reshape(n * self.count, L3)[idx]
+            h = torch.cat([a0, act(l2)], dim=1)
+            direct = l1[:, L2_V2 - 2] - l1[:, L2_V2 - 1]
+        else:
+            l1x, l1out = l1.split(L2, dim=1)
+            a0 = act(l1x)
+            l2 = torch.nn.functional.linear(a0, w2, b2).reshape(n * self.count, L3)[idx]
+            h = fq_floor(torch.clamp(l2, 0.0, 1.0), QUANTIZED_ONE)
+            direct = l1out.squeeze(1)
+
+        w = fq_round(self.output.weight.clamp(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT),
+                     OUTPUT_WEIGHT_SCALE)[b]
+        bo = fq_round(self.output.bias, NNUE2SCORE * OUTPUT_SCALE)[b]
+        out = (h * w).sum(dim=1) + bo
         return (out + direct).unsqueeze(1)
 
     def clip_weights(self):
@@ -181,7 +244,7 @@ class NNUE(nn.Module):
             self.ft_bias[:L1].uniform_(0.0, 0.5)
             self.ft_bias[L1:].zero_()
             self.ft.weight[:, L1:].zero_()
-            if init_psqt:
+            if init_psqt and F.USE_PSQT:
                 values = torch.tensor(F.feature_material_values()) / NNUE2SCORE
                 self.ft.weight[:F.NUM_FEATURES, L1:] = values.unsqueeze(1)
 
@@ -292,12 +355,19 @@ class NNUE(nn.Module):
             nstm = nstm + t[:, 1]
 
         b = buckets.long().unsqueeze(1)
-        psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        if F.USE_PSQT:
+            psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        else:   # "*-np" architectures (make psqt=no): the PSQT columns are not used
+            psqt = torch.zeros_like(b, dtype=stm.dtype)
 
         s = torch.clamp(stm[:, :L1], 0.0, 1.0)
         o = torch.clamp(nstm[:, :L1], 0.0, 1.0)
         h = L1 // 2
         x = torch.cat([s[:, :h] * s[:, h:], o[:, :h] * o[:, h:]], dim=1) * (127.0 / 128.0)
+        if self.stacks.qat:
+            # uint8 products of the engine ((a * b) >> 9 of the doubled
+            # accumulators): rounded down to steps of 1/127
+            x = fq_floor(x, QUANTIZED_ONE)
 
         return psqt, self.stacks(x, buckets)
 

@@ -28,7 +28,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <vector>
 
 #include "memory.h"
@@ -143,7 +142,7 @@ class ThreadPool {
     Search::SearchManager* main_manager();
     Thread*                main_thread() const { return threads.front().get(); }
     uint64_t               nodes_searched() const;
-    Thread*                get_best_thread() const;
+    Thread*                get_best_thread(bool simpleVote = false) const;
     void                   start_searching();
     void                   wait_for_search_finished() const;
 
@@ -153,7 +152,10 @@ class ThreadPool {
 
     // Shared histories (UCI option SharedHistory) of a NUMA node, or nullptr if
     // not shared. The first Worker that claims them is their owner (clears them).
-    Search::HistoryTables* claim_shared_histories(NumaIndex n, bool& owner);
+    // The histories shared by the threads of NUMA node n (UCI option
+    // SharedHistory), or nullptr. Sets the index of the calling thread among
+    // these threads and their number.
+    SharedHistories* claim_shared_histories(NumaIndex n, usize& numaThreadIdx, usize& numaTotal);
 
     void ensure_network_replicated();
 
@@ -171,8 +173,8 @@ class ThreadPool {
     std::vector<std::unique_ptr<Thread>> threads;
     std::vector<NumaIndex>               boundThreadToNumaNode;
 
-    std::map<NumaIndex, LargePagePtr<Search::HistoryTables>> sharedHistories;
-    std::set<NumaIndex>                                      sharedHistoriesClaimed;
+    std::map<NumaIndex, std::unique_ptr<SharedHistories>> sharedHistories;
+    std::map<NumaIndex, usize>                            threadsPerNode, threadsClaimed;
 
     uint64_t accumulate(std::atomic<uint64_t> Search::Worker::* member) const {
 

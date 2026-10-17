@@ -65,10 +65,71 @@ class SqrClippedReLU {
         return h;
     }
 
+#if defined(USE_PAIR_ACTIVATIONS)
+    // Produce the squared and linear clipped activations together, sharing the
+    // input loads and the saturating narrowing of the inputs to 16 bits (the
+    // linear ones are those of ClippedReLU). No shuffle is needed to fix up the
+    // pack lane order because the next layer's weights were already reverse
+    // pre-permuted to match by AffineTransform::get_weight_index_scrambled().
+    void propagate_pair(const InputType* input, OutputType* squared, OutputType* clipped) const {
+        static_assert(WeightScaleBits == 6);
+        static_assert(InputDimensions % 32 == 0, "propagate_pair() needs a tail path");
+
+        constexpr IndexType NumChunks = InputDimensions / 32;
+        // (x * x) >> (2 * WeightScaleBits + 7): mulhi shifts by 16
+        constexpr int SqrShift = 2 * WeightScaleBits + 7 - 16;
+
+    #if defined(USE_PAIR_ACTIVATIONS_512)
+        const auto in      = reinterpret_cast<const __m512i*>(input);
+        auto       sqrOut  = reinterpret_cast<__m256i*>(squared);
+        auto       clipOut = reinterpret_cast<__m256i*>(clipped);
+
+        const __m512i zero = _mm512_setzero_si512();
+
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            const __m512i words    = _mm512_packs_epi32(_mm512_load_si512(&in[i * 2 + 0]),
+                                                        _mm512_load_si512(&in[i * 2 + 1]));
+            const __m512i sqrWords = _mm512_srli_epi16(_mm512_mulhi_epi16(words, words), SqrShift);
+            _mm256_store_si256(&sqrOut[i], _mm512_cvtsepi16_epi8(sqrWords));
+
+            const __m512i clipWords =
+              _mm512_srli_epi16(_mm512_max_epi16(words, zero), WeightScaleBits);
+            _mm256_store_si256(&clipOut[i], _mm512_cvtsepi16_epi8(clipWords));
+        }
+
+    #else
+        const auto in      = reinterpret_cast<const __m256i*>(input);
+        auto       sqrOut  = reinterpret_cast<__m256i*>(squared);
+        auto       clipOut = reinterpret_cast<__m256i*>(clipped);
+
+        const __m256i zero = _mm256_setzero_si256();
+
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            const __m256i words0 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 0]),
+                                                      _mm256_load_si256(&in[i * 4 + 1]));
+            const __m256i words1 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 2]),
+                                                      _mm256_load_si256(&in[i * 4 + 3]));
+
+            const __m256i sqr0 = _mm256_srli_epi16(_mm256_mulhi_epi16(words0, words0), SqrShift);
+            const __m256i sqr1 = _mm256_srli_epi16(_mm256_mulhi_epi16(words1, words1), SqrShift);
+            _mm256_store_si256(&sqrOut[i], _mm256_packs_epi16(sqr0, sqr1));
+
+            const __m256i clip0 =
+              _mm256_srli_epi16(_mm256_max_epi16(words0, zero), WeightScaleBits);
+            const __m256i clip1 =
+              _mm256_srli_epi16(_mm256_max_epi16(words1, zero), WeightScaleBits);
+            _mm256_store_si256(&clipOut[i], _mm256_packs_epi16(clip0, clip1));
+        }
+    #endif
+    }
+
+#else
     // Forward propagation
     void propagate(const InputType* input, OutputType* output) const {
 
-#if defined(USE_SSE2)
+    #if defined(USE_SSE2)
         constexpr IndexType NumChunks = InputDimensions / 16;
 
         static_assert(WeightScaleBits == 6);
@@ -91,7 +152,7 @@ class SqrClippedReLU {
         }
         constexpr IndexType Start = NumChunks * 16;
 
-#elif defined(USE_NEON)
+    #elif defined(USE_NEON)
         static_assert(WeightScaleBits == 6);
         constexpr IndexType NumChunks = InputDimensions / 16;
         const auto          in        = reinterpret_cast<const int32x4_t*>(input);
@@ -112,9 +173,44 @@ class SqrClippedReLU {
         }
         constexpr IndexType Start = NumChunks * 16;
 
-#else
+    #elif defined(USE_LSX)
+        // 128 bits also with LASX, so that the outputs stay in order
+        static_assert(WeightScaleBits == 6);
+        constexpr IndexType NumChunks = InputDimensions / 16;
+        const auto          in        = reinterpret_cast<const __m128i*>(input);
+        const auto          out       = reinterpret_cast<__m128i*>(output);
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            // Signed saturation to 16 bits, high half of the square (a shift of
+            // 16), shift of 3 more and signed saturation to 8 bits, as with SSE2
+            const __m128i words0 = __lsx_vssrani_h_w(in[i * 4 + 1], in[i * 4 + 0], 0);
+            const __m128i words1 = __lsx_vssrani_h_w(in[i * 4 + 3], in[i * 4 + 2], 0);
+            const __m128i sqr0   = __lsx_vmuh_h(words0, words0);
+            const __m128i sqr1   = __lsx_vmuh_h(words1, words1);
+            out[i]               = __lsx_vssrlni_b_h(sqr1, sqr0, 3);
+        }
+        constexpr IndexType Start = NumChunks * 16;
+
+    #elif defined(USE_RVV)
+        for (std::size_t j = 0; j < InputDimensions;)
+        {
+            std::size_t vl = __riscv_vsetvl_e32m4(InputDimensions - j);
+            vint32m4_t  in = __riscv_vle32_v_i32m4(&input[j], vl);
+
+            // Saturation to 16 bits, high half of the square (a shift of 16),
+            // then a shift of 3 more with saturation to 8 bits, as with SSE2
+            vint16m2_t words    = __riscv_vnclip_wx_i16m2(in, 0, __RISCV_VXRM_RDN, vl);
+            vint16m2_t sqr      = __riscv_vmulh_vv_i16m2(words, words, vl);
+            vint8m1_t  narrowed = __riscv_vnclip_wx_i8m1(sqr, 3, __RISCV_VXRM_RDN, vl);
+
+            __riscv_vse8_v_u8m1(&output[j], __riscv_vreinterpret_v_i8m1_u8m1(narrowed), vl);
+            j += vl;
+        }
+        constexpr IndexType Start = InputDimensions;
+
+    #else
         constexpr IndexType Start = 0;
-#endif
+    #endif
 
         for (IndexType i = Start; i < InputDimensions; ++i)
         {
@@ -124,6 +220,7 @@ class SqrClippedReLU {
               std::min(127ll, ((long long) (input[i]) * input[i]) >> (2 * WeightScaleBits + 7)));
         }
     }
+#endif
 };
 
 }  // namespace Maskfish::Eval::NNUE::Layers

@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS),
                     help="architecture of the random test network (ignored with --net)")
+    ap.add_argument("--qat", action="store_true",
+                    help="evaluate the float model with the quantization of --qat training "
+                         "(the float/quantized difference should then be small)")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="check the evaluate() scaling with the engine option JieqiMaterial=true")
     args = ap.parse_args()
@@ -103,6 +106,9 @@ def main():
         S.write_nnue(q, tmp.name, "verify")
         net = tmp.name
 
+    if model is not None:
+        model.stacks.qat = args.qat
+
     engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net),
                                     "JieqiMaterial": str(args.jieqi_material).lower()})
     fens = random_positions(engine, args.positions, args.seed)
@@ -119,8 +125,10 @@ def main():
         if e_final is None:
             no_final += 1
         else:
-            material, rule40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
-            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40)
+            pos = F.parse_fen(fen)
+            material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
+            se = None if F.USE_PSQT else E.simple_eval(pos)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, se)
             if r_final == e_final:
                 scaled += 1
             else:

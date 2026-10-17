@@ -128,9 +128,9 @@ typedef enum {
 #define ZSTD_MAX_FSE_HEADERS_SIZE \
     (((MaxML + 1) * MLFSELog + (MaxLL + 1) * LLFSELog + (MaxOff + 1) * OffFSELog + 7) / 8)
 
-static UNUSED_ATTR const U8  LL_bits[MaxLL + 1]        = {0, 0, 0, 0, 0, 0,  0,  0,  0,  0,  0,  0,
-                                                          0, 0, 0, 0, 1, 1,  1,  1,  2,  2,  3,  3,
-                                                          4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+static UNUSED_ATTR const U8  LL_bits[MaxLL + 1] = {0, 0, 0, 0, 0, 0,  0,  0,  0,  0,  0,  0,
+                                                   0, 0, 0, 0, 1, 1,  1,  1,  2,  2,  3,  3,
+                                                   4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 static UNUSED_ATTR const S16 LL_defaultNorm[MaxLL + 1] = {4, 3, 2, 2, 2, 2, 2, 2, 2,  2,  2,  2,
                                                           2, 1, 1, 1, 2, 2, 2, 2, 2,  2,  2,  2,
                                                           2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1};
@@ -156,7 +156,7 @@ static UNUSED_ATTR const U32 OF_defaultNormLog = OF_DEFAULTNORMLOG;
 *  Shared functions to include for inlining
 *********************************************/
 static void ZSTD_copy8(void* dst, const void* src) {
-#if defined(ZSTD_ARCH_ARM_NEON)
+#if defined(ZSTD_ARCH_ARM_NEON) && !defined(__aarch64__)
     vst1_u8((uint8_t*) dst, vld1_u8((const uint8_t*) src));
 #else
     ZSTD_memcpy(dst, src, 8);
@@ -179,6 +179,8 @@ static void ZSTD_copy16(void* dst, const void* src) {
     vst1q_u8((uint8_t*) dst, vld1q_u8((const uint8_t*) src));
 #elif defined(ZSTD_ARCH_X86_SSE2)
     _mm_storeu_si128((__m128i*) dst, _mm_loadu_si128((const __m128i*) src));
+#elif defined(ZSTD_ARCH_RISCV_RVV)
+    __riscv_vse8_v_u8m1((uint8_t*) dst, __riscv_vle8_v_u8m1((const uint8_t*) src, 16), 16);
 #elif defined(__clang__)
     ZSTD_memmove(dst, src, 16);
 #else

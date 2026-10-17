@@ -3,7 +3,8 @@ train.py reads directly (memory-mapped, no parsing during training).
 
     python prepare_data.py data/gen1.txt data/gen2.txt --out data/train [--arch att]
     -> data/train-00000.features.npy  int16 (N, 2, 64): stm / nstm feature indices
-       data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40
+       data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40,
+                                      se (simple_eval(), for the "*-np" architectures)
        data/train-00001.* ...         one pair of files per shard
        data/train.arch                architecture of the features
        data/train.material            "major" or "jieqi" (see --jieqi-material)
@@ -42,7 +43,7 @@ import eval_scale as E
 import jieqi_features as F
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
-                       ("material", np.int16), ("rule40", np.uint8)])
+                       ("material", np.int16), ("rule40", np.uint8), ("se", np.int16)])
 CHUNK_LINES = 16384
 
 
@@ -74,6 +75,7 @@ def parse_chunk(lines: list[str]):
             if len(s) > F.MAX_ACTIVE or len(o) > F.MAX_ACTIVE:
                 continue
             material, rule40 = E.position_scale_inputs(pos, _JIEQI_MATERIAL)
+            se = E.simple_eval(pos)
             if F.THREATS:
                 phys = F.physical_threats(pos)
                 ts, to = F.active_threats(pos, stm, phys), F.active_threats(pos, 1 - stm, phys)
@@ -81,7 +83,8 @@ def parse_chunk(lines: list[str]):
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
-        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255))
+        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255),
+                   max(-32000, min(32000, se)))
         if F.THREATS:
             counts[n] = (len(ts), len(to))
             threats.append(ts)
@@ -141,7 +144,9 @@ def main():
     ap.add_argument("--shard-size", type=int, default=2_000_000, help="positions per shard")
     ap.add_argument("--workers", type=int, default=mp.cpu_count())
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
+    ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS),
+                    help="the data depends on the input features and the layer stacks "
+                         "(-s32), not on -l2 / -np")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="the data was generated with the engine option JieqiMaterial=true: "
                          "store the material evaluate() then uses (default: major_material)")

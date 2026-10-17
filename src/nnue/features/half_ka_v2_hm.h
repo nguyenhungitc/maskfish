@@ -203,6 +203,17 @@ class HalfKAv2_hm {
         return v;
     }();
 
+    // By number of pieces: dark pieces above which a position is in the upper
+    // layer stack of its pair (make stacks=32). The median number of dark
+    // pieces for that number of pieces in self-play games, so that both
+    // stacks of a pair get about as many positions (where there are dark
+    // pieces at all): the upper stack holds the positions with more hidden
+    // material than usual for their phase.
+    static constexpr int DarkStackThresholds[33] = {
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3,
+      3, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 16, 17, 19, 21, 23,
+    };
+
     static constexpr int LayerStackBuckets[33] = {
       -1, -1, 0, 0, 0, 0, 0, 1, 1,  2,  2,  3,  3,  4,  4,  5,  5,
       6,  6,  7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 13, 14, 15,

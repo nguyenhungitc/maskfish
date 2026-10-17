@@ -149,7 +149,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // when the previous continuation histories already agree.
     options.add("CMHC", Option(false));
     // When the root score suggests a forced mate, futility-prune only at low
-    // depth and skip singular extensions, to find the mate faster.
+    // depth, skip singular extensions and the small ProbCut, reduce null moves
+    // less, and reduce checks less and other moves more, to find the mate faster.
     options.add("SeekMate", Option(false));
     // Small pruning changes: razoring only at expected ALL nodes, more null
     // move pruning when improving and a reduction growing with the static eval
@@ -178,6 +179,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pruning at shallow depth: divide the history of quiet moves by a
     // depth dependent value (instead of a constant) when reducing lmrDepth.
     options.add("LMRHistoryDivisor", Option(false));
+    // Simplifications of Pikafish's search (Aug-Oct 2026): razoring margin
+    // linear in depth, LMR not depending on the window but smaller at PV nodes,
+    // no continuation history update 5 plies back, bonus of a quiet TT move
+    // linear in depth, a futility margin that does not depend on the best move,
+    // the same negative extension at cut nodes as for TT values above beta.
+    options.add("Simplifications", Option(false));
     // Add a constant offset to the continuation history updates of the move
     // one ply back.
     options.add("ContHistOffset", Option(false));
@@ -214,9 +221,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
     // always has the size for 10), with stronger updates
     options.add("BigPawnHistory", Option(false));
-    // Share the continuation, pawn and correction histories between the
-    // threads of a NUMA node (only matters with Threads > 1). Changing it
-    // recreates the threads.
+    // Share the continuation, pawn and correction histories (not the
+    // continuation correction history) between the threads of a NUMA node, as
+    // Pikafish does; the pawn and correction histories then grow with the
+    // number of threads (only matters with Threads > 1). Changing it recreates
+    // the threads.
     options.add("SharedHistory", Option(false, [this](const Option&) {
                     resize_threads();
                     return std::nullopt;
@@ -224,6 +233,45 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
+    // Pikafish "Simplify mtg in time management": the move horizon in whole
+    // moves, at most 50 (instead of centi-moves, at most 60).
+    options.add("SimpleMtg", Option(false));
+    // Pikafish "Simplify optimism scaling formula": the weight of optimism in
+    // the evaluation does not depend on the material.
+    options.add("OptimismSimple", Option(false));
+    // Pikafish "Replace nnueComplexity with simple_eval equivalent": the
+    // agreement between the network and the material balance replaces the
+    // complexity blending of the evaluation (the trainer does not model it).
+    options.add("EvalCorrelation", Option(false));
+    // Pikafish's futility pruning (margin, depth limit, returned value).
+    options.add("PikaFutility", Option(false));
+    // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
+    options.add("SimpleThreadVote", Option(false));
+    // Pikafish "Only generate legal moves in movegen" (the part not ported
+    // yet): the squares attacked by the opponent are cached in the StateInfo
+    // and used to generate and test king moves. No functional change (bench
+    // identical): compare the speed with and without.
+    options.add("ThreatCache", Option(false, [](const Option& o) {
+                    Position::useThreatCache = bool(o);
+                    return std::nullopt;
+                }));
+    // Threats by lesser pieces of the quiet move ordering from the cached
+    // threats, as Pikafish (x-raying our king): changes the move ordering.
+    options.add("ThreatCacheMovePick", Option(false, [](const Option& o) {
+                    Position::useThreatCacheMovePick = bool(o);
+                    return std::nullopt;
+                }));
+#ifdef JIEQI_NNUE_THREATS
+    // Pikafish's incremental threat features ("Full threats" DirtyThreats,
+    // "Update NNUE perspectives together"): the moves record the threats
+    // they add and remove, and the threat accumulator is updated from them
+    // instead of from the difference of the lists of threats of the two
+    // positions. No functional change (bench identical): compare the speed.
+    options.add("ThreatsIncremental", Option(false, [](const Option& o) {
+                    Eval::NNUE::AccumulatorStack::incrementalThreats = bool(o);
+                    return std::nullopt;
+                }));
+#endif
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));

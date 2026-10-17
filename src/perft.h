@@ -62,12 +62,12 @@ u64 perft(Position& pos, Depth depth) {
             return perft<false>(pos, depth - 1);
 
         u64 n = 0;
-        for (const auto& m : MoveList<LEGAL>(pos))
+        for (const auto& m : MoveList<ALL>(pos))
             n += perft_children(pos, m);
         return n;
     };
 
-    for (const auto& m : MoveList<LEGAL>(pos))
+    for (const auto& m : MoveList<ALL>(pos))
     {
         if (Root && depth <= 1)
             cnt = perft_children(pos, m), nodes += cnt;

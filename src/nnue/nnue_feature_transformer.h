@@ -32,6 +32,7 @@
 #include "nnue_accumulator.h"
 #include "nnue_architecture.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 #include "simd.h"
 
 namespace Maskfish::Eval::NNUE {
@@ -108,8 +109,8 @@ class FeatureTransformer {
         // |   1   |   3   |   5   |   7   | // Vector 1
         // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | // Packed Result
         return {0, 2, 4, 6, 1, 3, 5, 7};
-#elif defined(USE_AVX2)
-        // _mm256_packus_epi16 after permutation:
+#elif defined(USE_AVX2) || defined(USE_LASX)
+        // _mm256_packus_epi16 (or __lasx_xvssrani_bu_h) after permutation:
         // |   0   |   2   |  |   4   |   6   | // Vector 0, 2
         // |   1   |   3   |  |   5   |   7   | // Vector 1, 3
         // | 0 | 1 | 2 | 3 |  | 4 | 5 | 6 | 7 | // Packed Result
@@ -124,7 +125,8 @@ class FeatureTransformer {
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
         // Networks without PSQT (make psqt=no) have a different layout
-        constexpr std::uint32_t PSQTHash = UsePSQT ? 0 : 0x5E0D0000;
+        constexpr std::uint32_t PSQTHash =
+          (UsePSQT ? 0 : 0x5E0D0000) ^ (PSQTBuckets == 32 ? 0x0B320000 : 0);
 #ifdef JIEQI_NNUE_THREATS
         return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2)
              ^ PSQTHash;
@@ -215,11 +217,14 @@ class FeatureTransformer {
     }
 
     // Convert input features
-    std::int32_t transform(const Position&                           pos,
-                           AccumulatorStack&                         accumulatorStack,
-                           AccumulatorCaches::Cache<HalfDimensions>* cache,
-                           OutputType*                               output,
-                           int                                       bucket) const {
+    // Also records the non-zero 32-bit chunks of the output in nnzInfo, for
+    // the sparse input layer that follows.
+    std::int32_t transform(const Position&                             pos,
+                           AccumulatorStack&                           accumulatorStack,
+                           AccumulatorCaches::Cache<HalfDimensions>*   cache,
+                           OutputType*                                 output,
+                           int                                         bucket,
+                           [[maybe_unused]] NNZInfo<OutputDimensions>& nnzInfo) const {
 
         using namespace SIMD;
 
@@ -347,25 +352,84 @@ class FeatureTransformer {
             // the multiplication.
 
             constexpr int shift =
-    #if defined(USE_SSE2)
+    #if defined(USE_SSE2) || defined(USE_LSX)
               7;
     #else
               6;
     #endif
 
-            for (IndexType j = 0; j < NumOutputChunks; ++j)
+            static_assert(NumOutputChunks % 2 == 0);
+
+            [[maybe_unused]] auto cursor = nnzInfo.make_cursor(p);
+
+            for (IndexType j = 0; j < NumOutputChunks; j += 2)
             {
-                const vec_t sum0a =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 0), One), Zero), shift);
-                const vec_t sum0b =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 1), One), Zero), shift);
-                const vec_t sum1a = vec_min_16(in(in1, thr1, j * 2 + 0), One);
-                const vec_t sum1b = vec_min_16(in(in1, thr1, j * 2 + 1), One);
+                vec_t packed[2];
+                for (IndexType k = 0; k < 2; ++k)
+                {
+                    const IndexType i = (j + k) * 2;
 
-                const vec_t pa = vec_mulhi_16(sum0a, sum1a);
-                const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+                    const vec_t sum0a =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 0), One), Zero), shift);
+                    const vec_t sum0b =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 1), One), Zero), shift);
+                    const vec_t sum1a = vec_min_16(in(in1, thr1, i + 0), One);
+                    const vec_t sum1b = vec_min_16(in(in1, thr1, i + 1), One);
 
-                out[j] = vec_packus_16(pa, pb);
+                    const vec_t pa = vec_mulhi_16(sum0a, sum1a);
+                    const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+
+                    packed[k] = out[j + k] = vec_packus_16(pa, pb);
+                }
+
+                cursor.record2(packed[0], packed[1]);
+            }
+
+#elif defined(USE_RVV)
+
+            // Same arithmetic as the scalar code below; also records the
+            // indices of the non-zero output bytes
+            const BiasType* in0 = accumulations[p];
+            const BiasType* in1 = accumulations[p] + HalfDimensions / 2;
+    #ifdef JIEQI_NNUE_THREATS
+            const BiasType* thr0 = threatAccumulations[p];
+            const BiasType* thr1 = threatAccumulations[p] + HalfDimensions / 2;
+    #endif
+            for (std::size_t j = 0, vl; j < HalfDimensions / 2; j += vl)
+            {
+                vl = __riscv_vsetvl_e16m2(HalfDimensions / 2 - j);
+
+                // In 32 bits (gcc 14 crashes on vsadd), which gives the clipped
+                // values of the saturating 16-bit SIMD code
+                const vint16m2_t acc0 = __riscv_vle16_v_i16m2(in0 + j, vl);
+                const vint16m2_t acc1 = __riscv_vle16_v_i16m2(in1 + j, vl);
+    #ifdef JIEQI_NNUE_THREATS
+                vint32m4_t sum0 =
+                  __riscv_vwadd_vv_i32m4(acc0, __riscv_vle16_v_i16m2(thr0 + j, vl), vl);
+                vint32m4_t sum1 =
+                  __riscv_vwadd_vv_i32m4(acc1, __riscv_vle16_v_i16m2(thr1 + j, vl), vl);
+    #else
+                vint32m4_t sum0 = __riscv_vsext_vf2_i32m4(acc0, vl);
+                vint32m4_t sum1 = __riscv_vsext_vf2_i32m4(acc1, vl);
+    #endif
+                sum0 = __riscv_vsll_vx_i32m4(sum0, 1, vl);
+                sum1 = __riscv_vsll_vx_i32m4(sum1, 1, vl);
+                sum0 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum0, 127 * 2, vl), 0, vl);
+                sum1 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum1, 127 * 2, vl), 0, vl);
+
+                const vuint32m4_t prod =
+                  __riscv_vreinterpret_v_i32m4_u32m4(__riscv_vmul_vv_i32m4(sum0, sum1, vl));
+                const vuint8m1_t result =
+                  __riscv_vnsrl_wx_u8m1(__riscv_vnsrl_wx_u16m2(prod, 9, vl), 0, vl);
+                __riscv_vse8_v_u8m1(&output[offset + j], result, vl);
+
+                const vbool8_t    mask = __riscv_vmsne_vx_u8m1_b8(result, 0, vl);
+                const unsigned    cnt  = unsigned(__riscv_vcpop_m_b8(mask, vl));
+                const vuint16m2_t idx =
+                  __riscv_vcompress_vm_u16m2(__riscv_vid_v_u16m2(vl), mask, vl);
+                __riscv_vse16_v_u16m2(&nnzInfo.nnz[nnzInfo.count],
+                                      __riscv_vadd_vx_u16m2(idx, u16(offset + j), cnt), cnt);
+                nnzInfo.count += cnt;
             }
 
 #else

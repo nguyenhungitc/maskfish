@@ -33,6 +33,7 @@
 #include "layers/clipped_relu.h"
 #include "layers/sqr_clipped_relu.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 
 namespace Maskfish::Eval::NNUE {
 
@@ -57,7 +58,13 @@ constexpr int L2Big = 15;
 #endif
 constexpr int L3Big = 32;
 
+// make stacks=32: 32 layer stacks and PSQT buckets (see
+// HalfKAv2_hm::make_layer_stack_bucket())
+#ifdef JIEQI_NNUE_STACKS32
+constexpr IndexType PSQTBuckets = 32;
+#else
 constexpr IndexType PSQTBuckets = 16;
+#endif
 
 // make psqt=no: networks without the PSQT part of the feature transformer
 // (SFNNv17 of Pikafish). The material then goes through the layer stacks.
@@ -66,7 +73,7 @@ constexpr bool UsePSQT = false;
 #else
 constexpr bool UsePSQT = true;
 #endif
-constexpr IndexType LayerStacks = 16;
+constexpr IndexType LayerStacks = PSQTBuckets;
 
 // If vector instructions are enabled, we update and refresh the
 // accumulator tile by tile such that each tile fits in the CPU's
@@ -127,33 +134,40 @@ struct NetworkArchitecture {
             && fc_2.write_parameters(stream);
     }
 
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures) const {
+    std::int32_t propagate(const TransformedFeatureType* transformedFeatures,
+                           const NNZInfo<L1>&            nnzInfo) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             // [sqr(fc_0), crelu(fc_0), sqr(fc_1), crelu(fc_1)]
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
-              concat[ceil_to_multiple<IndexType>(FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 32)];
-            alignas(CacheLineSize) typename decltype(ac_0)::OutputBuffer ac_0_out;
+              concat[FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2];
             alignas(CacheLineSize) typename decltype(fc_1)::OutputBuffer fc_1_out;
-            alignas(CacheLineSize) typename decltype(ac_1)::OutputBuffer ac_1_out;
             alignas(CacheLineSize) typename decltype(fc_2)::OutputBuffer fc_2_out;
-
-            Buffer() { std::memset(concat, 0, sizeof(concat)); }
         };
+        // The activations fill concat completely (no padding to clear), each
+        // part starting on a multiple of 32 bytes (Pikafish "Remove
+        // unnecessary memset(), memcpy() from NetworkArchitecture::propagate()")
+        static_assert((FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2) % 32 == 0);
+        static_assert(FC_0_OUTPUTS % 32 == 0 && FC_1_OUTPUTS % 32 == 0);
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_0.propagate_pair(buffer.fc_0_out, buffer.concat, buffer.concat + FC_0_OUTPUTS);
+    #else
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.concat);
-        ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
-        std::memcpy(buffer.concat + FC_0_OUTPUTS, buffer.ac_0_out,
-                    FC_0_OUTPUTS * sizeof(typename decltype(ac_0)::OutputType));
+        ac_0.propagate(buffer.fc_0_out, buffer.concat + FC_0_OUTPUTS);
+    #endif
 
         fc_1.propagate(buffer.concat, buffer.fc_1_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2,
+                                buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #else
         ac_sqr_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2);
-        ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
-        std::memcpy(buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS, buffer.ac_1_out,
-                    FC_1_OUTPUTS * sizeof(typename decltype(ac_1)::OutputType));
+        ac_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #endif
 
         fc_2.propagate(buffer.concat, buffer.fc_2_out);
 
@@ -226,7 +240,8 @@ struct NetworkArchitecture {
             && fc_2.write_parameters(stream);
     }
 
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures) const {
+    std::int32_t propagate(const TransformedFeatureType* transformedFeatures,
+                           const NNZInfo<L1>&            nnzInfo) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -241,7 +256,7 @@ struct NetworkArchitecture {
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.ac_sqr_0_out);
         ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
         std::memcpy(buffer.ac_sqr_0_out + FC_0_OUTPUTS, buffer.ac_0_out,

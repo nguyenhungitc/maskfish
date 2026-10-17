@@ -150,11 +150,23 @@ default and described next to their definition in `src/engine.cpp`:
 `ContCorr4Ply`, `ContCorr6Ply`, `MultiCutHistory`, `CMHC`, `SeekMate`,
 `PruningTweaks`, `LMRTweaks`, `FailHighRecovery`, `AspirationTweaks`,
 `MainHistoryDecay`, `MalusDecay`, `BestMoveBonusScale`, `LMRHistoryDivisor`,
-`ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
+`Simplifications`, `ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
 `CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
-`RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory` and
-`SharedHistory`. Test them with `trainer/match.py --opt-a Name=true`; the ones
-that fail should be removed rather than kept as dead options.
+`RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory`,
+`SharedHistory`, `PikaFutility` and `SimpleThreadVote`; for the evaluation
+`OptimismSimple` and `EvalCorrelation` (the trainer does not model
+`EvalCorrelation`: do not generate training data with it); for the time
+management `SimpleMtg` (test it with a time control, `trainer/match.py --tc`).
+Test them with `trainer/match.py --opt-a Name=true`; the ones that fail should
+be removed rather than kept as dead options.
+
+Speed options, which give the same search (bench signature unchanged): compare
+the speed with and without (e.g. `bench` several times, alternating), not the
+strength: `ThreatCache` (king moves tested against threats cached in the
+position) and, in `make threats=yes` builds, `ThreatsIncremental` (threat
+features updated from the threats recorded by the moves). `ThreatCacheMovePick`
+(move ordering with the cached threats, as Pikafish) changes the search: test
+it with `match.py` like the options above.
 
 ### Debugging commands
 

@@ -754,6 +754,76 @@ python match.py --engine-a ../src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
+### 7.5. 32 layer stacks (`-s32`) and no PSQT (`-np`)
+
+Two more suffixes, after Pikafish's SFNNv17 ("32 LayerStack buckets",
+"Remove psqt accumulator"), adapted to Jieqi. Suffixes come in the order
+`-s32`, `-l2`, `-np` (e.g. `threats-s32-l2-np`).
+
+- `-s32` (engine: `make stacks=32`): 32 layer stacks and 32 PSQT buckets.
+  Pikafish picks its 32 stacks by visible material composition (rooks,
+  knights and cannons of each side); in Jieqi most of that is hidden in the
+  opening, so the stack is the piece count bucket (as for 16 stacks) times
+  2, plus 1 when more pieces are still dark than the median for that piece
+  count (`DARK_STACK_THRESHOLDS`, measured on self-play games). The stack is
+  stored in the prepared data: **prepare the data again** with `--arch
+  default-s32` (or `threats-s32`, ...).
+- `-np` (engine: `make psqt=no`, `train.py --no-psqt`): no PSQT part. The
+  complexity term of `evaluate()` then uses `simple_eval()` (material of the
+  side to move, a dark piece counting as the average of its pool) in place
+  of the PSQT output, as Pikafish does; `prepare_data.py` stores
+  `simple_eval()` of every position (field `se`), so **data prepared before
+  this change cannot train an `-np` network**.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 stacks=32 && mv maskfish maskfish-s32
+make clean && make -j build ARCH=x86-64-avx2 psqt=no && mv maskfish maskfish-np
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-s32 --arch default-s32
+python verify.py --engine ../src/maskfish-np --arch default-np
+python prepare_data.py data/gen1.txt --out data/train_s32 --arch default-s32
+python train.py data/train_s32 --val data/val_s32 --out runs/s32 --epochs 40
+python train.py data/train --val data/val --out runs/np --no-psqt --epochs 40
+```
+
+Both change the speed of the engine little (`-np` saves the PSQT
+accumulator). Compare by matches against the 16-stack network trained on the
+same data, as in [section 7.4](#74-new-layer-stacks-layers2).
+
+### 7.6. Quantization-aware training (`--qat`)
+
+Pikafish trains its networks with quantization-aware training (QAT): the
+float network learns with the rounding of the integer network that the engine
+runs. `train.py --qat` does this for the layer stacks:
+
+- the weights and biases of `fc0`, `fc1` and `fc2` are rounded in the forward
+  pass exactly as `serialize.py` exports them (the shared `fc0` part is added
+  first, as in the exported network);
+- the activations are rounded down to the 1/127 steps of the engine's 8-bit
+  activations (the products of the feature transformer, SqrClippedReLU and
+  ClippedReLU: right shifts in the engine);
+- gradients go straight through the roundings (straight-through estimator).
+
+The feature transformer itself is not rounded (it would cost a pass over all
+its weights at every step); it is already quantized finely (int8 weights at
+scale 127). The exported file format and the engine do not change, so a
+`--qat` network is used like any other. With a network loaded into the model,
+the float output with `--qat` is within about 1 internal unit of the engine's
+evaluation on average (about 8 without):
+
+```
+python train.py data/train --val data/val --out runs/qat --qat \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python verify.py --engine ../src/maskfish --net runs/qat/epoch_40.nnue \
+    --checkpoint runs/qat/epoch_40.pt --qat     # float/quantized difference with QAT
+```
+
+Whether it helps is decided by a match against the same training without
+`--qat` (it is typically most useful in the last epochs, e.g. a short
+`--resume` of a finished run with `--qat` and a low learning rate).
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -772,7 +842,8 @@ sources can be added if it uses this format and internal units (`RawScore`).
 - `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
   to move and of the other side, padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
-  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4);
+  `material`, `rule40` and `se` (inputs of the `evaluate()` scaling, see step
+  4; `se` is `simple_eval()`, used by `-np` networks);
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 
@@ -858,3 +929,21 @@ should be checked with a match before use. `.pt` checkpoints need no
 conversion: `train.py` clips the weights into the new range
 (`model.clip_weights()`, including the virtual features of the factorization)
 at the first step, and `serialize.py` exports them as usual.
+
+### 11.2. Optional: blocks without LEB128
+
+The biases and the PSQT weights of the feature transformer are written as
+LEB128 blocks (with the `COMPRESSED_LEB128` marker). Like Pikafish ("Remove
+leb128"), they can also be written as plain little-endian integers: the whole
+file is compressed with zstd anyway, so the size hardly changes and loading is
+a little simpler. The engine reads both forms (a block without the marker is
+read as plain integers), so this is not a new file version, but **older engines
+only read LEB128 blocks**: keep the default for networks that older builds must
+load.
+
+```
+python serialize.py net.nnue net-raw.nnue --no-leb128     # rewrite a network
+python serialize.py runs/x/epoch_40.pt net.nnue --no-leb128  # export a checkpoint
+```
+
+The evaluation is the same (bench gives the same node count).
