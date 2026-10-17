@@ -1100,7 +1100,7 @@ ifneq ($(SUPPORTED_ARCH), true)
 endif
 
 
-.PHONY: help analyze build profile-build macos-lipo strip install clean net \
+.PHONY: help analyze build profile-build macos-lipo strip install clean net net-pgo \
 	objclean profileclean config-sanity \
 	config-sanity \
 	icx-profile-use icx-profile-make \
@@ -1115,7 +1115,7 @@ ifeq ($(UNIVERSAL_BUILD),false)
 build: net config-sanity
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) all
 
-profile-build: net config-sanity objclean profileclean
+profile-build: net-pgo config-sanity objclean profileclean
 	@echo ""
 	@echo "Step 1/4. Building instrumented executable ..."
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) $(profile_make)
@@ -1243,6 +1243,11 @@ universalclean:
 
 net:
 	@$(SHELL) ../scripts/net.sh
+
+# The PGO bench runs the engine, which needs a network: stop before building
+# anything if there is none (the engine would exit at the bench, silently)
+net-pgo:
+	@$(SHELL) ../scripts/net.sh --require
 
 format:
 	$(CLANG-FORMAT) -i $(filter %.cpp,$(SRCS)) $(HEADERS) -style=file
@@ -1382,7 +1387,7 @@ icx-profile-use:
 .depend: $(SRCS)
 	-@$(CXX) $(DEPENDFLAGS) -MM $(SRCS) > $@ 2> /dev/null
 
-ifeq (, $(filter $(MAKECMDGOALS), help strip install clean net objclean profileclean universalclean format config-sanity))
+ifeq (, $(filter $(MAKECMDGOALS), help strip install clean net net-pgo objclean profileclean universalclean format config-sanity))
 ifeq ($(UNIVERSAL_BUILD),false)
 -include .depend
 endif
@@ -1545,6 +1550,13 @@ $(NET_SENTINEL): | $(TEMP_DIR)
 	@cd $(CURDIR) && $(SHELL) ../scripts/net.sh
 	@touch $@
 
+# With PGO, check that there is a network before any build starts (an
+# order-only prerequisite of every build: it runs at each make, but does not
+# rebuild them).
+.PHONY: universal-net-check
+universal-net-check: $(NET_SENTINEL)
+	@$(if $(filter universal-object-pgo,$(UOBJ_TGT)),cd $(CURDIR) && $(SHELL) ../scripts/net.sh --require,:)
+
 $(UNIVERSAL_ENTRY_OBJ): $(UNIVERSAL_ENTRY_SRC) $(UNIVERSAL_SRC_DIR)/select.h $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 	$(CXX) -O2 -std=c++20 $(mac_target_flags) $(UNIVERSAL_SLICE_CXXFLAGS) $(EXTRACXXFLAGS) -c $< -o $@
 
@@ -1563,7 +1575,7 @@ $(TEMP_DIR)/%/.setup: $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 
 # (the sub-make starts with objclean: a change rebuilds the whole build)
 $(TEMP_DIR)/%/maskfish.o: $(TEMP_DIR)/%/.setup $(NET_SENTINEL) $(UNIVERSAL_CONFIG) \
-                          $(SRCS) $(HEADERS) Makefile
+                          $(SRCS) $(HEADERS) Makefile | universal-net-check
 	+ENV_CXXFLAGS='$(ENV_CXXFLAGS) $(call arch-cxxflags,$*)' \
 	    $(MAKE) -C $(TEMP_DIR)/$* $(UOBJ_TGT) \
 		        ARCH=$* CXX=$(CXX) COMP=$(COMP) UNIVERSAL_SLICE=true

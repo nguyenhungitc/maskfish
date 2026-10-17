@@ -11,6 +11,10 @@
 # network, but then needs one at run time (EvalFile option). A network can also
 # be trained with the trainer in the trainer/ directory (see trainer/README.md).
 #
+# With --require (used by `make profile-build`, whose PGO bench runs the
+# engine), a missing or invalid network is an error: the script exits with
+# status 1 and says so, before anything is built.
+#
 # The download URL can be overridden with the MASKFISH_NET_URL environment
 # variable (e.g. to pin a given release).
 
@@ -66,3 +70,10 @@ fetch_network() {
 }
 
 fetch_network
+
+if [ "$1" = "--require" ] && ! is_valid "$_filename"; then
+  echo "Error: profile-guided optimization runs a benchmark, which needs a valid"
+  echo "Jieqi network at src/$_filename (see above). Put one there, or use"
+  echo "\`make build\` (no PGO)."
+  exit 1
+fi
