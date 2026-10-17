@@ -286,6 +286,7 @@ void Search::Worker::start_searching() {
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
 
     if (bestThread->rootMoves[0].pv.size() == 1
+        && !uncertain_hidden_capture(rootPos, bestThread->rootMoves[0].pv[0])
         && bestThread->rootMoves[0].extract_ponder_from_tt(tt, rootPos, rootObserver))
         uciPvSent = false;
 
@@ -300,10 +301,13 @@ void Search::Worker::start_searching() {
     // reveal), and no ponder move that moves a dark piece itself: the GUI could
     // not send it back, since a move of a dark piece must name the revealed piece.
     // (pv[0] moves a piece of the side to move, so it does not change whether
-    // the 'from' square of pv[1] holds a dark piece.)
+    // the 'from' square of pv[1] holds a dark piece.) No ponder move either
+    // after a capture of a dark piece whose identity is uncertain: the reply
+    // in the PV was found for one of the possible identities only.
     if (bestThread->rootMoves[0].pv.size() > 1
         && !rootPos.move_dark(bestThread->rootMoves[0].pv[0])
-        && !rootPos.move_dark(bestThread->rootMoves[0].pv[1]))
+        && !rootPos.move_dark(bestThread->rootMoves[0].pv[1])
+        && !uncertain_hidden_capture(rootPos, bestThread->rootMoves[0].pv[0]))
         ponder = UCIEngine::move(bestThread->rootMoves[0].pv[1]);
 
     auto bestmove = UCIEngine::move(bestThread->rootMoves[0].pv[0]);
@@ -2448,6 +2452,16 @@ Value Search::Worker::hidden_capture_search(
 }
 
 
+bool Search::Worker::uncertain_hidden_capture(const Position& pos, Move m) const {
+    if (!hiddenCaptureModel || !m.is_ok() || pos.side_to_move() != rootObserver
+        || !pos.capture(m) || !pos.is_dark(m.to_sq()))
+        return false;
+
+    Position::RestPieceList restPieces;
+    return pos.rest_pieces(~pos.side_to_move(), restPieces) > 1;
+}
+
+
 template<NodeType nodeType>
 Value Search::Worker::flip_search(
     Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
@@ -2771,8 +2785,9 @@ void SearchManager::pv(const Search::Worker&     worker,
             pv += UCIEngine::move(m);
 
             // Stop at the first move of a dark piece: what follows depends on
-            // the revealed piece, which is not known yet.
-            if (tempPos.move_dark(m))
+            // the revealed piece, which is not known yet. Likewise after a
+            // capture of a dark piece whose identity is uncertain.
+            if (tempPos.move_dark(m) || worker.uncertain_hidden_capture(tempPos, m))
                 break;
 
             tempPos.do_move(m, pvStates.emplace_back());

@@ -138,10 +138,14 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 * `bestmove` is always a plain coordinate move. When it moves a dark piece, the
   GUI must reveal the piece and send it back in the next `position` command.
 * A PV in `info` lines stops after the first move of a dark piece, because the
-  continuation depends on the piece that will be revealed.
+  continuation depends on the piece that will be revealed. With
+  `HiddenCaptureModel`, it also stops after a capture of a dark piece by the
+  side the engine searches for, when the pool of its owner holds more than one
+  kind of piece (the continuation depends on the identity of the captured
+  piece).
 * No `ponder` move is given when the best move reveals a piece, or when the
   expected reply would reveal one (the GUI could not send it back without the
-  revealed piece).
+  revealed piece), or when the PV stops after the best move as above.
 * Scores of moves that reveal pieces are expected values over the possible
   outcomes. A mate score is only reported when every outcome leads to mate.
 

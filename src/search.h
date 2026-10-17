@@ -398,6 +398,13 @@ class Worker {
                                 Depth     depth,
                                 bool      cutNode);
 
+    // Whether move m, made in pos, is a capture of a dark piece by the
+    // observer whose identity is uncertain (its owner's pool holds more than
+    // one kind of piece): with hiddenCaptureModel the search goes on with
+    // every possible identity, so the moves after m in a PV come from one of
+    // them only. Such a PV is cut after m, and gives no ponder move.
+    bool uncertain_hidden_capture(const Position& pos, Move m) const;
+
     // This is the flip search function for any nodes
     template<NodeType nodeType>
     Value flip_search(Position&              pos,
