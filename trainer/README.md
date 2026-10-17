@@ -769,6 +769,31 @@ python match.py --engine-a ../src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
+### 7.5. Networks without PSQT (`psqt=no`)
+
+The engine built with `make psqt=no` reads networks without the PSQT part of
+the feature transformer (as Pikafish's SFNNv17 and AB-JChess's networks): the
+evaluation is the layer stack output alone, the material goes through the
+layer stacks too. The architecture names get the suffix `-nopsqt` (after
+`-l2`: `default-nopsqt`, `att-l2-nopsqt`, ...). The input features do not
+change, so prepared data can be shared.
+
+A network without PSQT cannot be a material-only starting network
+(`init_net.py` refuses): start from the feature transformer of a network with
+PSQT and the same feature set.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 psqt=no && mv maskfish maskfish-nopsqt
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-nopsqt --arch default-nopsqt
+python train.py data/train --val data/val --out runs/nopsqt --no-psqt \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python match.py --engine-a ../src/maskfish-nopsqt --net-a runs/nopsqt/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue --movetime 100 --sprt 0 5
+```
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and

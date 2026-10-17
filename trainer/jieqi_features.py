@@ -25,9 +25,14 @@ Four architectures exist (select with set_arch() before building a model):
   "Threat features" section below). Idea and design from Pikafish/Stockfish
   ("full threats"), adapted to dark pieces.
 
-Each of them also exists with the layer stacks of `make layers=2` (name
-suffix "-l2", e.g. "threats-l2"): same input features (so the same prepared
-data), different layer stacks (see model.py).
+Each of them also exists with options of the engine build, as name suffixes
+in this order (e.g. "threats-l2-nopsqt"):
+
+* "-l2": the layer stacks of `make layers=2` (see model.py);
+* "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`).
+
+These two only change the model: the input features, and so the prepared
+data, are those of the name without them (feature_arch()).
 
 If you change the feature set in the engine, change it here too and re-run
 verify.py.
@@ -36,6 +41,7 @@ verify.py.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 FILE_NB = 9
 RANK_NB = 10
@@ -50,19 +56,71 @@ MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (t
 NUM_PSQT_BUCKETS = 16
 NUM_LAYER_STACKS = 16
 
-ARCHS = {
-    # name: (attack buckets, feature hash, mid mirror, threat features, layer stacks)
-    "default": (1, 0x0D17B100, False, False, 1),
-    "att": (4, 0x7A17B104, True, False, 1),
-    "threats": (1, 0x0D17B100, False, True, 1),
-    "att-threats": (4, 0x7A17B104, True, True, 1),
+class Arch(NamedTuple):
+    attack_buckets: int
+    feature_hash: int
+    mid_mirror: bool
+    threats: bool
+    layers: int = 1
+    psqt: bool = True
+
+
+BASE_ARCHS = {
+    # name: (attack buckets, feature hash, mid mirror, threat features)
+    "default": (1, 0x0D17B100, False, False),
+    "att": (4, 0x7A17B104, True, False),
+    "threats": (1, 0x0D17B100, False, True),
+    "att-threats": (4, 0x7A17B104, True, True),
 }
-LAYERS2_SUFFIX = "-l2"           # same features, layer stacks of `make layers=2`
-for _name, _a in list(ARCHS.items()):
-    ARCHS[_name + LAYERS2_SUFFIX] = _a[:4] + (2,)
+
+# Options of the engine build, as name suffixes in this order: (suffix, field
+# of Arch, value with the suffix, whether the prepared data depends on it)
+SUFFIXES = (
+    ("-l2", "layers", 2, False),
+    ("-nopsqt", "psqt", False, False),
+)
+LAYERS2_SUFFIX = "-l2"
+
+
+def _all_archs() -> dict:
+    archs = {}
+    for base, values in BASE_ARCHS.items():
+        for mask in range(1 << len(SUFFIXES)):
+            name, fields = base, {}
+            for k, (suffix, field, value, _) in enumerate(SUFFIXES):
+                if mask >> k & 1:
+                    name += suffix
+                    fields[field] = value
+            archs[name] = Arch(*values, **fields)
+    return archs
+
+
+ARCHS = _all_archs()
+
+
+def arch_name(base: str, **fields) -> str:
+    """Name of the architecture with these input features and options."""
+    name = base
+    for suffix, field, value, _ in SUFFIXES:
+        if fields.get(field, Arch._field_defaults[field]) == value:
+            name += suffix
+    return name
+
+
+def split_arch(name: str) -> tuple[str, dict]:
+    """(base name, options) of an architecture."""
+    if name not in ARCHS:
+        raise ValueError(f"unknown architecture {name!r}")
+    a = ARCHS[name]
+    base = name
+    for suffix, _, _, _ in reversed(SUFFIXES):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+    return base, {field: getattr(a, field) for _, field, _, _ in SUFFIXES}
+
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -70,12 +128,12 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_FEATURES
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT, NUM_FEATURES
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, PSQT = ARCHS[name]
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
@@ -83,13 +141,24 @@ def set_arch(name: str):
 
 def feature_arch(name: str) -> str:
     """Architecture of the input features (what prepared data is made for):
-    the name without the layer stacks suffix."""
-    return name[:-len(LAYERS2_SUFFIX)] if name.endswith(LAYERS2_SUFFIX) else name
+    the name without the suffixes that only change the model."""
+    base, fields = split_arch(name)
+    return arch_name(base, **{f: v for (_, f, _, data) in SUFFIXES if data
+                              for v in [fields[f]]})
+
+
+def model_arch(name: str, layers: int = 1, psqt: bool = True) -> str:
+    """Architecture with the input features of `name` and these model options."""
+    base, fields = split_arch(feature_arch(name))
+    fields.update(layers=layers, psqt=psqt)
+    return arch_name(base, **fields)
 
 
 def with_layers(name: str, layers: int) -> str:
-    """Architecture with these input features and these layer stacks."""
-    return feature_arch(name) + (LAYERS2_SUFFIX if layers == 2 else "")
+    """Architecture `name` with these layer stacks."""
+    base, fields = split_arch(name)
+    fields["layers"] = layers
+    return arch_name(base, **fields)
 
 # Engine piece codes (maskfish/src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)

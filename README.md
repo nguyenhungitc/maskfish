@@ -344,10 +344,9 @@ for a network **without PSQT outputs**, as Pikafish's SFNNv17: the feature
 transformer keeps only its L1 outputs and the evaluation is the layer-stack
 output alone. Such networks have a different hash (`0x5E0D0000` is xored into
 the feature-transformer hash), so they are rejected by a build with PSQT and
-vice versa. The trainer in `trainer/` does not support this architecture yet
-(it has no `--no-psqt` option and always exports PSQT weights), so no such
-network can be trained with it for now. The default build keeps the PSQT
-outputs.
+vice versa. Train such a network with `train.py --no-psqt` (section 7.5 of
+the [trainer README](trainer/README.md)), like AB-JChess's networks, which
+have no PSQT part either. The default build keeps the PSQT outputs.
 
 ## Contributing
 

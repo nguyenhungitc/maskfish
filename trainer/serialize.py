@@ -6,10 +6,10 @@ File layout (maskfish/src/nnue/network.cpp, nnue_feature_transformer.h, layers/)
     u32 feature transformer hash
       LEB128 int16 biases[L1]             (scale 127, |bias| <= 16383)
       raw    int8  weights[7560][L1]      (scale 127)
-      LEB128 int32 psqt[7560][16]         (scale 600 * 16)
+      LEB128 int32 psqt[7560][16]         (scale 600 * 16, not with "*-nopsqt")
       threat architectures only:
       raw    int8  threat weights[92711][L1] (scale 127)
-      LEB128 int32 threat psqt[92711][16]    (scale 600 * 16)
+      LEB128 int32 threat psqt[92711][16]    (scale 600 * 16, not with "*-nopsqt")
     The engine doubles the feature transformer outputs (biases + weights),
     so 1.0 is 254 before the clipped ReLU.
     16 x layer stack:
@@ -83,10 +83,16 @@ def arch_hash(l1: int | None = None, layers: int | None = None) -> int:
     return affine(h, 1)
 
 
-def ft_hash() -> int:
-    """Feature transformer hash: feature set hash(es) ^ (L1 * 2)."""
-    h = F.FEATURE_HASH ^ (F.THREAT_HASH if F.THREATS else 0)
-    return h ^ (F.L1 * 2)
+NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
+
+
+def ft_hash(arch: F.Arch | None = None) -> int:
+    """Feature transformer hash: feature set hash(es) ^ (L1 * 2), and
+    NO_PSQT_HASH without PSQT."""
+    a = arch or F.ARCHS[F.ARCH]
+    l1 = 1024 if a.threats else 2048
+    h = a.feature_hash ^ (F.THREAT_HASH if a.threats else 0)
+    return h ^ (l1 * 2) ^ (0 if a.psqt else NO_PSQT_HASH)
 
 
 def network_hash() -> int:
@@ -194,7 +200,11 @@ def quantize(model) -> dict:
             raise ValueError("feature transformer biases out of range")
         q["ft_weight"] = ftw.to(torch.int8).cpu().numpy()
         del ftw
-        q["psqt"] = np.round(w[:, L1:].cpu().double().numpy() * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+        if F.PSQT:
+            q["psqt"] = np.round(w[:, L1:].cpu().double().numpy()
+                                 * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+        else:
+            q["psqt"] = np.zeros((F.NUM_FEATURES, PSQT), dtype=np.int64)
         if F.THREATS:
             tw = model.ft_thr.weight.detach()
             tq = torch.round(tw[:, :L1].float() * FT_SCALE)
@@ -202,8 +212,9 @@ def quantize(model) -> dict:
                 raise ValueError("threat weights out of the int8 range")
             q["thr_weight"] = tq.to(torch.int8).cpu().numpy()
             del tq
-            q["thr_psqt"] = np.round(tw[:, L1:].cpu().double().numpy()
-                                     * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+            q["thr_psqt"] = (np.round(tw[:, L1:].cpu().double().numpy()
+                                      * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64) if F.PSQT
+                             else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
 
         d = stack_dims()
         st = model.stacks
@@ -242,10 +253,12 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
         raise ValueError("feature transformer parameters out of range")
     _write_leb(buf, q["ft_bias"].astype(np.int16))
     buf.write(q["ft_weight"].astype(np.int8).tobytes())
-    _write_leb(buf, q["psqt"].astype(np.int32))
+    if F.PSQT:
+        _write_leb(buf, q["psqt"].astype(np.int32))
     if F.THREATS:
         buf.write(q["thr_weight"].astype(np.int8).tobytes())
-        _write_leb(buf, q["thr_psqt"].astype(np.int32))
+        if F.PSQT:
+            _write_leb(buf, q["thr_psqt"].astype(np.int32))
 
     ahash = arch_hash()
     for k in range(STACKS):
@@ -288,11 +301,13 @@ def read_nnue(path: str) -> dict:
     else:
         n = F.NUM_FEATURES * L1
         q["ft_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.NUM_FEATURES, L1).copy()
-    q["psqt"] = _read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT)
+    q["psqt"] = (_read_leb(f, F.NUM_FEATURES * PSQT).reshape(F.NUM_FEATURES, PSQT) if F.PSQT
+                 else np.zeros((F.NUM_FEATURES, PSQT), dtype=np.int64))
     if F.THREATS:
         n = F.THREAT_DIMS * L1
         q["thr_weight"] = np.frombuffer(f.read(n), dtype=np.int8).reshape(F.THREAT_DIMS, L1).copy()
-        q["thr_psqt"] = _read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT)
+        q["thr_psqt"] = (_read_leb(f, F.THREAT_DIMS * PSQT).reshape(F.THREAT_DIMS, PSQT) if F.PSQT
+                         else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
 
     def arr(dtype, n):
         return np.frombuffer(f.read(np.dtype(dtype).itemsize * n), dtype=dtype).astype(np.int64)
@@ -317,9 +332,8 @@ def read_nnue(path: str) -> dict:
 
 def _arch_network_hashes() -> dict:
     out = {}
-    for name, (_, h, _, threats, layers) in F.ARCHS.items():
-        l1 = 1024 if threats else 2048
-        out[name] = (h ^ (F.THREAT_HASH if threats else 0) ^ (l1 * 2)) ^ arch_hash(l1, layers)
+    for name, a in F.ARCHS.items():
+        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers)
     return out
 
 
@@ -364,13 +378,16 @@ def load_into_model(q: dict, model, ft_only: bool = False):
     L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
-        model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+        if model.psqt_buckets:
+            model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
-            model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+            if model.psqt_buckets:
+                model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"]
+                                                           / (NNUE2SCORE * OUTPUT_SCALE))
         for name in ("ft_ps", "ft_kb"):
             if getattr(model, name, None) is not None:
                 getattr(model, name).weight.zero_()

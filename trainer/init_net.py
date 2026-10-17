@@ -23,6 +23,10 @@ def main():
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
     args = ap.parse_args()
     F.set_arch(args.arch)
+    if not F.PSQT:
+        raise SystemExit("a material-only network needs the PSQT buckets: make one for the "
+                         "architecture without -nopsqt, then train the -nopsqt network from "
+                         "it (train.py --no-psqt --init-net, which takes its feature transformer)")
     torch.manual_seed(0)
     model = NNUE(init_psqt=True)
     with torch.no_grad():

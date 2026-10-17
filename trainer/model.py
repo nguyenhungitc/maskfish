@@ -11,7 +11,8 @@
 
 L1 = 2048, or 1024 for the threat architectures, which also have a second
 feature transformer for the 92711 threat features (ft_thr, same outputs and
-PSQT buckets, summed with the first one). Threat features are passed as a
+PSQT buckets, summed with the first one). The "*-nopsqt" architectures (make
+psqt=no) have no PSQT buckets: the output is the layer stack alone. Threat features are passed as a
 flat index tensor with offsets (torch EmbeddingBag format), two bags per
 position: side to move, then the other side.
 
@@ -167,7 +168,8 @@ class NNUE(nn.Module):
                  kb_factor: bool = False):
         super().__init__()
         L1 = self.l1_size = F.L1
-        width = L1 + F.NUM_PSQT_BUCKETS
+        self.psqt_buckets = F.NUM_PSQT_BUCKETS if F.PSQT else 0
+        width = L1 + self.psqt_buckets
         self.ft_buckets = F.NUM_FEATURES // F.PS_NB      # king (x attack) buckets
         # Feature transformer: one row per feature (+1 padding row, never exported)
         self.ft = nn.EmbeddingBag(F.NUM_FEATURES + 1, width, mode="sum", padding_idx=F.PAD_INDEX)
@@ -181,7 +183,7 @@ class NNUE(nn.Module):
             self.ft_bias[:L1].uniform_(0.0, 0.5)
             self.ft_bias[L1:].zero_()
             self.ft.weight[:, L1:].zero_()
-            if init_psqt:
+            if init_psqt and self.psqt_buckets:
                 values = torch.tensor(F.feature_material_values()) / NNUE2SCORE
                 self.ft.weight[:F.NUM_FEATURES, L1:] = values.unsqueeze(1)
 
@@ -292,7 +294,10 @@ class NNUE(nn.Module):
             nstm = nstm + t[:, 1]
 
         b = buckets.long().unsqueeze(1)
-        psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        if self.psqt_buckets:
+            psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
+        else:
+            psqt = stm.new_zeros((stm.shape[0], 1))
 
         s = torch.clamp(stm[:, :L1], 0.0, 1.0)
         o = torch.clamp(nstm[:, :L1], 0.0, 1.0)
