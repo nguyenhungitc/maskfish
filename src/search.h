@@ -443,8 +443,9 @@ class Worker {
     bool rootSearchable = true;
 
     // Jieqi information model. The side the engine is searching for (the
-    // side to move at the root, or its opponent while pondering) learns the
-    // identity of the dark pieces it captures, but not of its own dark pieces
+    // side to move at the root; also while pondering, since the root is then
+    // the position after the expected reply, see iterative_deepening()) learns
+    // the identity of the dark pieces it captures, but not of its own dark pieces
     // captured by the opponent. With hiddenCaptureModel, a capture of a dark
     // piece by the observer is a chance node over the captured identity.
     // TT keys are salted with the observer because the same position is then
