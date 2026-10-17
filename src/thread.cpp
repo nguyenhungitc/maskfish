@@ -295,7 +295,8 @@ void ThreadPool::start_thinking(Position&          pos,
     // A board that cannot be played (see Position::pool_is_consistent()), or a
     // position set up with an invalid move (searchable is false, see
     // Engine::set_position()), is not searched: no root moves, "bestmove (none)"
-    if (searchable && pos.is_playable())
+    searchable = searchable && pos.is_playable();
+    if (searchable)
     {
         const auto legalmoves = MoveList<LEGAL>(pos);
 
@@ -331,6 +332,7 @@ void ThreadPool::start_thinking(Position&          pos,
             th->worker->nodes = th->worker->nmpMinPly = th->worker->bestMoveChanges = 0;
             th->worker->rootDepth = th->worker->completedDepth = 0;
             th->worker->rootMoves                              = rootMoves;
+            th->worker->rootSearchable                         = searchable;
             th->worker->rootPos.set(pos, &th->worker->rootState);
             th->worker->rootState = setupStates->back();
         });

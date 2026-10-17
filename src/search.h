@@ -438,6 +438,9 @@ class Worker {
 
     Position  rootPos;
     StateInfo rootState;
+    // False for a position that is not searched (invalid, see
+    // ThreadPool::start_thinking()): it has no root moves, but is not a mate
+    bool rootSearchable = true;
 
     // Jieqi information model. The side the engine is searching for (the
     // side to move at the root, or its opponent while pondering) learns the

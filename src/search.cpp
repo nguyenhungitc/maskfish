@@ -248,7 +248,12 @@ void Search::Worker::start_searching() {
     if (rootMoves.empty())
     {
         rootMoves.emplace_back(Move::none());
-        main_manager()->updates.onUpdateNoMoves({0, {-VALUE_MATE, rootPos}});
+
+        // No legal move: the side to move is mated. A position that is not
+        // searched (invalid, already reported by an "info string") has no
+        // score: a "mate 0" would tell the GUI that the game is lost.
+        if (rootSearchable)
+            main_manager()->updates.onUpdateNoMoves({0, {-VALUE_MATE, rootPos}});
     }
     else
     {
