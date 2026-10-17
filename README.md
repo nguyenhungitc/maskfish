@@ -258,7 +258,8 @@ on every x86-64 CPU at the speed of the matching build: it holds the builds
 `x86-64-avxvnni`, `x86-64-avx512bw`, `x86-64-vnni512` and `x86-64-avx512icl`,
 and selects the best one for the CPU when it starts (`compiler` prints the
 selected one; AMD Zen 1/2, whose BMI2 is slow, get `x86-64-avx2`).
-`ARCH=arm64-universal` does the same with `armv8` / `armv8-dotprod`.
+`ARCH=arm64-universal` does the same with `armv8` / `armv8-dotprod` (Linux,
+Android, Windows; not macOS, where `ARCH=apple-silicon` is the build to use).
 `make macos-lipo` makes a macOS binary for both Intel (universal) and Apple
 silicon. The published [binaries](#binaries) are made this way:
 

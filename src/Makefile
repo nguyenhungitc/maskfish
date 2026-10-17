@@ -1062,7 +1062,7 @@ help:
 	echo "armv7-neon              > ARMv7 32-bit with popcnt and neon" && \
 	echo "armv8                   > ARMv8 64-bit with popcnt and neon" && \
 	echo "armv8-dotprod           > ARMv8 64-bit with popcnt, neon and dot product support" && \
-	echo "arm64-universal         > ARMv8 64-bit with automatic runtime selection of the best architecture" && \
+	echo "arm64-universal         > ARMv8 64-bit with automatic runtime selection of the best architecture (not macOS)" && \
 	echo "e2k                     > Elbrus 2000" && \
 	echo "apple-silicon           > Apple silicon ARM64" && \
 	echo "general-64              > unspecified 64-bit" && \
@@ -1419,6 +1419,16 @@ ifeq ($(UNIVERSAL_BUILD),true)
 
 ifneq ($(optimize)$(debug),yesno)
 $(error A universal binary needs optimize=yes and debug=no (it uses the LTO-optimized objects of its builds))
+endif
+
+# The arm64 entry point reads the CPU features with getauxval() (Linux,
+# Android) or IsProcessorFeaturePresent() (Windows), and finds the
+# initializers of each build in ELF/PE sections: it does not support macOS,
+# where every Apple silicon CPU runs the same build anyway.
+ifeq ($(ARCH)$(TARGET_KERNEL),arm64-universalDarwin)
+ifneq (,$(filter build profile-build,$(MAKECMDGOALS)))
+$(error ARCH=arm64-universal is not supported on macOS: use ARCH=apple-silicon, or make macos-lipo for an Intel + Apple silicon binary)
+endif
 endif
 
 UNIVERSAL_SRC_DIR    := $(CURDIR)/universal
