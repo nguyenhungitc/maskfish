@@ -492,18 +492,22 @@ void UCIEngine::position(std::istringstream& is) {
 
     is >> token;
 
+    std::vector<std::string> moves;
+
     if (token == "startpos")
     {
         fen = StartFEN;
-        is >> token;  // Consume the "moves" token, if any
+
+        // Consume the "moves" token, if any. Without it, what follows is still
+        // taken as moves rather than silently dropping the first one.
+        if (std::string next; is >> next && next != "moves")
+            moves.push_back(next);
     }
     else if (token == "fen")
         while (is >> token && token != "moves")
             fen += token + " ";
     else
         return;
-
-    std::vector<std::string> moves;
 
     while (is >> token)
     {
