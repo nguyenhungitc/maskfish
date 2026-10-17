@@ -476,6 +476,7 @@ class Worker {
     bool   mateTTExtension = false;
     bool   stopEarly = false;
     bool   frequentTimeCheck = false;
+    bool   revealQsearchEvasions = false;
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;

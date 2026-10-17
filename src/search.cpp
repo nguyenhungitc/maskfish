@@ -377,6 +377,7 @@ bool Search::Worker::iterative_deepening() {
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
     frequentTimeCheck = bool(options["FrequentTimeCheck"]);
+    revealQsearchEvasions = bool(options["RevealQsearchEvasions"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
@@ -2131,6 +2132,12 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // Step 7. Make and search the move
         Piece movedPiece = pos.moved_piece(move);
 
+        // With RevealQsearchEvasions, a quiet move of a dark piece that evades
+        // a check gets the safe reveal bonus here too, as in search() (in
+        // check, the quiescence search tries quiet moves). (From AB-JChess.)
+        const int revealBonus =
+          revealQsearchEvasions && ss->inCheck ? Reveal::move_bonus(pos, move, revealQuiet) : 0;
+
         ss->capturedDark = pos.is_dark(move.to_sq());
         prefetch_correction_histories(ss, pos, move);
         do_move(pos, move, st, givesCheck);
@@ -2143,7 +2150,11 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         ss->continuationCorrectionHistory =
           &thisThread->continuationCorrectionHistory[movedPiece][move.to_sq()];
 
-        value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);
+        value = revealBonus == 0
+                ? -qsearch<nodeType>(pos, ss + 1, -beta, -alpha)
+                : Reveal::search_with_bonus(alpha, beta, revealBonus, [&](Value a, Value b) {
+                      return qsearch<nodeType>(pos, ss + 1, a, b);
+                  });
         undo_move(pos, move);
 
         assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);

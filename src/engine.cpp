@@ -145,6 +145,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Let the threads vote for the best move only when MultiPV is 1: in
     // MultiPV analysis the main thread's lines are kept.
     options.add("VoteSinglePVOnly", Option(false));
+    // Also give the safe reveal bonus to quiet moves of dark pieces that
+    // evade a check in the quiescence search.
+    options.add("RevealQsearchEvasions", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).

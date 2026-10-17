@@ -194,6 +194,7 @@ each one with SPRT before changing its default.
 | `CorrHistReset` | `false` | Reset the correction histories at the start of every search (otherwise they are kept until `ucinewgame`). |
 | `FrequentTimeCheck` | `false` | Check the time every 64 nodes instead of 512, to overrun short time limits less. |
 | `VoteSinglePVOnly` | `false` | With several threads, choose the best thread by vote only when `MultiPV` is 1; in MultiPV analysis the main thread's lines are reported. |
+| `RevealQsearchEvasions` | `false` | Also add the safe reveal bonus (`RevealQuiet*`) to quiet moves of dark pieces that evade a check in the quiescence search. |
 
 ### Debugging commands
 
