@@ -373,6 +373,7 @@ bool Search::Worker::iterative_deepening() {
     nmpFailHighCount = bool(options["NMPFailHighCount"]);
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
+    frequentTimeCheck = bool(options["FrequentTimeCheck"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
@@ -2731,8 +2732,12 @@ void SearchManager::check_time(Search::Worker& worker) {
     if (--callsCnt > 0)
         return;
 
-    // When using nodes, ensure checking rate is not lower than 0.1% of nodes
-    callsCnt = worker.limits.nodes ? std::min(512, int(worker.limits.nodes / 1024)) : 512;
+    // When using nodes, ensure checking rate is not lower than 0.1% of nodes.
+    // With FrequentTimeCheck, every 64 calls instead of 512, as AB-JChess
+    // does (chance nodes and the quiescence search of captures of dark pieces
+    // can take many nodes between two checks).
+    const int interval = worker.frequentTimeCheck ? 64 : 512;
+    callsCnt = worker.limits.nodes ? std::min(interval, int(worker.limits.nodes / 1024)) : interval;
 
     static TimePoint lastInfoTime = now();
 

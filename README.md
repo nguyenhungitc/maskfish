@@ -192,6 +192,7 @@ each one with SPRT before changing its default.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `CorrHistReset` | `false` | Reset the correction histories at the start of every search (otherwise they are kept until `ucinewgame`). |
+| `FrequentTimeCheck` | `false` | Check the time every 64 nodes instead of 512, to overrun short time limits less. |
 
 ### Debugging commands
 

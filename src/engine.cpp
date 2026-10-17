@@ -140,6 +140,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Reset the correction histories at the start of every search (they are
     // otherwise kept until ucinewgame).
     options.add("CorrHistReset", Option(false));
+    // Check the time every 64 nodes instead of 512.
+    options.add("FrequentTimeCheck", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).
