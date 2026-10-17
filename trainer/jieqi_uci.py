@@ -20,15 +20,40 @@ def square_from_uci(s: str) -> int:
     return F.make_square(ord(s[0]) - ord('a'), int(s[1]))
 
 
+class UnknownOption(RuntimeError):
+    pass
+
+
 class Engine:
-    def __init__(self, path: str, options: dict | None = None):
+    """options: set and required to exist (a misspelt option, or a binary built
+    before the option was added, raises UnknownOption instead of being silently
+    ignored). optional: set only if the engine has them (e.g. RawScore, which
+    other engines do not have)."""
+
+    def __init__(self, path: str, options: dict | None = None, optional: dict | None = None):
+        self.path = path
         self.p = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.send("uci")
-        self.wait_for("uciok")
+        self.option_names = set()
+        for line in self.wait_for("uciok"):
+            if line.startswith("option name "):
+                rest = line[len("option name "):]
+                self.option_names.add(rest.split(" type ")[0].strip())
+        unknown = [k for k in (options or {}) if k not in self.option_names]
+        if unknown:
+            self.quit()
+            raise UnknownOption(f"{path}: no UCI option {', '.join(unknown)} "
+                                f"(misspelt, or the binary is older than the option: rebuild it)")
+        for k, v in (optional or {}).items():
+            if k in self.option_names:
+                self.send(f"setoption name {k} value {v}")
         for k, v in (options or {}).items():
             self.send(f"setoption name {k} value {v}")
         self.isready()
+
+    def has_option(self, name: str) -> bool:
+        return name in self.option_names
 
     def send(self, cmd: str):
         self.p.stdin.write(cmd + "\n")
