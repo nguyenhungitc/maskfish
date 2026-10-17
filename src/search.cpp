@@ -290,7 +290,10 @@ void Search::Worker::start_searching() {
 
     Worker* bestThread = this;
 
-    if (!limits.depth && rootMoves[0].pv[0] != Move::none())
+    // With VoteSinglePVOnly, as AB-JChess, the threads vote for the best move
+    // only when MultiPV is 1
+    if (!limits.depth && rootMoves[0].pv[0] != Move::none()
+        && (!bool(options["VoteSinglePVOnly"]) || int(options["MultiPV"]) == 1))
         bestThread = threads.get_best_thread()->worker.get();
 
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;

@@ -142,6 +142,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("CorrHistReset", Option(false));
     // Check the time every 64 nodes instead of 512.
     options.add("FrequentTimeCheck", Option(false));
+    // Let the threads vote for the best move only when MultiPV is 1: in
+    // MultiPV analysis the main thread's lines are kept.
+    options.add("VoteSinglePVOnly", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).
