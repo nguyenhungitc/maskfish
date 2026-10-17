@@ -560,7 +560,18 @@ OptionsMap&       Engine::get_options() { return options; }
 
 std::string Engine::fen() const { return pos.fen(); }
 
-void Engine::flip() { pos.flip(); }
+// Position::flip() sets up the flipped position, which must be one that the
+// engine can handle (one king per side, ...): a position that is not (see
+// Engine::set_position()) is left as it is
+void Engine::flip() {
+    if (std::string reason; !pos.pool_is_consistent(&reason))
+    {
+        sync_cout << "info string Invalid position: " << reason << ", not flipped" << sync_endl;
+        return;
+    }
+
+    pos.flip();
+}
 
 std::string Engine::visualize() const {
     std::stringstream ss;
