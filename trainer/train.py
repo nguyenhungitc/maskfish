@@ -44,6 +44,8 @@ changes the exported network format):
   default (--no-factorize, --no-l1-fact to disable; --factorize-kb adds the
   king bucket rows that AB-JChess also uses);
 * the output layer learns at --output-lr-scale (0.1) times the base rate;
+* --optimizer ranger21: the optimizer of AB-JChess and nnue-pytorch
+  (ranger21.py), instead of Adam;
 * --stack-balance CAP weights each sample by the inverse frequency of its
   layer stack (capped at CAP, weights normalized to an average of 1 per
   stack), so that rare stacks (endgames) are not drowned out. Off by default.
@@ -262,6 +264,9 @@ def main():
                     help="also a virtual row per king bucket (AB-JChess); off by default")
     ap.add_argument("--no-l1-fact", action="store_true",
                     help="train without the fc0 part shared by the layer stacks")
+    ap.add_argument("--optimizer", choices=("adam", "ranger21"), default="adam",
+                    help="adam (default) or ranger21 (AB-JChess, nnue-pytorch: AdamW with "
+                         "lookahead)")
     ap.add_argument("--output-lr-scale", type=float, default=0.1,
                     help="learning rate of the output layer relative to --lr")
     ap.add_argument("--checkpoint-every", type=int, default=1, metavar="K",
@@ -338,16 +343,39 @@ def main():
     output_ids = {id(p) for p in output_params}
     groups = [{"params": [p for p in model.parameters() if id(p) not in output_ids], "lr": args.lr},
               {"params": output_params, "lr": args.lr * args.output_lr_scale}]
-    opt = torch.optim.Adam(groups, betas=(0.9, 0.999), eps=1e-7)
+    steps = max(1, args.epoch_size // args.batch_size)
+    if args.optimizer == "ranger21":
+        # The settings of AB-JChess (and of nnue-pytorch): the AdamW core with
+        # lookahead, without warmup / warmdown (the learning rate follows
+        # --lr and --gamma), gradient centralization, clipping or decay
+        from ranger21 import Ranger21
+        opt = Ranger21(groups, lr=args.lr, betas=(0.9, 0.999), eps=1e-7,
+                       num_batches_per_epoch=steps, num_epochs=args.epochs, use_warmup=False,
+                       warmdown_active=False, using_gc=False, using_normgc=False,
+                       use_adaptive_gradient_clipping=False, softplus=False,
+                       pnm_momentum_factor=0.0, weight_decay=0.0, logging_active=False)
+    else:
+        opt = torch.optim.Adam(groups, betas=(0.9, 0.999), eps=1e-7)
     sched = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=args.gamma)
     first_epoch = 1
     if ck is not None:
-        try:
-            opt.load_state_dict(ck["optimizer"])
-            sched.load_state_dict(ck["scheduler"])
-        except (KeyError, ValueError) as e:
-            print(f"warning: optimizer state not restored ({e}); starting a new one", flush=True)
+        restored = False
+        if ck.get("optimizer_name", "adam") != args.optimizer:
+            print(f"warning: the checkpoint was trained with --optimizer "
+                  f"{ck.get('optimizer_name', 'adam')}: starting a new {args.optimizer} optimizer",
+                  flush=True)
+        else:
+            try:
+                opt.load_state_dict(ck["optimizer"])
+                sched.load_state_dict(ck["scheduler"])
+                restored = True
+            except (KeyError, ValueError) as e:
+                print(f"warning: optimizer state not restored ({e}); starting a new one", flush=True)
         first_epoch = ck.get("epoch", 0) + 1
+        if not restored:
+            # A new optimizer keeps the learning rate where the run was
+            for _ in range(first_epoch - 1):
+                sched.step()
         del ck
 
     stack_weights = None
@@ -368,7 +396,6 @@ def main():
             raise SystemExit(f"{name} must be in [0, 1]")
     loss_args = {"score_scaling": args.score_scaling, "power": args.loss_power}
 
-    steps = max(1, args.epoch_size // args.batch_size)
     for epoch in range(first_epoch, args.epochs + 1):
         lam = epoch_lambda(epoch)
         model.train()
@@ -401,6 +428,7 @@ def main():
         print(msg, flush=True)
 
         ck = {"model": model.state_dict(), "optimizer": opt.state_dict(),
+              "optimizer_name": args.optimizer,
               "scheduler": sched.state_dict(), "epoch": epoch, "args": vars(args),
               "arch": F.ARCH}
         if epoch % max(1, args.checkpoint_every) == 0 or epoch == args.epochs:

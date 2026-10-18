@@ -40,6 +40,7 @@ code is written specifically for this engine's feature set and file format.
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
+| `ranger21.py` | Ranger21 optimizer (`train.py --optimizer ranger21`), from AB-JChess |
 | `chance_tables.py` | Score ↔ mass tables for the engine option `ChanceModel Tables` (fitted to self-play data, logistic, or copied from an AB-JChess network) |
 | `rescore.py` | Has another engine (e.g. AB-JChess) re-score positions |
 | `serialize.py` | Writes / reads `.nnue` files, converts `.nnue` into a checkpoint |
@@ -288,6 +289,7 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--factorize-kb` | | Add virtual features per king bucket (used by AB-JChess; off by default) |
 | `--no-l1-fact` | | Disable the fc0 part shared by the layer stacks (on by default) |
 | `--output-lr-scale` | 0.1 | Learning rate of the output layer, relative to `--lr` |
+| `--optimizer` | `adam` | `ranger21`: the optimizer of AB-JChess and nnue-pytorch (AdamW with lookahead, `ranger21.py`); the learning rate still follows `--lr` and `--gamma`. A run resumed with another optimizer starts a new one at the current learning rate |
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
