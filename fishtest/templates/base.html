@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Tests{% endblock %} | Maskfish fishtest</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="{{ url_for('tests') }}">Maskfish <span>fishtest</span></a>
+  <nav>
+    <a href="{{ url_for('tests') }}" class="{{ 'on' if request.endpoint in ('tests', 'view', 'diff') }}">Tests</a>
+    <a href="{{ url_for('run_form') }}" class="{{ 'on' if request.endpoint == 'run_form' or request.endpoint == 'run_submit' }}">New test</a>
+    <a href="{{ url_for('nets') }}" class="{{ 'on' if request.endpoint == 'nets' }}">Networks</a>
+    <a href="{{ url_for('settings_page') }}" class="{{ 'on' if request.endpoint == 'settings_page' }}">Settings</a>
+  </nav>
+  <a class="runner {{ runner.cls }}" href="{{ url_for('settings_page') }}" title="Local runner: {{ settings.concurrency }} games at a time, ARCH={{ settings.arch }}. Click to control it.">{{ runner.label }}</a>
+</header>
+<main>
+  {% if runner.mode == 'paused' and request.endpoint != 'settings_page' %}
+  <div class="banner">
+    <span>The runner is paused: no test is played until you resume it.</span>
+    <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><button class="btn small primary">Resume testing</button></form>
+  </div>
+  {% endif %}
+  {% with messages = get_flashed_messages() %}
+    {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<script>
+// Refreshes the element #live from ?partial=1 every few seconds while the page is visible
+(function () {
+  const el = document.getElementById("live");
+  if (!el || !el.dataset.refresh) return;
+  setInterval(async () => {
+    if (document.visibilityState !== "visible" || document.querySelector("#live :focus")) return;
+    const u = new URL(location.href);
+    u.searchParams.set("partial", "1");
+    try {
+      const r = await fetch(u);
+      if (r.ok) el.innerHTML = await r.text();
+    } catch (e) {}
+  }, 1000 * Number(el.dataset.refresh));
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

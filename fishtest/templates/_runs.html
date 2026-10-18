@@ -1,0 +1,11 @@
+{% from "_macros.html" import runs_table %}
+{{ runs_table(active, "Active", "No test is running.") }}
+{{ runs_table(pending, "Pending", "The queue is empty.") }}
+{{ runs_table(finished, "Finished", "No finished test yet.", total) }}
+{% if pages > 1 %}
+<nav class="pager">
+  {% if page > 1 %}<a class="btn small" href="{{ url_for('tests', page=page - 1) }}">&larr; Newer</a>{% endif %}
+  <span class="muted">page {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a class="btn small" href="{{ url_for('tests', page=page + 1) }}">Older &rarr;</a>{% endif %}
+</nav>
+{% endif %}
