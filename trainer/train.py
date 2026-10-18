@@ -307,18 +307,31 @@ def main():
     F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt))
     init_q, init_ft_only = None, False
     if args.init_net:
-        # A network with the other layer stacks gives only its feature transformer
+        # A network that converts into the trained architecture (adding -meta,
+        # -ctx or -blend, see serialize.convert()) is used whole; a network with
+        # the same feature set gives its feature transformer only (with zero
+        # rows for the meta features when it has none)
+        target = F.ARCH
         init_arch = S.detect_arch(args.init_net)
-        if F.input_arch(init_arch) != F.input_arch(train.arch):
-            raise SystemExit(f"--init-net is arch '{init_arch}', training '{F.ARCH}' "
-                             f"(data '{train.arch}')")
-        init_ft_only = init_arch != F.ARCH
         F.set_arch(init_arch)
         init_q = S.read_nnue(args.init_net)
-        F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt))
+        ib, ifl = F.split_arch(init_arch)
+        tb, tfl = F.split_arch(target)
+        if S.convertible(init_arch, target) is None:
+            init_q = S.convert(init_q, init_arch, target)
+        elif ib == tb and not (ifl["meta"] and not tfl["meta"]):
+            init_ft_only = True
+            if tfl["meta"] and not ifl["meta"]:
+                init_q = S.convert(init_q, init_arch, F.arch_name(ib, **{**ifl, "meta": True}))
+        else:
+            raise SystemExit(f"--init-net is arch '{init_arch}', training '{target}' "
+                             f"(data '{train.arch}'): not the same feature set")
+        F.set_arch(target)
         if init_ft_only:
             print(f"--init-net is arch '{init_arch}': only its feature transformer is used",
                   flush=True)
+        elif init_arch != target:
+            print(f"--init-net is arch '{init_arch}': converted into '{target}'", flush=True)
     print(f"arch {F.ARCH}, train: {train.n} positions" + (f", val: {val.n}" if val else ""),
           flush=True)
 

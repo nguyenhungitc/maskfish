@@ -895,6 +895,32 @@ python prepare_data.py data/gen*.txt --out data/train-meta --arch default-meta
 python train.py data/train-meta --out runs/meta --epochs 40 --epoch-size 10000000
 ```
 
+### 7.9. Starting a new architecture from an existing network
+
+A new architecture does not have to start from a material-only network:
+
+- `-meta`, `-ctx` (and both) only add inputs: `serialize.py --convert` turns a
+  network without them into one with zero weights for them, which evaluates
+  every position exactly as the original (checked with the released network).
+  It is a generation 0 as strong as the current one:
+
+  ```
+  python serialize.py --convert default-meta-ctx nets/gen5.nnue nets/default-meta-ctx-gen0.nnue
+  ```
+
+- `-blend` can also be added by `--convert`, keeping the layer stacks; the
+  evaluation changes (the layer stacks are selected differently), so it is
+  only a starting point for training.
+- `-l2` and `-nopsqt` change the layer stacks or the output: they cannot be
+  converted. `train.py --init-net` takes the feature transformer of a network
+  with the same feature set (also without `-meta`: zero rows are added), and
+  the layer stacks are trained. Train them on the data of the current line
+  (prepared for the new feature set) and compare with `match.py
+  --engine-a ... --engine-b ...` before using them as a generation 0.
+
+`train.py --init-net` converts automatically when it can (the whole network is
+then used), otherwise it takes the feature transformer only; it says which.
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and

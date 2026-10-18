@@ -36,6 +36,7 @@ evaluation is unchanged if no weight is beyond +-127, which is reported).
 
 Usage:
     python serialize.py checkpoint.pt out.nnue [--description "..."]
+    python serialize.py --convert default-meta-ctx in.nnue out.nnue (add architecture options)
     python serialize.py --to-checkpoint in.nnue out.pt     (start from a net)
     python serialize.py --upgrade old.nnue new.nnue        (old file version)
 """
@@ -325,7 +326,7 @@ def read_nnue(path: str) -> dict:
     if fth != ft_hash():
         raise ValueError("feature transformer hash mismatch")
     L1 = F.L1
-    q = {"description": description, "version": version}
+    q = {"description": description, "version": version, "psqt_present": F.PSQT}
     q["ft_bias"] = _read_leb(f, L1)
     if version == OLD_VERSION:
         q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
@@ -408,6 +409,51 @@ def upgrade(q: dict) -> tuple[int, int]:
     return clamped
 
 
+def convertible(src: str, dst: str) -> str | None:
+    """None if a network of architecture src can be converted into dst by
+    convert(), otherwise the reason. The conversions add options: "-meta" and
+    "-ctx" (zero weights: the same evaluation), "-blend" (the layer stacks are
+    kept, the evaluation changes since they are selected differently)."""
+    sb, sf = F.split_arch(src)
+    db, df = F.split_arch(dst)
+    if sb != db:
+        return f"the feature sets differ ({sb} / {db})"
+    for field in ("layers", "psqt"):
+        if sf[field] != df[field]:
+            return f"the networks differ by {field} (not convertible: train with --init-net)"
+    for field in ("meta", "ctx", "blend"):
+        if sf[field] and not df[field]:
+            return f"{field} cannot be removed"
+    return None
+
+
+def convert(q: dict, src: str, dst: str) -> dict:
+    """Network q of architecture src as a network of architecture dst (see
+    convertible()). F's architecture is left at dst."""
+    reason = convertible(src, dst)
+    if reason:
+        raise ValueError(f"cannot convert {src} into {dst}: {reason}")
+    sf, df = F.split_arch(src)[1], F.split_arch(dst)[1]
+    q = dict(q)
+    F.set_arch(src)
+    src_ps, buckets = F.PS_NB, F.NUM_FEATURES // F.PS_NB
+    F.set_arch(dst)
+    if df["meta"] and not sf["meta"]:
+        # zero rows for the meta features at the end of every bucket
+        def expand(a):
+            a = np.asarray(a).reshape(buckets, src_ps, -1)
+            z = np.zeros((buckets, F.PS_NB - src_ps, a.shape[2]), dtype=a.dtype)
+            return np.concatenate([a, z], axis=1).reshape(buckets * F.PS_NB, -1)
+        q["ft_weight"] = expand(q["ft_weight"])
+        q["psqt"] = expand(q["psqt"])
+    if df["ctx"] and not sf["ctx"]:
+        n = F.CONTEXT_INPUTS
+        q["ctx_bias"] = np.zeros(n, dtype=np.int64)
+        q["ctx_weight"] = np.zeros((n, n), dtype=np.int64)
+        q["fc0_ctx"] = np.zeros((STACKS, stack_dims()["fc0_out"], n), dtype=np.int64)
+    return q
+
+
 def load_into_model(q: dict, model, ft_only: bool = False):
     """Dequantize a network into a model (to continue training from it). The
     training-only factorized parts, if any, are set to zero. ft_only: only the
@@ -420,14 +466,15 @@ def load_into_model(q: dict, model, ft_only: bool = False):
     L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
-        if model.psqt_buckets:
+        # (a network without PSQT leaves the model's initial PSQT weights)
+        if model.psqt_buckets and q.get("psqt_present", True):
             model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
-            if model.psqt_buckets:
+            if model.psqt_buckets and q.get("psqt_present", True):
                 model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"]
                                                            / (NNUE2SCORE * OUTPUT_SCALE))
         for name in ("ft_ps", "ft_kb"):
@@ -530,7 +577,24 @@ def main():
                     help="convert a .nnue file into a checkpoint to continue training")
     ap.add_argument("--upgrade", action="store_true",
                     help="convert a .nnue file of the old version (16-bit HalfKA weights)")
+    ap.add_argument("--convert", metavar="ARCH",
+                    help="convert a .nnue file into architecture ARCH, adding -meta / -ctx "
+                         "(same evaluation) or -blend (layer stacks kept)")
     args = ap.parse_args()
+
+    if args.convert:
+        src = detect_arch(args.source)
+        F.set_arch(src)
+        q = read_nnue(args.source)
+        try:
+            q = convert(q, src, args.convert)
+        except ValueError as e:
+            raise SystemExit(str(e))
+        write_nnue(q, args.target, q["description"])
+        same = not (F.split_arch(args.convert)[1]["blend"] and not F.split_arch(src)[1]["blend"])
+        print(f"written {args.target} (arch {src} -> {F.ARCH}"
+              + (", same evaluation)" if same else ", layer stacks selected differently)"))
+        return
 
     if args.upgrade:
         F.set_arch(detect_arch(args.source))
