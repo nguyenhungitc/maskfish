@@ -36,6 +36,11 @@ def main():
         model.stacks.l2.bias.zero_()
         model.stacks.output.weight.zero_()
         model.stacks.output.bias.zero_()
+        # "-ctx": the context inputs of fc0 also feed its direct term
+        if model.ctx_tower is not None:
+            model.stacks.l1_ctx.weight.zero_()
+            model.ctx_tower.weight.zero_()
+            model.ctx_tower.bias.zero_()
     S.write_nnue(S.quantize(model), args.out, f"Jieqi material-only starting net ({F.ARCH})")
     torch.save({"model": model.state_dict(), "arch": F.ARCH}, args.out + ".pt")
     print(f"written {args.out} (arch {F.ARCH})")
