@@ -1,0 +1,107 @@
+# Builds the Docker image of fishtest/ and pushes it to Docker Hub whenever
+# fishtest changes on the pro branch.
+#
+# Repository settings (Settings > Secrets and variables > Actions):
+#   secret    DOCKERHUB_TOKEN     Docker Hub access token (Account settings > Personal access tokens, Read & Write)
+#   variable  DOCKERHUB_USERNAME  optional, Docker Hub user name (default: nguyenhungitc)
+#   variable  DOCKERHUB_IMAGE     optional, image name (default: <DOCKERHUB_USERNAME>/maskfish-fishtest)
+#
+# Tags pushed: latest, and sha-<commit> for every build.
+
+name: fishtest docker image
+
+on:
+  push:
+    branches: [pro]
+    paths:
+      - "fishtest/**"
+      - "!fishtest/**/*.md"
+      - "trainer/jieqi_features.py"
+      - "trainer/jieqi_uci.py"
+      - ".github/workflows/fishtest-docker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: fishtest-docker
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-24.04
+    env:
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'nguyenhungitc' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the secret
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Set the DOCKERHUB_TOKEN secret of the repository"
+            exit 1
+          fi
+          echo "Docker Hub user: $DOCKERHUB_USERNAME"
+
+      - name: Check the Python code
+        run: |
+          python3 -m pip install --quiet -r fishtest/requirements.txt
+          python3 -m py_compile fishtest/*.py
+          python3 fishtest/stats.py > /dev/null
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image name and tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKERHUB_IMAGE || format('{0}/maskfish-fishtest', env.DOCKERHUB_USERNAME) }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: fishtest/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: fishtest:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run -d --name ft -p 6543:6543 fishtest:test --no-runner
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:6543/tests > /dev/null && break
+            sleep 1
+          done
+          for page in /tests /tests/run /nets /settings; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:6543$page")
+            echo "$page $code"
+            [ "$code" = 200 ] || { docker logs ft; exit 1; }
+          done
+          docker rm -f ft
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: fishtest/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

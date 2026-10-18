@@ -1,0 +1,9 @@
+# Build context of fishtest/Dockerfile (the root of the repository): only the
+# files the image needs.
+*
+!fishtest/
+!trainer/jieqi_features.py
+!trainer/jieqi_uci.py
+fishtest/data/
+**/__pycache__/
+**/*.pyc

@@ -90,6 +90,34 @@ higher priority starts when the current one ends (it does not interrupt it).
 If the server is restarted, a test that was running goes back to the queue
 and continues where it was.
 
+## Docker
+
+```
+docker run -d --name fishtest -p 6543:6543 -v fishtest-data:/data nguyenhungitc/maskfish-fishtest
+```
+
+The image contains Python, git, make and g++: the engines are compiled in the
+container when a test starts (`ARCH=native`, so for the CPU of the machine
+running it), and everything is kept in the `/data` volume. Options of
+`fishtest.py` can be appended (`... maskfish-fishtest --concurrency 15`), and
+most of them changed later on the Settings page. The page listens on all
+addresses in the container: set a password on the Settings page (or
+`-e FISHTEST_PASSWORD=...`) if the port is reachable by others.
+
+To build it yourself, from the root of the repository:
+
+```
+docker build -f fishtest/Dockerfile -t maskfish-fishtest .
+```
+
+The workflow `.github/workflows/fishtest-docker.yml` builds the image
+(linux/amd64 and linux/arm64), checks that the pages answer, and pushes it to
+Docker Hub as `nguyenhungitc/maskfish-fishtest:latest` and `:sha-<commit>`
+whenever `fishtest/` (or the two trainer helpers it uses) changes on `pro`.
+It needs the repository secret `DOCKERHUB_TOKEN` (a Docker Hub access token
+with write access). In a fork, set the repository variable
+`DOCKERHUB_USERNAME` (and, for another image name, `DOCKERHUB_IMAGE`).
+
 ## Settings page
 
 * **Runner**: *Pause now* puts the current test back in the queue (its games

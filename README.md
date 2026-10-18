@@ -193,6 +193,13 @@ this repository: a PyTorch toolkit (self-play data generation, training,
 export, and a bit-exact check against the engine). See
 [`trainer/README.md`](trainer/README.md).
 
+### Testing patches
+
+[`fishtest`](fishtest/) is a local version of the fishtest of Stockfish and
+Pikafish: a web page to queue tests (branches of any fork, networks, UCI or
+make options, time control) that the same machine builds and plays with an
+SPRT. See [`fishtest/README.md`](fishtest/README.md).
+
 ## Compiling
 
 On Unix-like systems, use the Makefile in `src`:
