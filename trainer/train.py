@@ -21,8 +21,14 @@ one): checkpoints of the threat architectures take about 1.3 GB each.
 Loss (as in nnue-pytorch): the network score s (internal units) and the data
 score are both mapped to a win probability with sigmoid(x / scaling); the
 target mixes the search score and the game result with --lambda:
-    target = lambda * sigmoid(score / scaling) + (1 - lambda) * (result + 1) / 2
-    loss   = mean(|sigmoid(s / scaling) - target| ^ 2.5)
+    target = lambda * sigmoid(score / score_scaling) + (1 - lambda) * (result + 1) / 2
+    loss   = mean(|sigmoid(s / scaling) - target| ^ power)
+score_scaling is --score-scaling (default: --scaling), power --loss-power
+(2.5). AB-JChess uses 410 for the data scores, 361 for the network and the
+power 2 (with which mixing the targets is the same as mixing the two losses).
+With --lambda-end, lambda goes linearly from --lambda (first epoch) to
+--lambda-end (last epoch), as AB-JChess's lambda schedule (1.0 -> 0.8): the
+game results count more and more.
 
 s is the network output after the scaling of the engine's evaluate() (the
 data scores are search scores, made of evaluate() values; see eval_scale.py):
@@ -192,13 +198,14 @@ def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
     return model(stm, nstm, bucket, threats, blend).squeeze(1) * NNUE2SCORE
 
 
-def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True):
+def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True,
+            score_scaling: float | None = None, power: float = 2.5):
     bucket, score, result = batch[2], batch[3], batch[4]
     out = model_score(model, batch, eval_scale)
     q = torch.sigmoid(out / scaling)
-    p = torch.sigmoid(score / scaling)
+    p = torch.sigmoid(score / (score_scaling or scaling))
     target = lam * p + (1.0 - lam) * (result + 1.0) * 0.5
-    loss = torch.pow(torch.abs(q - target), 2.5)
+    loss = torch.pow(torch.abs(q - target), power)
     if stack_weights is None:
         return loss.mean()
     w = stack_weights[bucket]
@@ -229,7 +236,15 @@ def main():
     ap.add_argument("--lr", type=float, default=8.75e-4)
     ap.add_argument("--gamma", type=float, default=0.992, help="lr decay per epoch")
     ap.add_argument("--lambda", dest="lam", type=float, default=1.0)
+    ap.add_argument("--lambda-end", type=float, default=None,
+                    help="lambda of the last epoch: lambda goes linearly from --lambda to it "
+                         "(AB-JChess: 1.0 -> 0.8); default: constant --lambda")
     ap.add_argument("--scaling", type=float, default=361.0)
+    ap.add_argument("--score-scaling", type=float, default=None,
+                    help="scale of the sigmoid of the data scores (default: --scaling; "
+                         "AB-JChess: 410 with --scaling 361)")
+    ap.add_argument("--loss-power", type=float, default=2.5,
+                    help="exponent of the loss (AB-JChess: 2)")
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
     ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
@@ -342,13 +357,25 @@ def main():
         print("layer stack counts: " + " ".join(str(int(c)) for c in counts), flush=True)
         print("layer stack weights: " + " ".join(f"{x:.2f}" for x in w), flush=True)
 
+    def epoch_lambda(epoch: int) -> float:
+        if args.lambda_end is None or args.epochs <= 1:
+            return args.lam
+        t = min(1.0, max(0.0, (epoch - 1) / (args.epochs - 1)))
+        return args.lam + (args.lambda_end - args.lam) * t
+
+    for name, v in (("--lambda", args.lam), ("--lambda-end", args.lambda_end)):
+        if v is not None and not 0.0 <= v <= 1.0:
+            raise SystemExit(f"{name} must be in [0, 1]")
+    loss_args = {"score_scaling": args.score_scaling, "power": args.loss_power}
+
     steps = max(1, args.epoch_size // args.batch_size)
     for epoch in range(first_epoch, args.epochs + 1):
+        lam = epoch_lambda(epoch)
         model.train()
         t0, total = time.time(), 0.0
         for i, batch in enumerate(train.batches(args.batch_size, steps, rng, device)):
             opt.zero_grad(set_to_none=True)
-            loss = loss_fn(model, batch, args.scaling, args.lam, stack_weights, eval_scale)
+            loss = loss_fn(model, batch, args.scaling, lam, stack_weights, eval_scale, **loss_args)
             loss.backward()
             opt.step()
             model.clip_weights()
@@ -363,10 +390,12 @@ def main():
             vl, vn = 0.0, 0
             with torch.no_grad():
                 for n, batch in val.sequential(args.batch_size, 1_000_000, device):
-                    vl += loss_fn(model, batch, args.scaling, args.lam,
-                                  eval_scale=eval_scale).item() * n
+                    vl += loss_fn(model, batch, args.scaling, lam,
+                                  eval_scale=eval_scale, **loss_args).item() * n
                     vn += n
             msg += f", val loss {vl / max(1, vn):.6f}"
+        if args.lambda_end is not None:
+            msg += f", lambda {lam:.3f}"
         msg += f", lr {sched.get_last_lr()[0]:.2e}, {time.time() - t0:.0f}s"
         # (validation loss is unweighted: the real distribution of positions)
         print(msg, flush=True)

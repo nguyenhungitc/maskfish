@@ -276,6 +276,10 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--gamma` | 0.992 | Learning rate decay after every epoch |
 | `--lambda` | 1.0 | 1.0: learn from the search score only; lower: also mix in the game result |
 | `--scaling` | 361 | Score → probability constant ([step 7](#step-7-calibrate-the-score--probability-constant)) |
+| `--lambda-end` | | Lambda of the last epoch: lambda goes linearly from `--lambda` to it (AB-JChess: 1.0 → 0.8) |
+| `--score-scaling` | `--scaling` | Score → probability constant of the data scores only (AB-JChess: 410, with `--scaling 361`) |
+| `--loss-power` | 2.5 | Exponent of the loss (AB-JChess: 2) |
+| `--layers`, `--ctx`, `--no-psqt` | | Architecture options of the model (sections 7.4 to 7.6) |
 | `--init-net` | | Start from a `.nnue` file (new optimizer) |
 | `--resume` | | Continue an interrupted run from a checkpoint (optimizer and epoch count included) |
 | `--device` | `cuda` if available | `cpu` to force the CPU |
