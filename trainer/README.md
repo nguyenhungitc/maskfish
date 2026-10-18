@@ -859,6 +859,36 @@ python train.py data/train-blend --out runs/blend --epochs 40 --epoch-size 10000
 feature transformer. `--stack-balance` weights the layer stacks of the new
 selection.
 
+### 7.8. Meta features of AB-JChess (`meta=yes`)
+
+88 more input features per feature transformer bucket, of which 9 are active
+for each side, one per group (see `jieqi_features.meta_offsets()`): from the
+side of the perspective, the numbers of rooks, cannons and knights in its
+pool and in the opponent's (up to 7), the numbers of pieces in both pools (up
+to 7), the number of dark pieces on the board (8 buckets), the numbers of
+dark pieces of each side captured without being identified (0..15), and the
+numbers of revealed pieces of each side attacked by revealed enemy pieces
+(up to 7). The pool counts are already features (repeated once per piece),
+but only linearly: the one-hot groups let the network react to them
+non-linearly at no cost; the attacked pieces are new information (a small
+summary of what the `threats` architecture gives in full).
+
+The engine computes them at each evaluation and keeps them in the HalfKA
+accumulator (about 30% slower). The architecture names get the suffix
+`-meta`, first (`default-meta`, `att-meta-blend`, ...). **The input features
+change**: prepare the data with `--arch default-meta` (the feature arrays have
+80 columns instead of 64), and `--init-net` needs a network with them.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 meta=yes && mv maskfish maskfish-meta
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-meta --arch default-meta
+python prepare_data.py data/gen*.txt --out data/train-meta --arch default-meta
+python train.py data/train-meta --out runs/meta --epochs 40 --epoch-size 10000000
+```
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -874,8 +904,9 @@ sources can be added if it uses this format and internal units (`RawScore`).
 
 **Prepared** (per shard, about 260 bytes per position):
 
-- `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
-  to move and of the other side, padded with the padding index;
+- `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)` (`(N, 2, 80)` for the `-meta`
+  architectures), feature indices of the side to move and of the other side,
+  padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
   `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4),
   and `blend` (interpolation weight of the layer stacks) for the `-blend`

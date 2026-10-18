@@ -237,26 +237,21 @@ class FeatureTransformer {
         // accumulator, bounded by |bias| + 62 x 127, and the threat one,
         // bounded by 144 x 127, never wrap around if |bias| <= 24893 (checked
         // by the trainer), so this is exact.
-#ifdef JIEQI_NNUE_THREATS
-        const auto& threats = accumulatorState.threats;
-        const auto  psqt =
-          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
-                     - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
-                      / 2
-                  : 0;
         const BiasType* accumulations[2] = {accumulation[perspectives[0]],
                                             accumulation[perspectives[1]]};
+        std::int32_t    psqtSum[2]       = {psqtAccumulation[perspectives[0]][bucket],
+                                            psqtAccumulation[perspectives[1]][bucket]};
+
+#ifdef JIEQI_NNUE_THREATS
+        // The threat accumulator (make threats=yes) is added to the HalfKA one
+        // (which also holds the meta features with make meta=yes)
+        const auto&     threats                = accumulatorState.threats;
         const BiasType* threatAccumulations[2] = {threats.acc[perspectives[0]],
                                                   threats.acc[perspectives[1]]};
-#else
-        const auto psqt =
-          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket]
-                     - psqtAccumulation[perspectives[1]][bucket])
-                      / 2
-                  : 0;
-        const BiasType* accumulations[2] = {accumulation[perspectives[0]],
-                                            accumulation[perspectives[1]]};
+        psqtSum[0] += threats.psqt[perspectives[0]][bucket];
+        psqtSum[1] += threats.psqt[perspectives[1]][bucket];
 #endif
+        const auto psqt = UsePSQT ? (psqtSum[0] - psqtSum[1]) / 2 : 0;
 
         for (IndexType p = 0; p < 2; ++p)
         {

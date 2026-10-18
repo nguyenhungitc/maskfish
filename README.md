@@ -367,6 +367,17 @@ counts are within their intervals. About half of the positions then use two
 layer stacks (the engine is about 10% slower). The prepared data changes:
 see section 7.7 of the [trainer README](trainer/README.md).
 
+`make -j build meta=yes` (combinable with the options above) adds the **meta
+features** of AB-JChess to the inputs, 9 per side among 88 per feature
+transformer bucket (7560 + 528 inputs): the numbers of rooks, cannons and
+knights and of all the pieces in each pool, the number of dark pieces on the
+board, the numbers of dark pieces of each side captured without being
+identified, and the numbers of revealed pieces of each side attacked by
+revealed enemy pieces. They change with almost every move and need the
+attacks of the revealed pieces at each evaluation: the engine is about 30%
+slower. The prepared data changes: see section 7.8 of the
+[trainer README](trainer/README.md).
+
 ## Contributing
 
 See the [Contributing Guide](./CONTRIBUTING.md). Changes to the search or

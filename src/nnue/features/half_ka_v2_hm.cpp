@@ -101,6 +101,73 @@ int HalfKAv2_hm::make_cache_index(const Position& pos, Color perspective) {
     return index * int(AttackBucketNB) + bucket % int(AttackBucketNB);
 }
 
+void HalfKAv2_hm::make_meta_indices(const Position& pos,
+                                    const int       bucket[COLOR_NB],
+                                    IndexType       out[COLOR_NB][MetaFeatures]) {
+
+    int pool[COLOR_NB] = {}, strong[COLOR_NB] = {};
+    for (Color c : {WHITE, BLACK})
+        for (PieceType pt = ROOK; pt < KING; ++pt)
+        {
+            const int n = pos.rest_piece(make_piece(c, pt));
+            pool[c] += n;
+            if (pt == ROOK || pt == CANNON || pt == KNIGHT)
+                strong[c] += n;
+        }
+
+    const Bitboard darkBB         = pos.pieces(DARK);
+    const int      dark[COLOR_NB] = {popcount(pos.pieces(WHITE) & darkBB),
+                                     popcount(pos.pieces(BLACK) & darkBB)};
+    const int      darkTotal      = dark[WHITE] + dark[BLACK];
+    const int      darkBucket     = darkTotal == 0   ? 0
+                                  : darkTotal <= 2  ? 1
+                                  : darkTotal <= 4  ? 2
+                                  : darkTotal <= 8  ? 3
+                                  : darkTotal <= 12 ? 4
+                                  : darkTotal <= 16 ? 5
+                                  : darkTotal <= 24 ? 6
+                                                    : 7;
+
+    // Revealed pieces of each side attacked by revealed pieces of the other:
+    // the squares attacked by the revealed pieces of a side (Jieqi rules for
+    // revealed pieces: advisors and bishops anywhere), then their targets
+    const Bitboard occupied = pos.pieces();
+    const Bitboard visible  = occupied & ~darkBB;
+    int            targets[COLOR_NB];
+    for (Color c : {WHITE, BLACK})
+    {
+        const Bitboard own      = visible & pos.pieces(c);
+        Bitboard       attacked = 0;
+        for (Bitboard b = own & pos.pieces(PAWN); b;)
+            attacked |= attacks_bb(PAWN, pop_lsb(b), c);
+        for (Bitboard b = own & pos.pieces(ADVISOR, KING); b;)
+        {
+            const Square sq = pop_lsb(b);
+            attacked |= attacks_bb(type_of(pos.piece_on(sq)), sq);
+        }
+        for (PieceType pt : {ROOK, CANNON, KNIGHT, BISHOP})
+            for (Bitboard b = own & pos.pieces(pt); b;)
+                attacked |= attacks_bb(pt, pop_lsb(b), occupied);
+        targets[c] = std::min(popcount(attacked & visible & pos.pieces(~c)), 7);
+    }
+
+    for (Color us : {WHITE, BLACK})
+    {
+        const Color them                = ~us;
+        const int   offsets[MetaFeatures] = {std::min(strong[us], 7),
+                                             8 + std::min(strong[them], 7),
+                                             16 + std::min(pool[us], 7),
+                                             24 + std::min(pool[them], 7),
+                                             32 + darkBucket,
+                                             40 + std::clamp(pool[us] - dark[us], 0, 15),
+                                             56 + std::clamp(pool[them] - dark[them], 0, 15),
+                                             72 + targets[us],
+                                             80 + targets[them]};
+        for (int k = 0; k < MetaFeatures; ++k)
+            out[us][k] = IndexType(PS_NB * bucket[us] + PS_META + offsets[k]);
+    }
+}
+
 // Get layer stack bucket
 IndexType HalfKAv2_hm::make_layer_stack_bucket(const Position& pos) {
 #ifdef JIEQI_NNUE_BLEND

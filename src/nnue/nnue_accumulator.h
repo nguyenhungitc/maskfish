@@ -133,6 +133,15 @@ struct AccumulatorState {
 #ifdef JIEQI_NNUE_THREATS
     ThreatAccumulator<TransformedFeatureDimensionsBig> threats;
 #endif
+#ifdef JIEQI_NNUE_META
+    // The meta features (make meta=yes) whose weights are in accumulatorBig
+    // for each perspective (when it is computed): metaCount is 0 (none, after
+    // a refresh) or MetaFeatures. They are those of the position of this state
+    // only for the latest state of AccumulatorStack::evaluate(): the earlier
+    // states keep the ones of the state they were updated from.
+    IndexType    metaIndex[COLOR_NB][FeatureSet::MetaFeatures];
+    std::uint8_t metaCount[COLOR_NB] = {};
+#endif
 
     template<IndexType Size>
     auto& acc() noexcept {
@@ -186,6 +195,12 @@ class AccumulatorStack {
     template<Color Perspective, IndexType Dimensions>
     void evaluate_threats_side(const Position&                       pos,
                                const FeatureTransformer<Dimensions>& featureTransformer) noexcept;
+#endif
+
+#ifdef JIEQI_NNUE_META
+    template<Color Perspective, IndexType Dimensions>
+    void update_meta(const FeatureTransformer<Dimensions>& featureTransformer,
+                     const IndexType*                      metaIndex) noexcept;
 #endif
 
     template<Color Perspective, IndexType Dimensions>

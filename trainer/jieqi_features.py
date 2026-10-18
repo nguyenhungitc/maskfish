@@ -28,6 +28,8 @@ Four architectures exist (select with set_arch() before building a model):
 Each of them also exists with options of the engine build, as name suffixes
 in this order (e.g. "threats-l2-nopsqt"):
 
+* "-meta": the meta features of AB-JChess (`make meta=yes`, see
+  meta_offsets()), 88 more rows per feature transformer bucket;
 * "-blend": the layer stack selection of AB-JChess (`make lsblend=yes`, see
   layer_stack_selection()), which changes the prepared data (layer stack and
   interpolation weight of each position);
@@ -52,9 +54,12 @@ FILE_NB = 9
 RANK_NB = 10
 SQUARE_NB = 90
 
-PS_NB = 14 * SQUARE_NB              # 1260
+PS_META = 14 * SQUARE_NB            # 1260: rows of the meta features ("-meta")
+META_NB = 88
+META_HASH = 0x3E7A0000              # engine: xored into HalfKAv2_hm::HashValue (meta=yes)
+PS_NB = PS_META                     # + META_NB with "-meta" (set_arch())
 NUM_KING_BUCKETS = 6
-MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62
+MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62 (+ 9 meta features)
 
 MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (types.h)
 
@@ -66,6 +71,7 @@ class Arch(NamedTuple):
     feature_hash: int
     mid_mirror: bool
     threats: bool
+    meta: bool = False
     blend: bool = False
     layers: int = 1
     ctx: bool = False
@@ -83,6 +89,7 @@ BASE_ARCHS = {
 # Options of the engine build, as name suffixes in this order: (suffix, field
 # of Arch, value with the suffix, whether the prepared data depends on it)
 SUFFIXES = (
+    ("-meta", "meta", True, True),
     ("-blend", "blend", True, True),
     ("-l2", "layers", 2, False),
     ("-ctx", "ctx", True, False),
@@ -129,7 +136,7 @@ def split_arch(name: str) -> tuple[str, dict]:
 
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -137,13 +144,16 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT
-    global NUM_FEATURES
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT
+    global NUM_FEATURES, PS_NB, MAX_ACTIVE
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, BLEND, LAYERS, CTX, PSQT = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT = ARCHS[name]
+    FEATURE_HASH ^= META_HASH if META else 0
+    PS_NB = PS_META + (META_NB if META else 0)
+    MAX_ACTIVE = 80 if META else 64
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
@@ -160,7 +170,8 @@ def feature_arch(name: str) -> str:
 def input_arch(name: str) -> str:
     """Architecture of the feature transformer inputs alone: networks with the
     same input_arch() can share their feature transformer (train.py --init-net)."""
-    return split_arch(name)[0]
+    base, fields = split_arch(name)
+    return arch_name(base, meta=fields["meta"])
 
 
 def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True) -> str:
@@ -448,7 +459,66 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
             n = pos.rest[pc]
             if n:
                 out.extend([base + dri[pc]] * n)
+    if META:
+        out.extend(base + PS_META + o for o in meta_offsets(pos, perspective))
     return out
+
+
+# ---------------------------------------------------------------- meta features
+#
+# Architectures "-meta" (make meta=yes, from AB-JChess; engine:
+# HalfKAv2_hm::make_meta_indices()): 9 features per perspective, one in each
+# group, at PS_META + offset in the bucket of the perspective ("us"):
+#    0 + min(7, rooks, cannons and knights in our pool)
+#    8 + min(7, the same in the opponent's pool)
+#   16 + min(7, pieces in our pool)
+#   24 + min(7, pieces in the opponent's pool)
+#   32 + number of dark pieces on the board, bucketed (0, 1-2, 3-4, 5-8, 9-12,
+#        13-16, 17-24, more)
+#   40 + our dark pieces captured without being identified (pool count minus
+#        dark pieces on the board, 0..15)
+#   56 + the same for the opponent
+#   72 + min(7, revealed enemy pieces attacked by our revealed pieces)
+#   80 + min(7, our revealed pieces attacked by revealed enemy pieces)
+
+def _dark_density(n: int) -> int:
+    for k, limit in enumerate((0, 2, 4, 8, 12, 16, 24)):
+        if n <= limit:
+            return k
+    return 7
+
+
+def meta_offsets(pos: JieqiPosition, perspective: int) -> list[int]:
+    us, them = perspective, 1 - perspective
+    pool, strong, dark = [0, 0], [0, 0], [0, 0]
+    for c in (WHITE, BLACK):
+        for pt in (ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP):
+            n = pos.rest[make_piece(c, pt)]
+            pool[c] += n
+            if pt in (ROOK, CANNON, KNIGHT):
+                strong[c] += n
+    occupied = set()
+    for s in range(SQUARE_NB):
+        if pos.board[s]:
+            occupied.add(s)
+            if pos.dark[s]:
+                dark[color_of(pos.board[s])] += 1
+
+    def unknown(c):
+        return max(0, min(15, pool[c] - dark[c]))
+
+    def targets(attacker):
+        attacked = set()
+        for s in occupied:
+            pc = pos.board[s]
+            if not pos.dark[s] and color_of(pc) == attacker:
+                attacked.update(piece_attacks(type_of(pc), attacker, s, occupied))
+        return min(7, sum(1 for t in attacked if not pos.dark[t]
+                          and pos.board[t] and color_of(pos.board[t]) != attacker))
+
+    return [min(strong[us], 7), 8 + min(strong[them], 7), 16 + min(pool[us], 7),
+            24 + min(pool[them], 7), 32 + _dark_density(dark[0] + dark[1]),
+            40 + unknown(us), 56 + unknown(them), 72 + targets(us), 80 + targets(them)]
 
 
 def layer_stack_bucket(pos: JieqiPosition) -> int:

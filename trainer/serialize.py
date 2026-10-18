@@ -104,7 +104,7 @@ def ft_hash(arch: F.Arch | None = None) -> int:
     NO_PSQT_HASH without PSQT."""
     a = arch or F.ARCHS[F.ARCH]
     l1 = 1024 if a.threats else 2048
-    h = a.feature_hash ^ (F.THREAT_HASH if a.threats else 0)
+    h = a.feature_hash ^ (F.META_HASH if a.meta else 0) ^ (F.THREAT_HASH if a.threats else 0)
     return h ^ (l1 * 2) ^ (0 if a.psqt else NO_PSQT_HASH)
 
 

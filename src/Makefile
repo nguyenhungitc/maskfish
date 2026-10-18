@@ -112,6 +112,9 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 # lsblend = yes/no    --- -DJIEQI_NNUE_BLEND --- lsblend=yes: layer stacks selected by the
 #                                                uncertainty phase and interpolated (AB-JChess;
 #                                                needs a matching net)
+# meta = yes/no       --- -DJIEQI_NNUE_META  --- meta=yes: meta input features (pool summaries,
+#                                                unidentified losses, visible targets;
+#                                                AB-JChess; needs a matching net)
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -182,6 +185,7 @@ layers = 1
 psqt = yes
 ctx = no
 lsblend = no
+meta = no
 bits = 64
 prefetch = no
 popcnt = no
@@ -742,6 +746,9 @@ ifeq ($(ctx),yes)
 endif
 ifeq ($(lsblend),yes)
 	CXXFLAGS += -DJIEQI_NNUE_BLEND
+endif
+ifeq ($(meta),yes)
+	CXXFLAGS += -DJIEQI_NNUE_META
 endif
 
 ### 3.2.1 Floating point
@@ -1554,7 +1561,7 @@ $(TEMP_DIR):
 # one of the goal.
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
-                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
                    ldflags=$(ENV_LDFLAGS) extraldflags=$(EXTRALDFLAGS) \

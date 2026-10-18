@@ -97,32 +97,50 @@ void AccumulatorStack::evaluate(const Position&                       pos,
                                 const FeatureTransformer<Dimensions>& featureTransformer,
                                 AccumulatorCaches::Cache<Dimensions>& cache) noexcept {
 
+#ifdef JIEQI_NNUE_META
+    const auto& computed = (latest().template acc<Dimensions>()).computed;
+    const bool  needMeta = !computed[WHITE] || !computed[BLACK];
+#endif
     evaluate_side<WHITE>(pos, featureTransformer, cache);
     evaluate_side<BLACK>(pos, featureTransformer, cache);
 #ifdef JIEQI_NNUE_THREATS
     evaluate_threats(pos, featureTransformer);
 #endif
+#ifdef JIEQI_NNUE_META
+    // The meta features are added to the HalfKA accumulator: evaluate_side()
+    // leaves in the latest state those of the state it was updated from (or
+    // none after a refresh), replaced here by those of the position
+    if (needMeta)
+    {
+        const int bucket[COLOR_NB] = {FeatureSet::make_feature_bucket(pos, WHITE).first,
+                                      FeatureSet::make_feature_bucket(pos, BLACK).first};
+        IndexType metaIndex[COLOR_NB][FeatureSet::MetaFeatures];
+        FeatureSet::make_meta_indices(pos, bucket, metaIndex);
+        update_meta<WHITE>(featureTransformer, metaIndex[WHITE]);
+        update_meta<BLACK>(featureTransformer, metaIndex[BLACK]);
+    }
+#endif
 }
 
-#ifdef JIEQI_NNUE_THREATS
+#if defined(JIEQI_NNUE_THREATS) || defined(JIEQI_NNUE_META)
 namespace {
 
-// dst = src - sum of the `removed` rows + sum of the `added` rows of the threat
-// weights (src == nullptr: zero), for the accumulator and the PSQT values. The
+// dst = src - sum of the `removed` rows + sum of the `added` rows of the given
+// weights (src == nullptr: zero; src == dst: in place), for the accumulator
+// and the PSQT values. The
 // accumulator is processed by tiles kept in registers, so that it is read and
 // written once whatever the number of features.
 template<IndexType Dimensions>
-void apply_threats(std::int16_t* __restrict dst,
-                   std::int32_t* __restrict dstPsqt,
-                   const std::int16_t* __restrict src,
-                   const std::int32_t* __restrict srcPsqt,
-                   const FeatureTransformer<Dimensions>& featureTransformer,
-                   const IndexType*                      removed,
-                   int                                   nRemoved,
-                   const IndexType*                      added,
-                   int                                   nAdded) {
-
-    const ThreatWeightType* weights = featureTransformer.threatWeights;
+void apply_rows(std::int16_t*       dst,
+                std::int32_t*       dstPsqt,
+                const std::int16_t* src,
+                const std::int32_t* srcPsqt,
+                const std::int8_t* __restrict weights,
+                const PSQTWeightType* __restrict psqtWeights,
+                const IndexType* removed,
+                int              nRemoved,
+                const IndexType* added,
+                int              nAdded) {
 
 #if defined(__GNUC__)
     // GCC / clang vector extensions: 16 x int16 per vector (two registers on
@@ -143,7 +161,7 @@ void apply_threats(std::int16_t* __restrict dst,
 
         for (int k = 0; k < nRemoved; ++k)
         {
-            const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions + j;
+            const std::int8_t* w = weights + std::size_t(removed[k]) * Dimensions + j;
             for (IndexType i = 0; i < Regs; ++i)
             {
                 I8 v;
@@ -153,7 +171,7 @@ void apply_threats(std::int16_t* __restrict dst,
         }
         for (int k = 0; k < nAdded; ++k)
         {
-            const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions + j;
+            const std::int8_t* w = weights + std::size_t(added[k]) * Dimensions + j;
             for (IndexType i = 0; i < Regs; ++i)
             {
                 I8 v;
@@ -170,13 +188,13 @@ void apply_threats(std::int16_t* __restrict dst,
         dst[j] = src ? src[j] : 0;
     for (int k = 0; k < nRemoved; ++k)
     {
-        const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions;
+        const std::int8_t* w = weights + std::size_t(removed[k]) * Dimensions;
         for (IndexType j = 0; j < Dimensions; ++j)
             dst[j] = std::int16_t(dst[j] - w[j]);
     }
     for (int k = 0; k < nAdded; ++k)
     {
-        const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions;
+        const std::int8_t* w = weights + std::size_t(added[k]) * Dimensions;
         for (IndexType j = 0; j < Dimensions; ++j)
             dst[j] = std::int16_t(dst[j] + w[j]);
     }
@@ -189,10 +207,34 @@ void apply_threats(std::int16_t* __restrict dst,
         dstPsqt[b] = srcPsqt ? srcPsqt[b] : 0;
     for (int k = 0; k < nRemoved; ++k)
         for (IndexType b = 0; b < PSQTBuckets; ++b)
-            dstPsqt[b] -= featureTransformer.threatPsqtWeights[removed[k] * PSQTBuckets + b];
+            dstPsqt[b] -= psqtWeights[std::size_t(removed[k]) * PSQTBuckets + b];
     for (int k = 0; k < nAdded; ++k)
         for (IndexType b = 0; b < PSQTBuckets; ++b)
-            dstPsqt[b] += featureTransformer.threatPsqtWeights[added[k] * PSQTBuckets + b];
+            dstPsqt[b] += psqtWeights[std::size_t(added[k]) * PSQTBuckets + b];
+}
+
+}  // namespace
+#endif
+
+#ifdef JIEQI_NNUE_THREATS
+namespace {
+
+// apply_rows() with the threat weights
+template<IndexType Dimensions>
+void apply_threats(std::int16_t* __restrict dst,
+                   std::int32_t* __restrict dstPsqt,
+                   const std::int16_t* __restrict src,
+                   const std::int32_t* __restrict srcPsqt,
+                   const FeatureTransformer<Dimensions>& featureTransformer,
+                   const IndexType*                      removed,
+                   int                                   nRemoved,
+                   const IndexType*                      added,
+                   int                                   nAdded) {
+    static_assert(sizeof(ThreatWeightType) == 1);
+    apply_rows<Dimensions>(dst, dstPsqt, src, srcPsqt,
+                           reinterpret_cast<const std::int8_t*>(featureTransformer.threatWeights),
+                           featureTransformer.threatPsqtWeights, removed, nRemoved, added,
+                           nAdded);
 }
 
 // Feature indices of a list of threats (those that are features). Branchless:
@@ -311,6 +353,38 @@ void AccumulatorStack::evaluate_threats_side(
 }
 #endif
 
+#ifdef JIEQI_NNUE_META
+template<Color Perspective, IndexType Dimensions>
+void AccumulatorStack::update_meta(const FeatureTransformer<Dimensions>& featureTransformer,
+                                   const IndexType*                      metaIndex) noexcept {
+
+    constexpr int N = FeatureSet::MetaFeatures;
+
+    auto&      state = mut_latest();
+    auto&      acc   = state.template acc<Dimensions>();
+    IndexType* old   = state.metaIndex[Perspective];
+
+    IndexType removed[N], added[N];
+    int       nRemoved = 0, nAdded = 0;
+    for (int k = 0; k < N; ++k)
+        if (!state.metaCount[Perspective] || old[k] != metaIndex[k])
+        {
+            if (state.metaCount[Perspective])
+                removed[nRemoved++] = old[k];
+            added[nAdded++] = metaIndex[k];
+        }
+
+    if (nAdded)
+        apply_rows<Dimensions>(acc.accumulation[Perspective], acc.psqtAccumulation[Perspective],
+                               acc.accumulation[Perspective], acc.psqtAccumulation[Perspective],
+                               featureTransformer.weights, featureTransformer.psqtWeights, removed,
+                               nRemoved, added, nAdded);
+
+    std::copy(metaIndex, metaIndex + N, old);
+    state.metaCount[Perspective] = N;
+}
+#endif
+
 template<Color Perspective, IndexType Dimensions>
 void AccumulatorStack::evaluate_side(const Position&                       pos,
                                      const FeatureTransformer<Dimensions>& featureTransformer,
@@ -319,12 +393,28 @@ void AccumulatorStack::evaluate_side(const Position&                       pos,
     const auto last_usable_accum = find_last_usable_accumulator<Perspective, Dimensions>();
 
     if ((accumulators[last_usable_accum].template acc<Dimensions>()).computed[Perspective])
+    {
         forward_update_incremental<Perspective>(pos, featureTransformer, last_usable_accum);
-
+#ifdef JIEQI_NNUE_META
+        // The updated states have the meta features of the first one
+        const auto& from = accumulators[last_usable_accum];
+        for (std::size_t i = last_usable_accum + 1; i < size; ++i)
+        {
+            std::copy(std::begin(from.metaIndex[Perspective]), std::end(from.metaIndex[Perspective]),
+                      accumulators[i].metaIndex[Perspective]);
+            accumulators[i].metaCount[Perspective] = from.metaCount[Perspective];
+        }
+#endif
+    }
     else
     {
         update_accumulator_refresh_cache<Perspective>(featureTransformer, pos, mut_latest(), cache);
         backward_update_incremental<Perspective>(pos, featureTransformer, last_usable_accum);
+#ifdef JIEQI_NNUE_META
+        // A refresh computes the HalfKA features only
+        for (std::size_t i = last_usable_accum; i < size; ++i)
+            accumulators[i].metaCount[Perspective] = 0;
+#endif
     }
 }
 
