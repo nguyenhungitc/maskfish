@@ -126,6 +126,25 @@ scripts/pipeline.sh -g 3 --dry-run          # print the commands, run nothing
 | `--dry-run` | Print the commands only |
 | `--test-telegram` | Send a test message |
 
+**Architecture** (`pipeline.env`, shared with `autotune.sh` by `scripts/arch.sh`):
+`NNUE_ARCH` (feature set), `LAYERS`, `META`, `BLEND`, `CTX`, `PSQT` select the
+network (README sections 7.4 to 7.8); each architecture has its own engine
+binary (`src/maskfish-meta-ctx`, ...), its own line of nets
+(`nets/default-meta-ctx-genN.nnue`, ...) and, for `META` / `BLEND`, its own
+prepared data (`data/prep-default-meta`, ...). With `INIT_NET` set, generation 0
+of a new line is that net converted (README section 7.9) instead of a
+material-only net: with `META=1` / `CTX=1` it evaluates exactly as the original,
+so the new line starts at the strength of the current one:
+
+```
+# pipeline.env: META=1 CTX=1 INIT_NET="nets/gen5.nnue"
+scripts/pipeline.sh -g 0       # nets/default-meta-ctx-gen0.nnue = gen5 converted → data → gen1
+```
+
+`PSQT=0` (and `LAYERS=2` from a `LAYERS=1` net) cannot be converted: train a
+first net with `train.py --init-net` (README section 7.9) and copy it to
+`nets/<arch>-gen0.nnue`.
+
 **Interrupted?** Run the same command again: existing data is kept
 (finished games of an interrupted generation are recovered from the `.part`
 files), training resumes from `last.pt`. On any error a ❌ Telegram message

@@ -95,6 +95,7 @@ if [[ -z "${PYTHON:-}" ]]; then
 fi
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_EPOCH_EVERY:=5}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
 : "${MAKE_ARCH:=native}"; : "${NNUE_ARCH:=default}"; : "${LAYERS:=1}"
+: "${META:=0}"; : "${BLEND:=0}"; : "${CTX:=0}"; : "${PSQT:=1}"; : "${INIT_NET:=}"
 : "${GAMES:=50000}"; : "${VAL_GAMES:=1000}"; : "${NODES:=5000}"; : "${DEPTH:=0}"
 : "${GEN_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"; : "${ADJUDICATE:=3000}"; : "${GEN_OPTS:=}"
 : "${CHANCE_SCALING:=}"; : "${SEED_BASE:=}"
@@ -143,27 +144,15 @@ fi
 NEXT=$(( GEN + 1 ))
 
 # ----------------------------------------------------------------------------- file names / architecture
-case "$NNUE_ARCH" in
-  default)     BIN_BASE="maskfish";         MAKE_FLAGS=() ;;
-  att)         BIN_BASE="maskfish-att";     MAKE_FLAGS=(nnue=att) ;;
-  threats)     BIN_BASE="maskfish-thr";     MAKE_FLAGS=(threats=yes) ;;
-  att-threats) BIN_BASE="maskfish-att-thr"; MAKE_FLAGS=(threats=yes nnue=att) ;;
-  *) echo "Invalid NNUE_ARCH: $NNUE_ARCH (default|att|threats|att-threats)" >&2; exit 2 ;;
-esac
-case "$LAYERS" in
-  1) ARCH_FULL="$NNUE_ARCH" ;;
-  2) ARCH_FULL="${NNUE_ARCH}-l2"; BIN_BASE="${BIN_BASE}-l2"; MAKE_FLAGS+=(layers=2) ;;
-  *) echo "LAYERS must be 1 or 2" >&2; exit 2 ;;
-esac
+# ARCH_FULL, FEATURE_ARCH, BIN_BASE, MAKE_FLAGS, TRAIN_ARCH, LP, PREP_DIR (see arch.sh)
+source "$SCRIPT_DIR/arch.sh"
+set_arch_vars || exit 2
 ENGINE="${ENGINE:-$SRC_DIR/$BIN_BASE}"
-# every architecture is its own line of nets; default keeps the README layout
-if [[ "$ARCH_FULL" == "default" ]]; then LP=""; else LP="${ARCH_FULL}-"; fi
 TAGSFX=""; [[ -n "$TAG" ]] && TAGSFX="_${TAG}"
 [[ -z "$TAG" || "$TAG" =~ ^[A-Za-z0-9.]+$ ]] || { echo "--tag may only contain letters, digits and dots" >&2; exit 2; }
 
 NET_CUR="nets/${LP}gen${GEN}.nnue"
 NET_NEXT="nets/${LP}gen${NEXT}.nnue"
-PREP_DIR="data/prep-${NNUE_ARCH}"          # prepared data, per feature set
 RUN_DIR="runs/${LP}gen${NEXT}"
 LOG_DIR="logs/${LP}gen${GEN}${TAGSFX}"
 GEN_TXT="data/${LP}gen${GEN}${TAGSFX}.txt"
@@ -323,6 +312,7 @@ autotune() {
     att-threats) eng_mb=600; bpp=350; ck_mb=1900; nnue_mb=80 ;;
   esac
   (( LAYERS == 2 )) && ck_mb=$(( ck_mb * 11 / 10 ))
+  (( META )) && bpp=$(( bpp + 70 ))       # 80 feature columns instead of 64
   local base=$(( cpus > 1 ? cpus - 1 : 1 )) cap
   if [[ -z "${USERSET[GEN_WORKERS]:-}" ]]; then
     cap=$(( avail * 85 / 100 / eng_mb )); GEN_WORKERS=$(( base < cap ? base : cap )); (( GEN_WORKERS < 1 )) && GEN_WORKERS=1
@@ -442,6 +432,19 @@ s_init() {
   if [[ -f "$NET_CUR" ]]; then
     echo "$NET_CUR exists" | tee -a "$CUR_LOG"; info "$(html_escape "$NET_CUR") exists, skipped"; return 0
   fi
+  if [[ -n "$INIT_NET" ]]; then
+    # an existing net (e.g. of the default line) converted into this architecture
+    # (README section 7.9): -meta / -ctx keep its evaluation, -blend its layer stacks
+    [[ -f "$INIT_NET" ]] || (( DRY_RUN )) || fail "INIT_NET $INIT_NET not found" || return 1
+    run "$CUR_LOG" "$PYTHON" -u serialize.py --convert "$ARCH_FULL" "$INIT_NET" "$NET_CUR" \
+      || fail "INIT_NET cannot be converted into $ARCH_FULL (README section 7.9)" || return 1
+    info "Created $(html_escape "$NET_CUR") from $(html_escape "$INIT_NET")"
+    return 0
+  fi
+  if (( ! PSQT )); then
+    fail "A material-only net needs PSQT: set INIT_NET, or train a first $ARCH_FULL net with train.py --init-net (README section 7.9)"
+    return 1
+  fi
   run "$CUR_LOG" "$PYTHON" -u init_net.py "$NET_CUR" --arch "$ARCH_FULL" || return 1
   info "Created material-only net: $(html_escape "$NET_CUR")"
 }
@@ -498,6 +501,10 @@ s_fit() {   # informational only, never fails the pipeline
 prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
   local txt="$1" prefix="$2" force="$3"
   # ".material" is written since the shards hold material / rule40 (evaluate() scaling in the loss)
+  if [[ -f "${prefix}.arch" && "$(cat "${prefix}.arch")" != "$FEATURE_ARCH" ]]; then
+    echo "Prepared for $(cat "${prefix}.arch"), not $FEATURE_ARCH: preparing again" | tee -a "$CUR_LOG"
+    force=1
+  fi
   if [[ -f "${prefix}.arch" && -f "${prefix}.material" && "$force" == 0 ]]; then
     echo "Already prepared: $prefix" | tee -a "$CUR_LOG"; return 0
   fi
@@ -510,7 +517,7 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
   fi
   local inputs=("$txt") s
   for s in "${txt}".salvage-*; do [[ -s "$s" ]] && inputs+=("$s"); done
-  local cmd=("$PYTHON" -u prepare_data.py "${inputs[@]}" --out "$prefix" --arch "$NNUE_ARCH"
+  local cmd=("$PYTHON" -u prepare_data.py "${inputs[@]}" --out "$prefix" --arch "$FEATURE_ARCH"
              --shard-size "$SHARD_SIZE" --max-score "$MAX_SCORE" --score-scale "$SCORE_SCALE")
   [[ -n "$PREP_WORKERS" ]] && cmd+=(--workers "$PREP_WORKERS")
   # data generated with JieqiMaterial=true: evaluate() uses jieqi_major_material()
@@ -584,12 +591,13 @@ s_train() {
     echo "Warning: no validation set" | tee -a "$CUR_LOG"; info "⚠ No validation set"; fi
   cmd+=(--out "$RUN_DIR" --epochs "$EPOCHS" --epoch-size "$EPOCH_SIZE" --batch-size "$BATCH_SIZE"
         --lr "$LR" --gamma "$GAMMA" --lambda "$LAMBDA" --scaling "$SCALING"
-        --layers "$LAYERS" --checkpoint-every "$CHECKPOINT_EVERY")
+        "${TRAIN_ARCH[@]}" --checkpoint-every "$CHECKPOINT_EVERY")
   [[ -n "$DEVICE" ]] && cmd+=(--device "$DEVICE")
   (( TRAIN_THREADS > 0 )) && cmd+=(--threads "$TRAIN_THREADS")
   if [[ -f "$RUN_DIR/last.pt" && $NO_RESUME == 0 ]]; then
     cmd+=(--resume "$RUN_DIR/last.pt"); info "Resuming from $(html_escape "$RUN_DIR/last.pt") (epoch ${done_ep})"
-  elif (( GEN > 0 )) && [[ "$INIT_FROM_CURRENT" == 1 ]]; then
+  elif (( GEN > 0 )) || [[ -n "$INIT_NET" ]] && [[ "$INIT_FROM_CURRENT" == 1 ]]; then
+    # (gen0 made from INIT_NET is a trained net: continue from it too)
     [[ -f "$NET_CUR" ]] || (( DRY_RUN )) || fail "$NET_CUR not found for --init-net" || return 1
     cmd+=(--init-net "$NET_CUR")
   fi
@@ -714,7 +722,7 @@ if [[ "$MODE" != gen ]] && (( ! SKIP_CHECK )); then
 fi
 
 if [[ "$MODE" != train ]]; then
-  (( GEN == 0 )) && step "Create gen0 net (material)" s_init
+  (( GEN == 0 )) && step "Create gen0 net$( [[ -n "$INIT_NET" ]] && echo " (from INIT_NET)" || echo " (material)" )" s_init
   step "Generate training data" s_gendata
   step "Generate validation data" s_genval
   step "Fit scaling (informational)" s_fit

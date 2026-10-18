@@ -116,10 +116,10 @@ JQ_OPTS="${JQ_OPTS:-}"
 : "${OPT_EXT_CONFIRM:=1}"       # 1 = an option that wins its SPRT must be confirmed against the 2 outside engines
 : "${OPT_EXT_PAIRS:=100}"
 : "${OPT_EXT_TOL:=0}"           # outside Elo (average) with the option ≥ without it − TOL
-: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial}"
+: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial VoteSinglePVOnly FrequentTimeCheck}"
 : "${OPT_INT_TESTS:=ChanceRiskAversion:10,20,-10}"     # numeric options: Name:value,value,...
 : "${OPT_INT_REMOVABLE:=ChanceRiskAversion}"            # numeric options that may be removed if every value loses
-: "${OPT_GROUP_TESTS:=RevealQuietOff:RevealQuietBase=0+RevealQuietSafety=0+RevealQuietHighValue=0}"
+: "${OPT_GROUP_TESTS:=RevealQuietOff:RevealQuietBase=0+RevealQuietSafety=0+RevealQuietHighValue=0 ChanceLinear:ChanceModel=Linear+ChanceRiskAversion=3}"
 : "${OPT_ONLY:=}"               # if set: only test these options (space separated)
 
 : "${TRAIN_ABL:=1}"             # 1 = test the trainer flags
@@ -137,6 +137,9 @@ if ! declare -p TRAIN_VARIANTS >/dev/null 2>&1; then
     "stack-balance|--stack-balance|8 16|1"
     "output-lr|--output-lr-scale|0.05 0.2|0"
     "lambda|--lambda|0.9 0.75|0"
+    "lambda-end|--lambda-end|0.8|0"
+    "loss-power|--loss-power|2|0"
+    "optimizer|--optimizer|ranger21|0"
   )
 fi
 : "${BENCH_ARGS:=16 1 13}"      # bench used to verify the patches (hash threads depth)
@@ -145,15 +148,10 @@ fi
 : "${RETRY_MAX:=5}"             # retries of a failed pipeline step before stopping
 : "${PIPELINE:=$SCRIPT_DIR/pipeline.sh}"
 
-case "$NNUE_ARCH" in
-  default) BIN_BASE=maskfish ;; att) BIN_BASE=maskfish-att ;;
-  threats) BIN_BASE=maskfish-thr ;; att-threats) BIN_BASE=maskfish-att-thr ;;
-  *) echo "Invalid NNUE_ARCH: $NNUE_ARCH" >&2; exit 2 ;;
-esac
-ARCH_FULL="$NNUE_ARCH"; (( LAYERS == 2 )) && { ARCH_FULL="${NNUE_ARCH}-l2"; BIN_BASE+="-l2"; }
+# ARCH_FULL, FEATURE_ARCH, BIN_BASE, MAKE_FLAGS, TRAIN_ARCH, LP, PREP_DIR (see arch.sh)
+source "$SCRIPT_DIR/arch.sh"
+set_arch_vars || exit 2
 ENGINE="${ENGINE:-$SRC_DIR/$BIN_BASE}"
-if [[ "$ARCH_FULL" == default ]]; then LP=""; else LP="${ARCH_FULL}-"; fi
-PREP_DIR="data/prep-${NNUE_ARCH}"
 
 AT_DIR="$TRAINER_DIR/autotune"
 WORK="$AT_DIR/work"
@@ -200,13 +198,13 @@ OPT_MAX_PAIRS=3000    # max pairs reached without H1 → treated as no Elo gain
 OPT_EXT_CONFIRM=1     # an option winning its SPRT must not lose Elo against the 2 outside engines
 OPT_EXT_PAIRS=100
 OPT_EXT_TOL=0
-# not tested (only affect output / multi-threading / data, or need their own data):
-OPT_EXCLUDE="Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial"
+# not tested (only affect output / multi-threading / MultiPV / time limits / data, or need their own data):
+OPT_EXCLUDE="Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial VoteSinglePVOnly FrequentTimeCheck"
 # numeric options: Name:value,value ; win → made the default ; all lose → removed (if in OPT_INT_REMOVABLE)
 OPT_INT_TESTS="ChanceRiskAversion:10,20,-10"
 OPT_INT_REMOVABLE="ChanceRiskAversion"
 # option groups tested together (Name:Opt=value+Opt=value) ; loss → kept as is, not removed
-OPT_GROUP_TESTS="RevealQuietOff:RevealQuietBase=0+RevealQuietSafety=0+RevealQuietHighValue=0"
+OPT_GROUP_TESTS="RevealQuietOff:RevealQuietBase=0+RevealQuietSafety=0+RevealQuietHighValue=0 ChanceLinear:ChanceModel=Linear+ChanceRiskAversion=3"
 #OPT_ONLY="TTPenalize PruningTweaks"   # only test these options
 
 # ---------------- trainer flag tests (train.py) ----------------
@@ -223,6 +221,9 @@ TRAIN_VARIANTS=(
   "stack-balance|--stack-balance|8 16|1"
   "output-lr|--output-lr-scale|0.05 0.2|0"
   "lambda|--lambda|0.9 0.75|0"
+  "lambda-end|--lambda-end|0.8|0"
+  "loss-power|--loss-power|2|0"
+  "optimizer|--optimizer|ranger21|0"
 )
 
 # ---------------- other ----------------
@@ -1170,8 +1171,7 @@ bench_sig() {   # bench_sig ENGINE NET OPTS... → node count
 build_work() {   # clean build: header changes must reach every object file
   run_logged "$AT_DIR/logs/build-work.log" make -C "$WORK/src" clean >/dev/null
   run_logged "$AT_DIR/logs/build-work.log" make -C "$WORK/src" -j"$NCPU" build ARCH="$MAKE_ARCH" \
-    $( [[ "$NNUE_ARCH" == att* ]] && echo nnue=att ) $( [[ "$NNUE_ARCH" == *threats ]] && echo threats=yes ) \
-    $( (( LAYERS == 2 )) && echo layers=2 )
+    "${MAKE_FLAGS[@]}"
 }
 
 # engine_patch ACTION OPTION VALUE "MESSAGE" → commits + writes a patch; returns 1 (manual) if it cannot be verified
@@ -1365,7 +1365,7 @@ abl_train() {   # abl_train DIR "extra args" → DIR/epoch_ABL_EPOCHS.nnue
   local cmd=("$PYTHON" -u train.py "${train[@]}")
   (( ${#val[@]} )) && cmd+=(--val "${val[@]}")
   cmd+=(--out "$dir" --epochs "$ABL_EPOCHS" --epoch-size "$ABL_EPOCH_SIZE" --lr "$LR" --lambda "$LAMBDA"
-        --layers "$LAYERS" --checkpoint-every "$ABL_EPOCHS" --seed 42)
+        "${TRAIN_ARCH[@]}" --checkpoint-every "$ABL_EPOCHS" --seed 42)
   [[ -n "${SCALING:-}" ]] && cmd+=(--scaling "$SCALING")
   [[ -n "$BATCH_SIZE" ]] && cmd+=(--batch-size "$BATCH_SIZE")
   [[ -n "${DEVICE:-}" ]] && cmd+=(--device "$DEVICE")
