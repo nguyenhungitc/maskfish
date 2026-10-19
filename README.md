@@ -44,8 +44,9 @@ Actions):
 | `maskfish-macos-universal.tar` | macOS, Intel and Apple silicon |
 | `maskfish-android-arm64-universal.tar` | Android arm64 (static) |
 
-Each archive holds the binary, `maskfish.nnue` (the network of the latest
-release when it was built: keep it next to the binary), `README.md`,
+Each archive holds the binary (with the network of the latest release when it
+was built embedded in it), `maskfish.nnue` (the same network, as a file),
+`README.md`,
 `Copying.txt` and `AUTHORS`. `scripts/get_native_properties.sh` prints the
 best architecture of the machine (for `make ARCH=...`) and the name of the
 archive for it.
@@ -212,8 +213,12 @@ centipawns. Both are used by the [trainer](trainer/).
 
 ## Network
 
-The network file is set with the `EvalFile` option (default `maskfish.nnue`,
-looked up next to the binary and in the working directory).
+The network file is set with the `EvalFile` option (default `maskfish.nnue`).
+As in Stockfish, the default network is embedded in the binary when it is
+built (see [Compiling](#compiling)): with the default name, the engine uses the
+embedded network, and looks for `maskfish.nnue` next to the binary and in the
+working directory only if the binary has none (or an incompatible one). To use
+another network, give it another name and set `EvalFile` to it.
 
 The latest network is attached to the
 [latest release](https://github.com/nguyenhungitc/maskfish/releases/latest)
@@ -256,9 +261,14 @@ the download URL, e.g. to use the network of a given release:
 make net MASKFISH_NET_URL=https://github.com/nguyenhungitc/maskfish/releases/download/<tag>/maskfish.nnue
 ```
 
+`src/maskfish.nnue`, when it exists, is embedded in the binary
+(the build prints `embedded net: maskfish.nnue`), which then
+needs no network file. `make -j build embed=no` builds a binary without it,
+which looks for the file at run time.
+
 If the download fails (no connection, no release yet), the build goes on
-without a network; put a Jieqi network at `src/maskfish.nnue`, or point the
-`EvalFile` option to one at run time.
+without a network (and the binary has no embedded network); put a Jieqi network
+at `src/maskfish.nnue`, or point the `EvalFile` option to one at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network. When the binary cannot run natively (cross compilation),

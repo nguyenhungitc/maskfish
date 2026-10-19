@@ -40,6 +40,14 @@
 #include "nnue_common.h"
 #include "nnue_misc.h"
 
+// The default network embedded in the binary (nnue/embedded_nnue.S): the
+// zstd-compressed maskfish.nnue, or nothing (size 0) when the binary was built
+// without it
+extern "C" {
+extern const unsigned char gEmbeddedNNUEData[];
+extern const unsigned int  gEmbeddedNNUESize;
+}
+
 namespace Maskfish::Eval::NNUE {
 
 
@@ -78,6 +86,13 @@ void Network<Arch, Transformer>::load(const std::filesystem::path& rootDirectory
 
     if (evalfilePath.empty())
         evalfilePath = evalFile.defaultName;
+
+    // The embedded network comes first, as in Stockfish: with the default name,
+    // a file next to the binary or in the working directory is used only if
+    // the binary has no (compatible) embedded network
+    if (std::string(evalFile.current) != evalfilePath
+        && evalfilePath == std::string(evalFile.defaultName))
+        load_internal();
 
     for (const auto& directory : dirs)
     {
@@ -279,11 +294,27 @@ void Network<Arch, Transformer>::load_user_net(const std::filesystem::path& dir,
     // evalfilePath unchanged. evalfilePath is UTF-8 (path_from_utf8() also
     // accepts the ANSI code page of old GUIs on Windows).
     std::stringstream stream = read_compressed_nnue(dir / path_from_utf8(evalfilePath));
-    auto              description = load(stream);
+    load_stream(stream, evalfilePath);
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::load_internal() {
+    if (gEmbeddedNNUESize == 0)
+        return;
+
+    std::stringstream stream = read_compressed_nnue(gEmbeddedNNUEData, gEmbeddedNNUESize);
+    load_stream(stream, std::string(evalFile.defaultName));
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::load_stream(std::stringstream& stream, const std::string& name) {
+    auto description = load(stream);
 
     if (description.has_value())
     {
-        evalFile.current        = evalfilePath;
+        evalFile.current        = name;
         evalFile.netDescription = description.value();
         oldVersionFile          = false;
     }

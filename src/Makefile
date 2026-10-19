@@ -115,6 +115,8 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 # meta = yes/no       --- -DJIEQI_NNUE_META  --- meta=yes: meta input features (pool summaries,
 #                                                unidentified losses, visible targets;
 #                                                AB-JChess; needs a matching net)
+# embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed src/maskfish.nnue in the
+#                                                binary (as Stockfish), when it exists
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -186,6 +188,7 @@ psqt = yes
 ctx = no
 lsblend = no
 meta = no
+embed = yes
 bits = 64
 prefetch = no
 popcnt = no
@@ -751,6 +754,17 @@ ifeq ($(meta),yes)
 	CXXFLAGS += -DJIEQI_NNUE_META
 endif
 
+### 3.2.0.1 Embedded network
+# The default network src/maskfish.nnue (downloaded by `make net`, which every
+# build target runs first, before the make that compiles) is embedded in the
+# binary by nnue/embedded_nnue.S; without it the binary has no embedded network
+# and looks for the file at run time, as with embed=no.
+ifeq ($(embed),yes)
+ifneq (,$(wildcard maskfish.nnue))
+	NNUE_EMBED_FLAGS = -DNNUE_EMBEDDING
+endif
+endif
+
 ### 3.2.1 Floating point
 # The chance nodes average win rates computed in double precision: without
 # this flag, targets with FMA (x86-64 AVX-512 builds, ARMv8) contract a*b+c
@@ -1311,6 +1325,7 @@ config-sanity: net
 	echo "lsx: '$(lsx)'" && \
 	echo "lasx: '$(lasx)'" && \
 	echo "target_windows: '$(target_windows)'" && \
+	echo "embedded net: $(if $(filter yes,$(embed)),$$(test -f maskfish.nnue && echo maskfish.nnue || echo none),none)" && \
 	echo "" && \
 	echo "Flags:" && \
 	echo "CXX: $(CXX)" && \
@@ -1355,6 +1370,11 @@ $(EXE): $(OBJS)
 
 %.o: %.S
 	$(CXX) $(CXXFLAGS)   -c -o $@ $<
+
+# Always assembled again (it is quick), so that the binary has the current
+# src/maskfish.nnue, or none after the file was removed or with embed=no
+embedded_nnue.o: embedded_nnue.S FORCE
+	$(CXX) $(CXXFLAGS) $(NNUE_EMBED_FLAGS) -c -o $@ $<
 
 # Force recompilation to ensure version info is up-to-date
 misc.o: FORCE
@@ -1426,8 +1446,9 @@ endif
 #   make -j build ARCH=arm64-universal
 # Each build is made in temp_builds/<arch>/ with the namespace Maskfish renamed
 # to Maskfish_<arch>; MASKFISH_UNIVERSAL_ARCH=<arch> at run time forces a build
-# (MASKFISH_UNIVERSAL_ARCH=list lists them). The network is not embedded: the
-# binary looks for maskfish.nnue as usual.
+# (MASKFISH_UNIVERSAL_ARCH=list lists them). The network (embed=yes) is
+# embedded once: nnue/embedded_nnue.S is assembly, so its object is linked from
+# the baseline build only, and every build uses it.
 #
 # On Linux the C++ runtime is linked statically (libstdc++, or libc++ with
 # UNIVERSAL_LIBCXX=yes and COMP=clang, as Pikafish's release builds).
@@ -1562,6 +1583,7 @@ $(TEMP_DIR):
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
                    nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) \
+                   embed=$(embed) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
                    ldflags=$(ENV_LDFLAGS) extraldflags=$(EXTRALDFLAGS) \
@@ -1604,8 +1626,9 @@ $(TEMP_DIR)/%/.setup: $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 .SECONDARY: $(patsubst %,$(TEMP_DIR)/%/.setup,$(UNIVERSAL_ARCHES))
 
 # (the sub-make starts with objclean: a change rebuilds the whole build)
+# (the builds embed the network: they depend on it too)
 $(TEMP_DIR)/%/maskfish.o: $(TEMP_DIR)/%/.setup $(NET_SENTINEL) $(UNIVERSAL_CONFIG) \
-                          $(SRCS) $(HEADERS) Makefile | universal-net-check
+                          $(SRCS) $(HEADERS) Makefile $(wildcard maskfish.nnue) | universal-net-check
 	+ENV_CXXFLAGS='$(ENV_CXXFLAGS) $(call arch-cxxflags,$*)' \
 	    $(MAKE) -C $(TEMP_DIR)/$* $(UOBJ_TGT) \
 		        ARCH=$* CXX=$(CXX) COMP=$(COMP) UNIVERSAL_SLICE=true

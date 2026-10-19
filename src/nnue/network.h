@@ -87,6 +87,8 @@ class Network {
     void compute_context(const Position& pos, std::uint8_t* context) const;
 
     void load_user_net(const std::filesystem::path&, const std::string&);
+    void load_internal();
+    void load_stream(std::stringstream&, const std::string&);
 
     void initialize();
 
