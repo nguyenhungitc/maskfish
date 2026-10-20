@@ -3,11 +3,16 @@
 # Makes sure the default network is present in the current directory.
 #
 # Maskfish needs a Jieqi network (feature set HalfKAv2_hm with dark-piece and
-# pool features). If src/maskfish.nnue does not exist, the network of the
-# latest GitHub release of this repository is downloaded. An existing file is
-# kept as it is: delete it and run `make net` again to get the latest network.
+# pool features). If src/maskfish.nnue does not exist, it is fetched from the
+# hidden git ref refs/assets/net (a commit that holds only maskfish.nnue,
+# published by scripts/push_net.sh) of the remote origin, then of the
+# repository of Maskfish (when origin is a fork without the ref). This needs a
+# git clone of the source: `git clone` itself does not fetch this ref.
 #
-# A failed download does not stop the build: the engine builds without a
+# An existing file is kept as it is: delete it and run `make net` again to get
+# the latest network.
+#
+# A failed fetch does not stop the build: the engine builds without a
 # network, but then needs one at run time (EvalFile option). A network can also
 # be trained with the trainer in the trainer/ directory (see trainer/README.md).
 #
@@ -15,34 +20,33 @@
 # engine), a missing or invalid network is an error: the script exits with
 # status 1 and says so, before anything is built.
 #
-# The download URL can be overridden with the MASKFISH_NET_URL environment
-# variable (e.g. to pin a given release).
+# Environment variables:
+#   MASKFISH_NET_REF   the ref (default refs/assets/net)
+#   MASKFISH_NET_REPO  the repository fetched after origin (default
+#                      https://github.com/nguyenhungitc/maskfish)
 
 _filename="maskfish.nnue"
-_url="${MASKFISH_NET_URL:-https://github.com/nguyenhungitc/maskfish/releases/latest/download/$_filename}"
+_ref="${MASKFISH_NET_REF:-refs/assets/net}"
+_repo="${MASKFISH_NET_REPO:-https://github.com/nguyenhungitc/maskfish}"
 
 # The engine reads zstd-compressed networks only: a valid file starts with the
-# zstd magic number 28 b5 2f fd. This also rejects an HTML error page.
+# zstd magic number 28 b5 2f fd.
 is_valid() {
   [ -s "$1" ] && [ "$(od -An -tx1 -N4 "$1" | tr -d ' \n')" = "28b52ffd" ]
 }
 
-download() {
-  if command -v curl > /dev/null 2>&1; then
-    curl -fsSL --retry 3 -o "$2" "$1"
-  elif command -v wget > /dev/null 2>&1; then
-    wget -q --tries=3 -O "$2" "$1"
-  else
-    echo "Note: neither curl nor wget is installed, cannot download $_filename."
-    return 1
-  fi
+# Fetches the ref (into the local ref of the same name) from $1 and writes its
+# maskfish.nnue to $2
+fetch_ref() {
+  GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags "$1" "+$_ref:$_ref" 2> /dev/null &&
+    git cat-file blob "$_ref:$_filename" > "$2" 2> /dev/null
 }
 
 note_missing() {
   echo "Note: $_filename not found. The engine builds without it, but needs a"
-  echo "Jieqi network at run time (EvalFile option). Download $_filename from"
-  echo "https://github.com/nguyenhungitc/maskfish/releases/latest and put it in"
-  echo "src/, or train one with the trainer (see trainer/README.md)."
+  echo "Jieqi network at run time (EvalFile option). Put a Jieqi network at"
+  echo "src/$_filename (e.g. the one of a release archive), or train one with the"
+  echo "trainer (see trainer/README.md)."
 }
 
 fetch_network() {
@@ -55,18 +59,26 @@ fetch_network() {
     return
   fi
 
-  echo "Downloading $_filename from $_url ..."
+  if ! command -v git > /dev/null 2>&1 || ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Note: the source is not a git clone, cannot fetch $_filename from $_ref."
+    note_missing
+    return
+  fi
+
   _tmp="$_filename.part"
+  for _remote in origin "$_repo"; do
+    echo "Fetching $_filename from $_ref of $_remote ..."
+    rm -f "$_tmp"
+    if fetch_ref "$_remote" "$_tmp" && is_valid "$_tmp"; then
+      mv "$_tmp" "$_filename"
+      echo "Fetched $_filename ($_ref of $_remote)"
+      return
+    fi
+  done
   rm -f "$_tmp"
 
-  if download "$_url" "$_tmp" && is_valid "$_tmp"; then
-    mv "$_tmp" "$_filename"
-    echo "Downloaded $_filename"
-  else
-    rm -f "$_tmp"
-    echo "Note: could not download $_filename."
-    note_missing
-  fi
+  echo "Note: could not fetch $_filename from $_ref."
+  note_missing
 }
 
 fetch_network

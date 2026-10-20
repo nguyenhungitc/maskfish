@@ -22,9 +22,9 @@ described below, and that tells the engine which piece was revealed after each
 reveal.
 
 > [!IMPORTANT]
-> Maskfish needs a **Jieqi network**. The latest one is published as
-> `maskfish.nnue` in the
-> [latest release](https://github.com/nguyenhungitc/maskfish/releases/latest).
+> Maskfish needs a **Jieqi network**. The binaries of the
+> [latest release](https://github.com/nguyenhungitc/maskfish/releases/latest)
+> embed one, and each archive also holds it as `maskfish.nnue`.
 > Xiangqi networks (such as Pikafish's `master-net`) are **not compatible**
 > (they use a different feature set), see [Network](#network).
 
@@ -44,9 +44,8 @@ Actions):
 | `maskfish-macos-universal.tar` | macOS, Intel and Apple silicon |
 | `maskfish-android-arm64-universal.tar` | Android arm64 (static) |
 
-Each archive holds the binary (with the network of the latest release when it
-was built embedded in it), `maskfish.nnue` (the same network, as a file),
-`README.md`,
+Each archive holds the binary (with the current network when it was built
+embedded in it), `maskfish.nnue` (the same network, as a file), `README.md`,
 `Copying.txt` and `AUTHORS`. `scripts/get_native_properties.sh` prints the
 best architecture of the machine (for `make ARCH=...`) and the name of the
 archive for it.
@@ -220,12 +219,27 @@ embedded network, and looks for `maskfish.nnue` next to the binary and in the
 working directory only if the binary has none (or an incompatible one). To use
 another network, give it another name and set `EvalFile` to it.
 
-The latest network is attached to the
-[latest release](https://github.com/nguyenhungitc/maskfish/releases/latest)
-as `maskfish.nnue`, and can be downloaded directly from
-<https://github.com/nguyenhungitc/maskfish/releases/latest/download/maskfish.nnue>.
-Put it next to the binary, or set `EvalFile` to its path. The build downloads
-it automatically (see [Compiling](#compiling)).
+The network of a release is the `maskfish.nnue` of its archives (the binaries
+embed it). The build gets the current network automatically (see
+[Compiling](#compiling)).
+
+### Publishing a network
+
+The current network is kept in the hidden git ref `refs/assets/net`
+(a commit holding only `maskfish.nnue`, apart from the history of the code).
+It does not show on GitHub (files, branches, tags) nor in `git branch -a`, and
+`git clone` does not fetch it (`git ls-remote` lists it). To publish a network:
+
+```
+scripts/push_net.sh path/to/maskfish.nnue
+```
+
+A release is made by hand: Actions > Release > Run workflow (on the branch to
+release). The [Release workflow](.github/workflows/release.yml) builds the
+binaries with the network of the ref and makes a release tagged `yymmdd` (date
+in Vietnam; `yymmdd-2`, ... for another one the same day; or a given tag) with
+their archives only: each binary embeds the network and each archive holds it,
+so there is no separate network file.
 
 Maskfish uses its own feature set (`HalfKAv2_hm` with dark-piece and pool
 features, feature hash `0x0d17b100`). Networks trained for Pikafish master
@@ -251,24 +265,22 @@ make -j build
 
 Run `make help` for the list of targets and architectures.
 
-Every build target first runs `make net`, which downloads `maskfish.nnue`
-from the latest release into `src/` when `src/maskfish.nnue` does not exist
-(with `curl` or `wget`). An existing `src/maskfish.nnue` is kept: to get a
-newer network, delete it and run `make net` again. `MASKFISH_NET_URL` overrides
-the download URL, e.g. to use the network of a given release:
-
-```
-make net MASKFISH_NET_URL=https://github.com/nguyenhungitc/maskfish/releases/download/<tag>/maskfish.nnue
-```
+Every build target first runs `make net`, which, when `src/maskfish.nnue`
+does not exist, fetches it from the ref `refs/assets/net` (see
+[Publishing a network](#publishing-a-network)) of `origin`, then of this
+repository. This needs a git clone of the source. An existing
+`src/maskfish.nnue` is kept: to get a newer network, delete it and run
+`make net` again.
 
 `src/maskfish.nnue`, when it exists, is embedded in the binary
 (the build prints `embedded net: maskfish.nnue`), which then
 needs no network file. `make -j build embed=no` builds a binary without it,
 which looks for the file at run time.
 
-If the download fails (no connection, no release yet), the build goes on
-without a network (and the binary has no embedded network); put a Jieqi network
-at `src/maskfish.nnue`, or point the `EvalFile` option to one at run time.
+If the fetch fails (no connection, not a git clone, no network published yet),
+the build goes on without a network (and the binary has no embedded network);
+put a Jieqi network at `src/maskfish.nnue` (e.g. the one of a release archive),
+or point the `EvalFile` option to one at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network. When the binary cannot run natively (cross compilation),

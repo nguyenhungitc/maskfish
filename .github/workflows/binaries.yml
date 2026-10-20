@@ -9,14 +9,16 @@
 #   maskfish-android-arm64-universal.tar    Android arm64 (NDK, static)
 #
 # The names are those given by scripts/get_native_properties.sh. Each archive
-# holds the binary, the network downloaded by the build (maskfish.nnue, the
-# one of the latest release), README.md, Copying.txt and AUTHORS
+# holds the binary, which embeds the network fetched by the build
+# (maskfish.nnue of the hidden ref refs/assets/net, see scripts/net.sh), this
+# network as a file, README.md, Copying.txt and AUTHORS
 # (scripts/package_binary.sh). The binaries are checked with perft (the
 # Windows one on a Windows runner, the Android one is not run).
 #
 # Runs for pushes to pro that touch src/ or scripts/, by hand (Actions >
-# Binaries > Run workflow), and when a release is published: the archives are
-# then also attached to the release.
+# Binaries > Run workflow), when a release is published (the archives are then
+# also attached to the release), and from the Release workflow (release.yml),
+# which makes the release with the archives built here.
 name: Binaries
 
 on:
@@ -27,6 +29,7 @@ on:
       - "scripts/**"
       - ".github/workflows/binaries.yml"
   workflow_dispatch:
+  workflow_call:
   release:
     types: [published]
 

@@ -755,7 +755,7 @@ ifeq ($(meta),yes)
 endif
 
 ### 3.2.0.1 Embedded network
-# The default network src/maskfish.nnue (downloaded by `make net`, which every
+# The default network src/maskfish.nnue (fetched by `make net`, which every
 # build target runs first, before the make that compiles) is embedded in the
 # binary by nnue/embedded_nnue.S; without it the binary has no embedded network
 # and looks for the file at run time, as with embed=no.
@@ -1063,7 +1063,7 @@ help:
 	echo "profile-build           > standard build with profile-guided optimization" && \
 	echo "build                   > skip profile-guided optimization" && \
 	echo "macos-lipo              > macOS x86-64 + Apple silicon universal binary" && \
-	echo "net                     > Download the default nnue net (maskfish.nnue) if missing" && \
+	echo "net                     > Fetch the default nnue net (maskfish.nnue, ref refs/assets/net) if missing" && \
 	echo "strip                   > Strip executable" && \
 	echo "install                 > Install executable" && \
 	echo "clean                   > Clean up" && \
@@ -1597,7 +1597,7 @@ $(UNIVERSAL_CONFIG): universal-config-check | $(TEMP_DIR)
 	@printf '%s\n' '$(subst ','\'',$(strip $(universal_config)))' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
-# Download the network once in src/ (the PGO bench of every build uses it).
+# Fetch the network once in src/ (the PGO bench of every build uses it).
 $(NET_SENTINEL): | $(TEMP_DIR)
 	@cd $(CURDIR) && $(SHELL) ../scripts/net.sh
 	@touch $@

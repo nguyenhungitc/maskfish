@@ -30,10 +30,10 @@ class Position;
 
 namespace Eval {
 
-// The default net name. It MUST match the file name of the network attached to
-// the GitHub releases (maskfish.nnue), which scripts/net.sh downloads for the
-// build (`make net`). Do not change the name of the macro or the location where
-// this macro is defined.
+// The default net name. It MUST match the file name of the network in the
+// hidden git ref refs/assets/net (maskfish.nnue), which scripts/net.sh fetches
+// for the build (`make net`) and the build embeds in the binary. Do not change
+// the name of the macro or the location where this macro is defined.
 #define EvalFileDefaultNameBig "maskfish.nnue"
 
 namespace NNUE {
