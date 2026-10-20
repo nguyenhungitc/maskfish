@@ -247,12 +247,13 @@ scripts/push_net.sh
 
 (`scripts/push_net.sh path/to/file.nnue` publishes another file.)
 
-A release is made by hand: Actions > Release > Run workflow (on the branch to
-release). The [Release workflow](.github/workflows/release.yml) builds the
-binaries with the network of the ref and makes a release tagged `yymmdd` (date
-in Vietnam; `yymmdd-2`, ... for another one the same day; or a given tag) with
-their archives only: each binary embeds the network and each archive holds it,
-so there is no separate network file.
+A release is made by hand, from the branch `pro` only: Actions > Release > Run
+workflow. The [Release workflow](.github/workflows/release.yml) builds the
+binaries with the network of the ref and makes a release named
+`Maskfish yyyy-mm-dd` and tagged `yymmdd` (date in Vietnam; `-2`, `-3`, ... for
+another one the same day; or a given tag) with their archives only: each binary
+embeds the network and each archive holds it, so there is no separate network
+file.
 
 Maskfish uses its own feature set (`HalfKAv2_hm` with dark-piece and pool
 features, feature hash `0x0d17b100`). Networks trained for Pikafish master

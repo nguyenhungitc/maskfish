@@ -11,7 +11,8 @@
 # maskfish.nnue: the release has no separate network file.
 #
 # The tag is yymmdd (date in Vietnam, UTC+7), or yymmdd-2, yymmdd-3, ... when
-# the tag exists, unless one is given. The release is made only when every
+# the tag exists, unless one is given; the title is "Maskfish yyyy-mm-dd"
+# (with the same -2, -3, ... as the tag). The release is made only when every
 # binary was built and checked, and when every archive holds the network of
 # the ref as it was at the start (not one pushed during the run).
 name: Release
@@ -40,6 +41,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      title: ${{ steps.tag.outputs.title }}
       sha256: ${{ steps.net.outputs.sha256 }}
       commit: ${{ steps.net.outputs.commit }}
     steps:
@@ -72,6 +74,9 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
         run: |
+          # One date for the tag and the title (yymmdd yyyy-mm-dd)
+          read -r base day <<< "$(TZ=Asia/Ho_Chi_Minh date '+%y%m%d %Y-%m-%d')"
+          title="Maskfish $day"
           if [ -n "$TAG" ]; then
             if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
               echo "::error::The tag $TAG exists"
@@ -79,16 +84,17 @@ jobs:
             fi
             tag=$TAG
           else
-            base=$(TZ=Asia/Ho_Chi_Minh date +%y%m%d)
             tag=$base
             n=2
             while git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; do
               tag="$base-$n"
+              title="Maskfish $day-$n"
               n=$((n + 1))
             done
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Release tag: $tag"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "Release: $title (tag $tag)"
 
   binaries:
     name: Binaries
@@ -105,6 +111,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.prepare.outputs.tag }}
+      TITLE: ${{ needs.prepare.outputs.title }}
       SHA256: ${{ needs.prepare.outputs.sha256 }}
       NET_COMMIT: ${{ needs.prepare.outputs.commit }}
     steps:
@@ -142,6 +149,6 @@ jobs:
 
           gh release create "$TAG" dist/maskfish-* \
             --target "$GITHUB_SHA" \
-            --title "Maskfish $TAG" \
+            --title "$TITLE" \
             --notes-file notes.md
           echo "::notice::Released $TAG"
