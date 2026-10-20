@@ -501,7 +501,9 @@ observed win rates with the predicted ones. Use that value for:
 - the trainer: `train.py --scaling <s>`.
 
 Fit it again after every generation. Check with `match.py` that the new value
-does not weaken the engine before making it the default.
+does not weaken the engine before making it the default. `--by-material`
+also fits it by ranges of material, for `train.py --scaling-table`
+([section 7.16](#716-score--probability-by-material---scaling-table)).
 
 The same data can also give lookup tables for the engine option
 `ChanceModel Tables` (AB-JChess's averaging of chance nodes in "mass" space,
@@ -1280,6 +1282,34 @@ python prepare_data.py data/gen5.txt --out data/train5 --mirror --max-dups 8
 
 `scripts/pipeline.sh`: `PREP_MIRROR=1`, `PREP_MAX_DUPS=8` (data prepared with
 other values is prepared again).
+
+### 7.16. Score → probability by material (`--scaling-table`)
+
+The loss maps scores to win probabilities with one constant (`--scaling`,
+361). Stockfish's win rate model depends on the material: the same advantage
+does not mean the same in the opening and in an endgame. `fit_scaling.py
+--by-material N` fits the constant in N ranges of total material (piece values
+of both sides but the kings, the field `allmat` of the prepared data) and
+writes a table; `train.py --scaling-table` then uses, for every position, the
+value interpolated at its material (for the network output and for the data
+score alike):
+
+```
+python fit_scaling.py data/gen5.txt --by-material 8 --table-out nets/scaling5.json
+python train.py data/train5 --val data/val5 --out runs/mat --init-net nets/gen5.nnue \
+    --scaling-table nets/scaling5.json --lambda 0.8 --epochs 40 --epoch-size 10000000
+```
+
+With `--lambda 1.0` (scores only) the table only reweights the loss; it
+matters when the game results count (`--lambda` below 1), since it then sets
+how the results translate into evaluations, position by position. The
+engine's `ChanceScaling` stays one constant (use the global value printed by
+`fit_scaling.py`): a network trained with the table evaluates in units that
+depend a little on the material. Untested so far: keep it only after an SPRT
+against the same training with `--scaling`. The data needs the field `allmat`
+(prepared since the `EvalScaling` patch, section 7.13). `scripts/pipeline.sh`:
+`EXTRA_TRAIN="--scaling-table nets/scaling5.json"` (its words are passed to
+`train.py`).
 
 ## 8. Data formats
 

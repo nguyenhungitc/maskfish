@@ -36,6 +36,11 @@ power 2 (with which mixing the targets is the same as mixing the two losses).
 With --lambda-end, lambda goes linearly from --lambda (first epoch) to
 --lambda-end (last epoch), as AB-JChess's lambda schedule (1.0 -> 0.8): the
 game results count more and more.
+With --scaling-table (fit_scaling.py --by-material), scaling depends on the
+total material of the position (like the win rate model of Stockfish, which
+depends on the material) instead of being one constant: the table gives it at
+a few material values, linearly interpolated (score_scaling is then scaled by
+the same factor). It needs the field allmat of the prepared data.
 
 s is the network output after the scaling of the engine's evaluate() (the
 data scores are search scores, made of evaluate() values; see eval_scale.py):
@@ -344,17 +349,51 @@ class Scorer(nn.Module):
         return model_score(self.model, batch, self.eval_scale, self.qat)
 
 
+class ScalingTable:
+    """Score -> win probability scale as a function of the total material
+    (allmat) of the position, from fit_scaling.py --by-material: linear
+    between the points of the table, constant beyond its ends."""
+
+    def __init__(self, path: str):
+        with open(path) as f:
+            t = json.load(f)
+        self.material = torch.tensor(t["material"], dtype=torch.float32)
+        self.scale = torch.tensor(t["scale"], dtype=torch.float32)
+        if len(self.material) < 2 or len(self.material) != len(self.scale) \
+                or bool((self.material[1:] <= self.material[:-1]).any()) \
+                or bool((self.scale <= 0).any()):
+            raise SystemExit(f"{path}: not a scaling table of fit_scaling.py --by-material")
+
+    def __call__(self, allmat: torch.Tensor) -> torch.Tensor:
+        x = self.material.to(allmat.device)
+        s = self.scale.to(allmat.device)
+        i = torch.clamp(torch.bucketize(allmat, x), 1, len(x) - 1)
+        t = torch.clamp((allmat - x[i - 1]) / (x[i] - x[i - 1]), 0.0, 1.0)
+        return s[i - 1] + (s[i] - s[i - 1]) * t
+
+    def describe(self) -> str:
+        return ", ".join(f"{m:.0f}: {v:.0f}" for m, v in zip(self.material.tolist(),
+                                                           self.scale.tolist()))
+
+
 def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale=True,
-            score_scaling: float | None = None, power: float = 2.5, qat: bool = False):
+            score_scaling: float | None = None, power: float = 2.5, qat: bool = False,
+            scaling_table: ScalingTable | None = None):
     """model: an NNUE, or a Scorer (possibly wrapped in DDP), which then
-    computes the score itself (with its own eval_scale and qat)."""
+    computes the score itself (with its own eval_scale and qat).
+    scaling_table: scaling (and score_scaling, by the same factor) from the
+    total material of each position, batch[10]."""
     bucket, score, result = batch[2], batch[3], batch[4]
     if isinstance(model, NNUE):
         out = model_score(model, batch, eval_scale, qat)
     else:
         out = model(*batch)
+    if scaling_table is not None:
+        ratio = (score_scaling or scaling) / scaling
+        scaling = scaling_table(batch[10])
+        score_scaling = scaling * ratio
     q = torch.sigmoid(out / scaling)
-    p = torch.sigmoid(score / (score_scaling or scaling))
+    p = torch.sigmoid(score / (score_scaling if score_scaling is not None else scaling))
     target = lam * p + (1.0 - lam) * (result + 1.0) * 0.5
     loss = torch.pow(torch.abs(q - target), power)
     if stack_weights is None:
@@ -394,6 +433,9 @@ def main():
     ap.add_argument("--score-scaling", type=float, default=None,
                     help="scale of the sigmoid of the data scores (default: --scaling; "
                          "AB-JChess: 410 with --scaling 361)")
+    ap.add_argument("--scaling-table", metavar="FILE",
+                    help="scaling as a function of the total material, from fit_scaling.py "
+                         "--by-material (instead of the constant --scaling)")
     ap.add_argument("--loss-power", type=float, default=2.5,
                     help="exponent of the loss (AB-JChess: 2)")
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
@@ -601,6 +643,13 @@ def main():
         if v is not None and not 0.0 <= v <= 1.0:
             raise SystemExit(f"{name} must be in [0, 1]")
     loss_args = {"score_scaling": args.score_scaling, "power": args.loss_power}
+    if args.scaling_table:
+        if not train.has_align or (val and not val.has_align):
+            raise SystemExit("--scaling-table needs the total material of the positions (field "
+                             "allmat): prepare the data again with prepare_data.py")
+        loss_args["scaling_table"] = ScalingTable(args.scaling_table)
+        say(f"scaling by material (allmat: scale): {loss_args['scaling_table'].describe()}",
+            flush=True)
 
     # Several processes: the gradients are averaged by DDP, which needs the
     # score to go through its forward(); every process applies the same
