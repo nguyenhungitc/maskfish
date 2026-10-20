@@ -49,7 +49,8 @@ Value evaluate(const NNUE::Networks&          networks,
                Eval::NNUE::AccumulatorStack&  accumulators,
                Eval::NNUE::AccumulatorCaches& caches,
                int                            optimism,
-               bool                           jieqiMaterial = false);
+               bool                           jieqiMaterial = false,
+               bool                           alignment     = false);
 }  // namespace Eval
 
 }  // namespace Maskfish

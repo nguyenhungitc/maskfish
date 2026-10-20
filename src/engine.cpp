@@ -235,6 +235,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
+    // Scaling of the network output in the evaluation: Complexity (default,
+    // |psqt - positional| and the major material) or Alignment (Pikafish's
+    // since September 2026: agreement of the network with the material
+    // balance, and the total material; suits networks without PSQT). The
+    // trainer must use the same (train.py --eval-scaling).
+    options.add("EvalScaling", Option("Complexity var Complexity var Alignment", "Complexity"));
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));
@@ -563,13 +569,14 @@ void Engine::eval_raw() const {
     auto [psqt, positional] = networks->big.evaluate(p, *accumulators, &caches->big);
 
     // Static evaluation after the scaling of Eval::evaluate() (optimism 0, the
-    // JieqiMaterial option as set): what the search scores, and so the training
+    // JieqiMaterial and EvalScaling options as set): what the search scores, and so the training
     // data, are made of. The trainer applies the same scaling to the network
     // output when it computes the loss (trainer/eval_scale.py).
     std::string finalEval = "none";  // evaluate() is not defined in check
     if (!p.checkers())
         finalEval = std::to_string(int(Eval::evaluate(*networks, p, *accumulators, *caches,
-                                                      VALUE_ZERO, bool(options["JieqiMaterial"]))));
+                                                      VALUE_ZERO, bool(options["JieqiMaterial"]),
+                                                      options["EvalScaling"] == "Alignment")));
 
     sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
               << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " final " << finalEval

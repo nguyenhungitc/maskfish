@@ -513,6 +513,7 @@ class Worker {
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;
+    bool   evalAlignment      = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
     ChanceModel         chanceModel  = ChanceModel::Winrate;

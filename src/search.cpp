@@ -386,6 +386,7 @@ bool Search::Worker::iterative_deepening() {
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
+    evalAlignment      = options["EvalScaling"] == "Alignment";
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
     chanceModel        = options["ChanceModel"] == "Tables" ? ChanceModel::Tables
@@ -2705,7 +2706,7 @@ TimePoint Search::Worker::elapsed_time() const { return main_manager()->tm.elaps
 
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()], jieqiMaterial);
+                          optimism[pos.side_to_move()], jieqiMaterial, evalAlignment);
 }
 
 namespace {
