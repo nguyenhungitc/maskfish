@@ -86,7 +86,7 @@ jobs:
     name: Binaries
     needs: prepare
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/binaries.yml
 
   publish:

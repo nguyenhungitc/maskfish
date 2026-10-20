@@ -16,9 +16,9 @@
 # Windows one on a Windows runner, the Android one is not run).
 #
 # Runs for pushes to pro that touch src/ or scripts/, by hand (Actions >
-# Binaries > Run workflow), when a release is published (the archives are then
-# also attached to the release), and from the Release workflow (release.yml),
-# which makes the release with the archives built here.
+# Binaries > Run workflow), and from the Release workflow (release.yml), which
+# makes the release with the archives built here: every release goes through
+# it (this workflow does not attach anything to a release).
 name: Binaries
 
 on:
@@ -30,11 +30,9 @@ on:
       - ".github/workflows/binaries.yml"
   workflow_dispatch:
   workflow_call:
-  release:
-    types: [published]
 
 permissions:
-  contents: write # only to attach the archives to a published release
+  contents: read
 
 jobs:
   linux:
@@ -61,11 +59,6 @@ jobs:
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
 
   windows:
     name: Windows x86-64-universal (MinGW cross build)
@@ -113,11 +106,6 @@ jobs:
           printf "compiler\nquit\n" | ./maskfish.exe
           PERFT_QUICK=1 ../tests/perft.sh
           MASKFISH_UNIVERSAL_ARCH=x86-64 PERFT_QUICK=1 ../tests/perft.sh
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
 
   macos:
     name: macOS universal (x86-64-universal + apple-silicon)
@@ -143,11 +131,6 @@ jobs:
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
 
   android:
     name: Android arm64-universal
@@ -174,8 +157,3 @@ jobs:
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
