@@ -2,6 +2,8 @@
 
     python fit_scaling.py data/gen1.txt [more files] [--max-score 3000]
 
+The files can be compressed (.zst, .gz, see textio.py).
+
 Finds s maximizing the likelihood of the game results under
     P(result for the side to move) = sigmoid(score / s)
 (result 1 / 0 / -1 counted as 1 / 0.5 / 0, i.e. expected score), and prints
@@ -20,11 +22,13 @@ import math
 
 import numpy as np
 
+from textio import open_text
+
 
 def load(paths, max_score):
     scores, results = [], []
     for path in paths:
-        with open(path) as f:
+        with open_text(path) as f:
             for line in f:
                 try:
                     _, s, r = (x.strip() for x in line.split("|"))

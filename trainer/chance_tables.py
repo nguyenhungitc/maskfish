@@ -45,6 +45,8 @@ import os
 import struct
 import sys
 
+from textio import open_text
+
 SCORE_MIN, SCORE_MAX = -2000, 2000
 MASS_MIN, MASS_MAX = -950, 950
 SCORE_FILE = "probability_score_to_mass.i32le"
@@ -129,7 +131,7 @@ def load_data(paths, max_score):
     """(score, result) pairs of gen_data.py text files, result in -1 / 0 / 1."""
     pairs = []
     for path in paths:
-        with open(path) as f:
+        with open_text(path) as f:
             for line in f:
                 try:
                     _, s, r = (x.strip() for x in line.split("|"))

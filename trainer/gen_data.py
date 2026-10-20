@@ -15,6 +15,9 @@ Positions in check and positions whose best move is a capture are skipped
         --games 1000 --nodes 5000 --workers 8 --out data/gen1.txt \
         [--opt ChanceScaling=400 ...] [--seed 1]
 
+--out data/gen1.txt.zst writes a zstd compressed file (5 to 8 times smaller,
+read as is by prepare_data.py, fit_scaling.py and rescore.py; see textio.py).
+
 Notes
 * Each side only knows what it would know in a real game: the engine searches
   every position from the side to move's view, where the identity of a
@@ -39,9 +42,11 @@ import argparse
 import multiprocessing as mp
 import os
 import random
+import shutil
 import time
 
 import jieqi_uci as U
+from textio import open_text
 
 
 def play_game(engine: U.Engine, rng: random.Random, args) -> list[tuple[str, int, int]]:
@@ -149,10 +154,12 @@ def main():
     parts = [f"{args.out}.part{i}" for i in range(args.workers)]
     with mp.Pool(args.workers) as pool:
         counts = pool.starmap(worker, [(i, args, per[i], parts[i]) for i in range(args.workers)])
-    with open(args.out, "w") as out:
+    # Streamed (the parts are not loaded in memory); --out *.zst / *.gz is
+    # compressed (textio.py), the .partN files stay plain until merged
+    with open_text(args.out, "w") as out:
         for p in parts:
             with open(p) as f:
-                out.write(f.read())
+                shutil.copyfileobj(f, out, 1 << 20)
             os.unlink(p)
     print(f"{sum(counts)} positions written to {args.out}")
 

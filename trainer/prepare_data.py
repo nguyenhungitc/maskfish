@@ -42,6 +42,7 @@ import numpy as np
 
 import eval_scale as E
 import jieqi_features as F
+from textio import open_text
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
                        ("material", np.int16), ("rule40", np.uint8)])
@@ -119,7 +120,7 @@ def parse_chunk(lines: list[str]):
 
 def read_chunks(paths: list[str]):
     for path in paths:
-        with open(path) as f:
+        with open_text(path) as f:
             while True:
                 lines = [l for l in itertools.islice(f, CHUNK_LINES) if l.strip()]
                 if not lines:
