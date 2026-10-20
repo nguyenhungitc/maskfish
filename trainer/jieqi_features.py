@@ -451,6 +451,19 @@ def parse_fen(fen: str) -> JieqiPosition:
     return pos
 
 
+def mirror_position(pos: JieqiPosition) -> JieqiPosition:
+    """The position mirrored left-right (files a <-> i). Its value is the same:
+    the rules are symmetric, and so are the starting squares of the dark pieces
+    (a dark piece moves like the kind of its square). prepare_data.py --mirror
+    adds it to the data when its features differ from the original's."""
+    m = JieqiPosition(rest=list(pos.rest), side_to_move=pos.side_to_move, rule40=pos.rule40,
+                      fullmove=pos.fullmove)
+    for s in range(SQUARE_NB):
+        m.board[flip_file(s)] = pos.board[s]
+        m.dark[flip_file(s)] = pos.dark[s]
+    return m
+
+
 def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
     """Active feature indices for one perspective (pool features repeated)."""
     bucket, mirror = feature_bucket(pos, perspective)

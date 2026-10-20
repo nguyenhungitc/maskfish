@@ -32,11 +32,24 @@ are printed); any other error stops the script.
 Data scored by another engine (AB-JChess, see rescore.py) uses that engine's
 score scale: convert it with --score-scale 361/s, where s is the scale that
 fit_scaling.py finds on that data.
+
+--mirror also adds every position mirrored left-right (files a <-> i, same
+score and result: the game is symmetric) when its features differ from the
+original's. With HalfKAv2_hm they differ only when the two kings stand on the
+middle file (the features of a king off it are mirrored to the same side), and
+never with the "att" feature sets (mid mirror): the script reports how many
+positions were added.
+
+--max-dups N keeps at most N copies of each position (the same FEN but for
+the move number), the first ones of the input: positions repeated in many
+games (openings) then weigh less in the training. The inputs are read twice
+(a first pass hashes the positions).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import multiprocessing as mp
 import os
@@ -56,12 +69,14 @@ META_DTYPE_BLEND = np.dtype(META_DTYPE.descr + [("blend", np.uint8)])
 CHUNK_LINES = 16384
 
 
-def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: bool):
-    global _MAX_SCORE, _SCORE_SCALE, _JIEQI_MATERIAL
+def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: bool,
+                 mirror: bool = False):
+    global _MAX_SCORE, _SCORE_SCALE, _JIEQI_MATERIAL, _MIRROR
     F.set_arch(arch)
     _MAX_SCORE = max_score
     _SCORE_SCALE = score_scale
     _JIEQI_MATERIAL = jieqi_material
+    _MIRROR = mirror
 
 
 # Malformed lines (wrong field count, bad numbers, bad FEN: ValueError; a
@@ -71,15 +86,41 @@ MALFORMED_ERRORS = (ValueError, IndexError)
 MAX_EXAMPLES = 5   # malformed lines printed, at most
 
 
+def position_key(line: str) -> bytes:
+    """Identity of the position of a data line for --max-dups: the FEN without
+    the move number (a malformed line is its own key)."""
+    fen = line.split("|", 1)[0].split()
+    return " ".join(fen[:4] if len(fen) >= 4 else fen).encode()
+
+
+def hash_chunk(lines: list[str]) -> np.ndarray:
+    """64-bit hashes of the positions of lines (done in the worker processes)."""
+    return np.fromiter((int.from_bytes(hashlib.blake2b(position_key(l), digest_size=8).digest(),
+                                       "little") for l in lines), dtype=np.uint64, count=len(lines))
+
+
+def keep_mask(hashes: np.ndarray, max_dups: int) -> np.ndarray:
+    """True for the first max_dups occurrences of every hash, in order."""
+    order = np.argsort(hashes, kind="stable")
+    h = hashes[order]
+    start = np.r_[True, h[1:] != h[:-1]]
+    first = np.maximum.accumulate(np.where(start, np.arange(len(h)), 0))
+    keep = np.empty(len(h), dtype=bool)
+    keep[order] = (np.arange(len(h)) - first) < max_dups
+    return keep
+
+
 def parse_chunk(lines: list[str]):
     """Parses lines into compact arrays (done in the worker processes).
     Returns (features, meta, threats, lines read, positions filtered out,
-    malformed lines, a few malformed lines with their error)."""
-    feats = np.full((len(lines), 2, F.MAX_ACTIVE), F.PAD_INDEX, dtype=np.int16)
-    meta = np.zeros(len(lines), dtype=META_DTYPE_BLEND if F.BLEND else META_DTYPE)
-    counts = np.zeros((len(lines), 2), dtype=np.uint8)
+    malformed lines, a few malformed lines with their error, mirrored
+    positions added)."""
+    rows = 2 * len(lines) if _MIRROR else len(lines)
+    feats = np.full((rows, 2, F.MAX_ACTIVE), F.PAD_INDEX, dtype=np.int16)
+    meta = np.zeros(rows, dtype=META_DTYPE_BLEND if F.BLEND else META_DTYPE)
+    counts = np.zeros((rows, 2), dtype=np.uint8)
     threats = []
-    n = filtered = malformed = 0
+    n = filtered = malformed = mirrored = 0
     examples = []
     for line in lines:
         try:
@@ -109,19 +150,35 @@ def parse_chunk(lines: list[str]):
             if len(examples) < MAX_EXAMPLES:
                 examples.append(f"{line.strip()[:120]!r}: {type(e).__name__}: {e}")
             continue
-        feats[n, 0, :len(s)] = s
-        feats[n, 1, :len(o)] = o
-        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255),
-                   se, allmat) + ((blend,) if F.BLEND else ())
-        if F.THREATS:
-            counts[n] = (len(ts), len(to))
-            threats.append(ts)
-            threats.append(to)
-        n += 1
+        record = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255),
+                  se, allmat) + ((blend,) if F.BLEND else ())
+        samples = [(s, o, (ts, to) if F.THREATS else None)]
+        if _MIRROR:
+            # the mirrored position (same layer stack, blend, material, se /
+            # allmat, context: they only count pieces), if it brings new features
+            mp = F.mirror_position(pos)
+            ms, mo = F.active_features(mp, stm), F.active_features(mp, 1 - stm)
+            mt = None
+            if F.THREATS:
+                mphys = F.physical_threats(mp)
+                mt = (F.active_threats(mp, stm, mphys), F.active_threats(mp, 1 - stm, mphys))
+            if sorted(ms) != sorted(s) or sorted(mo) != sorted(o) or \
+                    (F.THREATS and (sorted(mt[0]) != sorted(ts) or sorted(mt[1]) != sorted(to))):
+                samples.append((ms, mo, mt))
+                mirrored += 1
+        for fs, fo, ft in samples:
+            feats[n, 0, :len(fs)] = fs
+            feats[n, 1, :len(fo)] = fo
+            meta[n] = record
+            if F.THREATS:
+                counts[n] = (len(ft[0]), len(ft[1]))
+                threats.append(ft[0])
+                threats.append(ft[1])
+            n += 1
     thr = None
     if F.THREATS:
         thr = (np.fromiter((i for t in threats for i in t), dtype=np.uint32), counts[:n])
-    return feats[:n], meta[:n], thr, len(lines), filtered, malformed, examples
+    return feats[:n], meta[:n], thr, len(lines), filtered, malformed, examples, mirrored
 
 
 def read_chunks(paths: list[str]):
@@ -176,22 +233,48 @@ def main():
     ap.add_argument("--jieqi-material", action="store_true",
                     help="the data was generated with the engine option JieqiMaterial=true: "
                          "store the material evaluate() then uses (default: major_material)")
+    ap.add_argument("--mirror", action="store_true",
+                    help="also add the positions mirrored left-right, when their features differ")
+    ap.add_argument("--max-dups", type=int, default=0, metavar="N",
+                    help="keep at most N copies of each position (default: all)")
     args = ap.parse_args()
+    if args.max_dups < 0:
+        ap.error("--max-dups must be positive")
     F.set_arch(args.arch)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
     shard, buf_f, buf_m, buf_t, buffered = 0, [], [], [], 0
-    total_in = total_out = total_filtered = total_malformed = 0
+    total_in = total_out = total_filtered = total_malformed = total_mirrored = 0
+    total_dups = 0
     examples = []
     with mp.Pool(args.workers, initializer=_init_worker,
                  initargs=(args.arch, args.max_score, args.score_scale,
-                           args.jieqi_material)) as pool:
-        for feats, meta, thr, n_in, n_filtered, n_malformed, ex in pool.imap(
-                parse_chunk, read_chunks(args.inputs)):
+                           args.jieqi_material, args.mirror)) as pool:
+        chunks = read_chunks(args.inputs)
+        if args.max_dups:
+            # first pass: the positions to keep, chunk by chunk
+            hashes = list(pool.imap(hash_chunk, read_chunks(args.inputs)))
+            keep = keep_mask(np.concatenate(hashes) if hashes else np.zeros(0, np.uint64),
+                             args.max_dups)
+            total_dups = int(len(keep) - keep.sum())
+            print(f"--max-dups {args.max_dups}: {total_dups} of {len(keep)} lines are dropped "
+                  f"as repeated positions", flush=True)
+            bounds = np.cumsum([0] + [len(h) for h in hashes])
+
+            def kept_chunks():
+                for k, lines in enumerate(read_chunks(args.inputs)):
+                    m = keep[bounds[k]:bounds[k + 1]]
+                    if len(m) != len(lines):
+                        raise SystemExit("the inputs changed between the two passes")
+                    yield [l for l, keep_it in zip(lines, m) if keep_it]
+            chunks = (c for c in kept_chunks() if c)
+        for feats, meta, thr, n_in, n_filtered, n_malformed, ex, n_mirrored in pool.imap(
+                parse_chunk, chunks):
             total_in += n_in
             total_filtered += n_filtered
             total_malformed += n_malformed
+            total_mirrored += n_mirrored
             examples.extend(ex[:MAX_EXAMPLES - len(examples)])
             buf_f.append(feats)
             buf_m.append(meta)
@@ -213,7 +296,9 @@ def main():
         f.write(" ".join(META_DTYPE.names) + "\n")
     print(f"{total_out} positions in {shard} shard(s) -> {args.out}-*.npy "
           f"({total_filtered} filtered out by score, result or feature count, "
-          f"{total_malformed} malformed lines skipped)")
+          f"{total_malformed} malformed lines skipped"
+          + (f", {total_dups} repeated positions dropped" if args.max_dups else "")
+          + (f", {total_mirrored} mirrored positions added" if args.mirror else "") + ")")
     if total_malformed:
         print(f"warning: {total_malformed} of {total_in} lines are malformed, e.g.:", file=sys.stderr)
         for e in examples:

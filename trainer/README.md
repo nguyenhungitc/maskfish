@@ -258,6 +258,8 @@ and the file `data/train0.arch` holding the architecture.
 | `--workers` | cores | Number of FEN parsing processes |
 | `--arch` | `default` | `att` for the experimental architecture ([section 7.2](#72-the-att-architecture)) |
 | `--jieqi-material` | off | The data was generated with the engine option `JieqiMaterial=true` (store the material `evaluate()` then uses) |
+| `--mirror` | off | Also add the positions mirrored left-right when their features differ ([section 7.15](#715-more-from-the-same-data-mirroring-and-repeated-positions)) |
+| `--max-dups` | all | Keep at most N copies of each position ([section 7.15](#715-more-from-the-same-data-mirroring-and-repeated-positions)) |
 
 Every shard is shuffled before it is written; during training every batch
 comes from a random shard, so the data is mixed across shards.
@@ -1249,6 +1251,35 @@ writes the converted network itself.) The layer stacks of the endgames and of
 the openings with many revealed pieces are seen less often: `--stack-balance`
 weights them up. `scripts/pipeline.sh`: `STACKS=32` (with `INIT_NET` of 16
 layer stacks: the same evaluation at generation 0).
+
+### 7.15. More from the same data: mirroring and repeated positions
+
+`prepare_data.py --mirror` adds every position mirrored left-right (files a ↔
+i): Jieqi is symmetric (the dark pieces stand on symmetric squares and move
+like the kind of their square), so it has the same score and result. It adds
+something only when the mirrored position has other features: the HalfKAv2_hm
+features of a king off the middle file are already mirrored to one side, so
+the two positions differ only when **both kings stand on the middle file**,
+about 40 % of the positions of random games. With the `att` feature sets the
+mid mirror decides the side of those too: nothing is added. The script counts
+the positions it adds. It is dhbloo's augmentation by the symmetries of the
+board, which matters for the trainers of board games without such features;
+here it is a modest gain at most, to compare by SPRT (the data is about 1.4
+times as large).
+
+`--max-dups N` keeps at most N copies of each position (same FEN but the move
+number; the first ones of the input). Every game starts from the same
+position and the first moves repeat across games, so a few positions weigh
+much more than the others in the loss; with `--max-dups 8` they count at most
+8 times (their results are still averaged over 8 games). The inputs are read
+twice (the first pass hashes the positions, 8 bytes per line in memory).
+
+```
+python prepare_data.py data/gen5.txt --out data/train5 --mirror --max-dups 8
+```
+
+`scripts/pipeline.sh`: `PREP_MIRROR=1`, `PREP_MAX_DUPS=8` (data prepared with
+other values is prepared again).
 
 ## 8. Data formats
 

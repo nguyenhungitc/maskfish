@@ -101,6 +101,7 @@ fi
 : "${GEN_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"; : "${ADJUDICATE:=3000}"; : "${GEN_OPTS:=}"
 : "${CHANCE_SCALING:=}"; : "${SEED_BASE:=}"
 : "${SHARD_SIZE:=2000000}"; : "${MAX_SCORE:=10000}"; : "${SCORE_SCALE:=1.0}"; : "${PREP_WORKERS:=}"
+: "${PREP_MIRROR:=0}"; : "${PREP_MAX_DUPS:=0}"
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
@@ -533,6 +534,13 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
     echo "Prepared without se / allmat (needed by EVAL_SCALING=Alignment): preparing again" | tee -a "$CUR_LOG"
     force=1
   fi
+  # --mirror / --max-dups (README 7.15), recorded in ${prefix}.opts
+  local popts="mirror=$PREP_MIRROR max-dups=$PREP_MAX_DUPS" old="mirror=0 max-dups=0"
+  [[ -f "${prefix}.opts" ]] && old=$(cat "${prefix}.opts")
+  if [[ -f "${prefix}.arch" && "$old" != "$popts" ]]; then
+    echo "Prepared with $old, not $popts: preparing again" | tee -a "$CUR_LOG"
+    force=1
+  fi
   if [[ -f "${prefix}.arch" && -f "${prefix}.material" && "$force" == 0 ]]; then
     echo "Already prepared: $prefix" | tee -a "$CUR_LOG"; return 0
   fi
@@ -541,18 +549,22 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
     force=1
   fi
   if [[ "$force" == 1 ]] && (( ! DRY_RUN )); then
-    rm -f "${prefix}".arch "${prefix}".material "${prefix}".fields "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
+    rm -f "${prefix}".arch "${prefix}".material "${prefix}".fields "${prefix}".opts \
+      "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
   fi
   local inputs=("$txt") s
   for s in "${txt}".salvage-*; do [[ -s "$s" ]] && inputs+=("$s"); done
   local cmd=("$PYTHON" -u prepare_data.py "${inputs[@]}" --out "$prefix" --arch "$FEATURE_ARCH"
              --shard-size "$SHARD_SIZE" --max-score "$MAX_SCORE" --score-scale "$SCORE_SCALE")
   [[ -n "$PREP_WORKERS" ]] && cmd+=(--workers "$PREP_WORKERS")
+  (( PREP_MIRROR )) && cmd+=(--mirror)
+  (( PREP_MAX_DUPS > 0 )) && cmd+=(--max-dups "$PREP_MAX_DUPS")
   # data generated with JieqiMaterial=true: evaluate() uses jieqi_major_material()
   [[ " $GEN_OPTS " =~ [[:space:]]JieqiMaterial=(true|1)[[:space:]] ]] && cmd+=(--jieqi-material)
   run "$CUR_LOG" "${cmd[@]}" || return 1
   (( DRY_RUN )) && return 0
   [[ -f "${prefix}.arch" ]] || fail "prepare finished but ${prefix}.arch is missing" || return 1
+  echo "$popts" > "${prefix}.opts"
   local res; res=$(grep -h 'shard(s) ->' "$CUR_LOG" | tail -1)
   info "$(html_escape "$(basename "$prefix")"): $(html_escape "${res%% -> *}")"
 }
