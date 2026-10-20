@@ -304,6 +304,7 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--optimizer` | `adam` | `ranger21`: the optimizer of AB-JChess and nnue-pytorch (AdamW with lookahead, `ranger21.py`); the learning rate still follows `--lr` and `--gamma`. A run resumed with another optimizer starts a new one at the current learning rate |
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
+| `--eval-scaling` | `complexity` | The engine's `EvalScaling` option the network will play with: `complexity` or `alignment` ([section 7.13](#713-evaluation-scaling-evalscaling)) |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
 | `--qat-start` | 0 (off) | Quantization-aware training from this epoch on ([section 7.10](#710-quantization-aware-training-qat-start)) |
 | `--val-qat` | | Also print the validation loss of the quantized network before `--qat-start` |
@@ -1153,6 +1154,49 @@ gives a stronger network, which only the trained pair answers. Combine with
 QAT (section 7.10) in a second test rather than in the same one, to know
 which change helped.
 
+### 7.13. Evaluation scaling (`EvalScaling`)
+
+`evaluate()` does not return the network output as is: it scales it (see
+step 4 and `eval_scale.py`), and the trainer applies the same scaling in the
+loss, so the two must agree. The engine has two scalings, chosen by the UCI
+option `EvalScaling`:
+
+- `Complexity` (default, unchanged): the output is damped by the
+  "complexity" |psqt − positional| and scaled by the major material
+  (`JieqiMaterial` applies to it). With a network **without PSQT**
+  (`make psqt=no`) the complexity becomes |output| itself, so every large
+  evaluation is damped (by about a quarter at 3000): it stays consistent
+  (the trainer does the same) but it is not what that term was meant for.
+- `Alignment`: Pikafish's "Replace nnueComplexity with simple_eval
+  equivalent" (September 2026), made to allow networks without PSQT: the
+  output is scaled up or down by its agreement with the material balance
+  (`simple_eval`), then by the total material, then by the 40-move counter as
+  before. It needs the material balance and the total material of every
+  position, which `prepare_data.py` now stores (fields `se`, `allmat`):
+  data prepared before must be prepared again from the text files.
+
+Both are checked bit for bit by `verify.py --eval-scaling ...` (also with
+`psqt=no` and `quant=2`). To use `Alignment`:
+
+```
+python prepare_data.py data/gen5.txt --out data/train5        # again, for se / allmat
+python train.py data/train5 --val data/val5 --out runs/align --init-net nets/gen5.nnue \
+    --eval-scaling alignment --epochs 40 --epoch-size 10000000
+python verify.py --engine ../src/maskfish --net runs/align/epoch_40.nnue --eval-scaling alignment
+python match.py --engine ../src/maskfish --net-a runs/align/epoch_40.nnue --net-b nets/gen5.nnue \
+    --opt-a EvalScaling=Alignment --movetime 100 --workers 15 --sprt 0 5
+```
+
+The net trained with `--eval-scaling alignment` must play with
+`EvalScaling Alignment` (A), the reference with the default (B). The two
+scalings give evaluations of different sizes (`Alignment` scales up with
+the material, `Complexity` down), so do not switch the option of an existing
+network without training it again. The data may come from either scaling:
+the loss compares win probabilities, and `fit_scaling.py` fits the constant
+of the data used. `scripts/pipeline.sh`: `EVAL_SCALING=Alignment` sets the
+option for the data generation, the checks and the SPRT, and
+`--eval-scaling alignment` for the training. It suits `PSQT=0` best.
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -1167,15 +1211,16 @@ The engine's FEN (with the pool), the score for the side to move in internal
 units, and the result for the side to move (1 / 0 / −1). Data from other
 sources can be added if it uses this format and internal units (`RawScore`).
 
-**Prepared** (per shard, about 260 bytes per position):
+**Prepared** (per shard, about 264 bytes per position):
 
 - `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)` (`(N, 2, 80)` for the `-meta`
   architectures), feature indices of the side to move and of the other side,
   padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
   `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4),
-  and `blend` (interpolation weight of the layer stacks) for the `-blend`
-  architectures;
+  `se` and `allmat` (material balance for the side to move and total
+  material, for `EvalScaling Alignment`, section 7.13), and `blend`
+  (interpolation weight of the layer stacks) for the `-blend` architectures;
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 
@@ -1198,7 +1243,7 @@ your own machine.
 | Data generation speed | about 40–50 positions/s per worker with `--nodes 5000` (roughly inversely proportional to the node count) |
 | 16-core machine, `--nodes 5000` | about 2–2.5 million positions/hour |
 | Text file | about 100 bytes/position (10 million ≈ 1 GB); `.zst`: about 15 bytes/position |
-| Prepared data | about 260 bytes/position (10 million ≈ 2.6 GB) |
+| Prepared data | about 264 bytes/position (10 million ≈ 2.6 GB) |
 | `prepare_data.py` | about 15,000 lines/s per CPU core (`threats`: about 6,500): 50 million positions take a few minutes on 16 cores, much less than generating them |
 | Checkpoint | about 190 MB (`att`: 750 MB, `threats`: 1.3 GB) per epoch |
 | `.nnue` file | about 8 MB (`att`: larger, `threats`: up to about 60 MB), zstd compressed |
@@ -1215,6 +1260,8 @@ Training speed depends on the GPU; run a small epoch first
 | `no threat data (prepare the data again ...)` | The data was prepared by an old version of `prepare_data.py`; run it again with `--arch threats` |
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |
 | `the train data has no material / rule40` | The data was prepared before the loss used the `evaluate()` scaling: run `prepare_data.py` again on the text files (or train with `--no-eval-scale`) |
+| `the train data has no se / allmat` | `--eval-scaling alignment` needs data prepared by the current `prepare_data.py`: prepare it again from the text files |
+| `SCALE MISMATCH` with a network trained with `--eval-scaling alignment` | Run `verify.py` (and the engine) with `--eval-scaling alignment` / `EvalScaling Alignment` |
 | `SCALE MISMATCH` in `verify.py` | `eval_scale.py` no longer matches `src/evaluate.cpp` (constants or material): update it |
 | `incompatible network for arch ...` | A network of the wrong architecture was given to `--init-net` / `serialize.py`; the message gives the file's real architecture |
 | `prepare_data.py` runs out of RAM | Lower `--shard-size` (e.g. 500000) |

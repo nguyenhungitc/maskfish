@@ -162,7 +162,8 @@ then the dark piece on a9 captures that cannon and is revealed as a rook.
 | `ProbCutDarkCapture` | `false` | ProbCut asks a larger margin (+64) and searches one ply less for captures of dark pieces. |
 | `TTPenalize` | `false` | Lowers by one the depth of a TT entry that is deep enough but whose bound cannot produce a cutoff, so it is replaced sooner. |
 | `ChanceBranchDepth` | `false` | In a reveal, the outcomes after the most likely one are searched one ply shallower. |
-| `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of the value of the piece that starts on its square). |
+| `JieqiMaterial` | `false` | The material term of the evaluation scaling counts each dark piece at the expected major-piece value of its owner's pool (instead of the value of the piece that starts on its square). Only with `EvalScaling Complexity`. |
+| `EvalScaling` | `Complexity` | How the network output is scaled into the evaluation. `Complexity`: damped by the "complexity" \|psqt − positional\| and scaled by the major material. `Alignment`: Pikafish's since September 2026, scaled by the agreement of the network with the material balance and by the total material; it does not use the psqt / positional split, so it suits networks without PSQT (`make psqt=no`). A network must be trained for the scaling it plays with (`train.py --eval-scaling`, section 7.13 of the [trainer README](trainer/README.md)). |
 | `ChanceScaling` | `0` | Score → win-rate scale used to average chance nodes; 0 means the built-in 360.8. Fit it with [`trainer/fit_scaling.py`](trainer/fit_scaling.py). |
 | `ChanceRiskAversion` | `0` | Risk preference, in percent of the standard deviation of the outcomes, of the side whose move causes a chance event: positive avoids uncertain reveals/captures, negative seeks them. |
 

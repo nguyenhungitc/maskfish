@@ -67,9 +67,13 @@ def main():
                     help="architecture of the random test network (ignored with --net)")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="check the evaluate() scaling with the engine option JieqiMaterial=true")
+    ap.add_argument("--eval-scaling", choices=E.SCALINGS, default="complexity",
+                    help="check the evaluate() scaling with the engine option EvalScaling "
+                         "(train.py --eval-scaling)")
     args = ap.parse_args()
     F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
-    print(f"arch {F.ARCH}")
+    print(f"arch {F.ARCH}" + (f", EvalScaling {args.eval_scaling}"
+                              if args.eval_scaling != "complexity" else ""))
 
     import torch
     from model import NNUE, NNUE2SCORE, threat_inputs
@@ -106,8 +110,10 @@ def main():
         S.write_nnue(q, tmp.name, "verify")
         net = tmp.name
 
-    engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net),
-                                    "JieqiMaterial": str(args.jieqi_material).lower()})
+    opts = {"EvalFile": os.path.abspath(net), "JieqiMaterial": str(args.jieqi_material).lower()}
+    if args.eval_scaling != "complexity":       # (older engines do not have the option)
+        opts["EvalScaling"] = args.eval_scaling.capitalize()
+    engine = U.Engine(args.engine, opts)
     fens = random_positions(engine, args.positions, args.seed)
 
     exact, worst, scaled, no_final = 0, 0.0, 0, 0
@@ -123,14 +129,16 @@ def main():
         if e_final is None:
             no_final += 1
         else:
-            material, rule40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
-            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40)
+            pos = F.parse_fen(fen)
+            material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
+            se, allmat = E.alignment_inputs(pos)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, args.eval_scaling, se, allmat)
             if r_final == e_final:
                 scaled += 1
             else:
                 ok = False
                 print("SCALE MISMATCH", fen, "engine evaluate()", e_final, "reference", r_final,
-                      f"(material {material}, rule40 {rule40})")
+                      f"(material {material}, rule40 {rule40}, se {se}, allmat {allmat})")
         if F.CTX:
             # the trainer recovers the context inputs from the features
             from model import context_from_features
@@ -157,9 +165,11 @@ def main():
             qat_worst = max(qat_worst, abs(qp - e_psqt), abs(qv - e_pos))
             qat_exact += (qp, qv) == (e_psqt, e_pos)
             if e_final is not None:
-                mat, r40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
-                qf = E.evaluate_qat(torch.tensor([float(qp)]), torch.tensor([float(qv)]),
-                                    torch.tensor([float(mat)]), torch.tensor([float(r40)]))
+                pos = F.parse_fen(fen)
+                mat, r40 = E.position_scale_inputs(pos, args.jieqi_material)
+                se, allmat = E.alignment_inputs(pos)
+                t = lambda x: torch.tensor([float(x)])
+                qf = E.evaluate_qat(t(qp), t(qv), t(mat), t(r40), args.eval_scaling, t(se), t(allmat))
                 qat_final_exact += int(round(qf.item())) == e_final
     engine.quit()
     if tmp:

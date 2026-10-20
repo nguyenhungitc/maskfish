@@ -119,6 +119,9 @@ class Data:
                     self.threats.append(thr)
         self.sizes = np.array([len(m) for _, m in self.shards], dtype=np.int64)
         # material / rule40 for the evaluate() scaling (prepare_data.py since that change)
+        # se / allmat for EvalScaling Alignment (prepare_data.py since that option)
+        self.has_align = all("se" in m.dtype.names and "allmat" in m.dtype.names
+                             for _, m in self.shards)
         self.has_scale = all("material" in m.dtype.names and "rule40" in m.dtype.names
                              for _, m in self.shards)
         kinds = set()
@@ -207,6 +210,9 @@ class Data:
         if self.has_scale:
             h["material"] = host_tensor(m["material"], pin)
             h["rule40"] = host_tensor(m["rule40"], pin)
+        if self.has_align:
+            h["se"] = host_tensor(m["se"], pin)
+            h["allmat"] = host_tensor(m["allmat"], pin)
         if self.has_blend:
             h["blend"] = host_tensor(m["blend"], pin)
         return h
@@ -223,7 +229,7 @@ def host_tensor(a: np.ndarray, pin: bool, dtype=None) -> torch.Tensor:
 
 def to_device(h: dict, device):
     """Batch tuple used by loss_fn / model_score:
-    (stm, nstm, bucket, score, result, threats, material, rule40, blend),
+    (stm, nstm, bucket, score, result, threats, material, rule40, blend, se, allmat),
     converted on the device to the types the model expects (int64 indices,
     float32 values), exactly the values of the stored data."""
     def dev(name):
@@ -236,8 +242,10 @@ def to_device(h: dict, device):
     material = dev("material").float() if "material" in h else None
     rule40 = dev("rule40").float() if "rule40" in h else None
     blend = dev("blend").long() if "blend" in h else None
+    se = dev("se").float() if "se" in h else None
+    allmat = dev("allmat").float() if "allmat" in h else None
     return (f[:, 0], f[:, 1], dev("bucket").long(), dev("score").float(), dev("result").float(),
-            threats, material, rule40, blend)
+            threats, material, rule40, blend, se, allmat)
 
 
 _DONE = object()
@@ -287,24 +295,38 @@ def prefetched(it, depth: int):
         t.join()
 
 
-def model_score(model, batch, eval_scale: bool = True, qat: bool = False) -> torch.Tensor:
+def scaling_mode(eval_scale) -> str | None:
+    """None (raw network output), "complexity" (True: the engine's default
+    EvalScaling) or "alignment" (EvalScaling Alignment)."""
+    if not eval_scale:
+        return None
+    return "complexity" if eval_scale is True else str(eval_scale)
+
+
+def model_score(model, batch, eval_scale=True, qat: bool = False) -> torch.Tensor:
     """Score of the model for a batch, internal units: after the engine's
-    evaluate() scaling when the batch has material / rule40 and eval_scale is
-    on, otherwise the raw network output. qat: the score of the quantized
-    network, as the engine computes it (model.forward_parts_qat())."""
+    evaluate() scaling when the batch has its inputs and eval_scale is on
+    (True / "complexity", or "alignment": the EvalScaling option), otherwise the
+    raw network output. qat: the score of the quantized network, as the engine
+    computes it (model.forward_parts_qat())."""
     stm, nstm, bucket, _, _, threats = batch[:6]
     material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
     blend = batch[8] if len(batch) >= 9 else None
+    se, allmat = (batch[9], batch[10]) if len(batch) >= 11 else (None, None)
+    mode = scaling_mode(eval_scale)
+    if material is None or (mode == "alignment" and se is None):
+        mode = None
+    extra = {"scaling": mode, "se": se, "allmat": allmat} if mode else {}
     if qat:
         psqt, positional = model.forward_parts_qat(stm, nstm, bucket, threats, blend)
         psqt, positional = psqt.squeeze(1), positional.squeeze(1)
-        if eval_scale and material is not None:
-            return E.evaluate_qat(psqt, positional, material, rule40)
+        if mode:
+            return E.evaluate_qat(psqt, positional, material, rule40, **extra)
         return psqt + positional
-    if eval_scale and material is not None:
+    if mode:
         psqt, positional = model.forward_parts(stm, nstm, bucket, threats, blend)
         return E.evaluate_float(psqt.squeeze(1) * NNUE2SCORE, positional.squeeze(1) * NNUE2SCORE,
-                                material, rule40)
+                                material, rule40, **extra)
     return model(stm, nstm, bucket, threats, blend).squeeze(1) * NNUE2SCORE
 
 
@@ -312,7 +334,7 @@ class Scorer(nn.Module):
     """model_score() as a module: what DistributedDataParallel wraps (it only
     synchronizes the gradients of what goes through its forward())."""
 
-    def __init__(self, model: nn.Module, eval_scale: bool = True):
+    def __init__(self, model: nn.Module, eval_scale=True):
         super().__init__()
         self.model = model
         self.eval_scale = eval_scale
@@ -322,7 +344,7 @@ class Scorer(nn.Module):
         return model_score(self.model, batch, self.eval_scale, self.qat)
 
 
-def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True,
+def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale=True,
             score_scaling: float | None = None, power: float = 2.5, qat: bool = False):
     """model: an NNUE, or a Scorer (possibly wrapped in DDP), which then
     computes the score itself (with its own eval_scale and qat)."""
@@ -404,6 +426,9 @@ def main():
     ap.add_argument("--stack-balance", type=float, default=0.0, metavar="CAP",
                     help="weight samples by inverse layer stack frequency, capped at CAP "
                          "(e.g. 8); 0 = off")
+    ap.add_argument("--eval-scaling", choices=E.SCALINGS, default="complexity",
+                    help="the engine's EvalScaling option the network is trained for: "
+                         "complexity (default) or alignment (needs data prepared with se / allmat)")
     ap.add_argument("--no-eval-scale", action="store_true",
                     help="compare the raw network output with the data scores, without the "
                          "engine's evaluate() scaling (old behaviour; the scale of the "
@@ -443,18 +468,22 @@ def main():
     val = Data(args.val) if args.val else None
     if val and val.arch != train.arch:
         raise SystemExit(f"train data is arch '{train.arch}' but validation data is '{val.arch}'")
-    eval_scale = not args.no_eval_scale
+    eval_scale = False if args.no_eval_scale else args.eval_scaling
     if eval_scale:
         for name, d in (("train", train), ("validation", val)):
             if d is not None and not d.has_scale:
                 raise SystemExit(f"the {name} data has no material / rule40 (prepared by an older "
                                  "prepare_data.py): prepare it again from the text files, or "
                                  "train with --no-eval-scale")
+            if d is not None and eval_scale == "alignment" and not d.has_align:
+                raise SystemExit(f"the {name} data has no se / allmat (prepared by an older "
+                                 "prepare_data.py): prepare it again from the text files to "
+                                 "train with --eval-scaling alignment")
         kinds = sorted(set(train.material_kinds) | set(val.material_kinds if val else []))
         if len(kinds) > 1:
             say(f"warning: data prepared with different material settings {kinds}", flush=True)
-    say("loss on: " + ("evaluate() scaling of the network output" if eval_scale
-                       else "raw network output"), flush=True)
+    say("loss on: " + (f"evaluate() scaling of the network output (EvalScaling {eval_scale})"
+                       if eval_scale else "raw network output"), flush=True)
     F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt,
                             quant2=args.quant2))
     init_q, init_ft_only = None, False

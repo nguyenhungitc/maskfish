@@ -103,7 +103,14 @@ fi
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
-: "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"; : "${FTPERM:=1}"
+: "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"; : "${FTPERM:=1}"; : "${EVAL_SCALING:=Complexity}"
+case "$EVAL_SCALING" in
+  Complexity|Alignment) ;;
+  *) echo "EVAL_SCALING must be Complexity or Alignment" >&2; exit 2 ;;
+esac
+# The engine option EvalScaling and train.py --eval-scaling must agree (README 7.13)
+EVAL_OPT=(); EVAL_ARG=()
+if [[ "$EVAL_SCALING" == Alignment ]]; then EVAL_OPT=(EvalScaling=Alignment); EVAL_ARG=(--eval-scaling alignment); fi
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -436,7 +443,7 @@ s_build() {
 }
 
 s_check() {
-  run "$CUR_LOG" "$PYTHON" -u verify.py --engine "$ENGINE" --arch "$ARCH_FULL" \
+  run "$CUR_LOG" "$PYTHON" -u verify.py --engine "$ENGINE" --arch "$ARCH_FULL" "${EVAL_ARG[@]}" \
     || fail "Engine and trainer are NOT bit-exact → do not train (see README section 11)" || return 1
   info "$(html_escape "$(grep -h 'bit-exact' "$CUR_LOG" | tail -1)")"
 }
@@ -486,7 +493,7 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
              --games "$games" --nodes "$NODES" --workers "$GEN_WORKERS"
              --adjudicate "$ADJUDICATE" --seed "$seed" --out "$out")
   (( DEPTH > 0 )) && cmd+=(--depth "$DEPTH")
-  local opts; words opts "$GEN_OPTS"
+  local opts; words opts "$GEN_OPTS"; opts+=("${EVAL_OPT[@]}")
   [[ -n "$CHANCE_SCALING" ]] && opts+=("ChanceScaling=$CHANCE_SCALING")
   (( ${#opts[@]} )) && cmd+=(--opt "${opts[@]}")
   run "$CUR_LOG" "${cmd[@]}" || return 1
@@ -519,6 +526,11 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
     echo "Prepared for $(cat "${prefix}.arch"), not $FEATURE_ARCH: preparing again" | tee -a "$CUR_LOG"
     force=1
   fi
+  if [[ "$EVAL_SCALING" == Alignment && -f "${prefix}.arch" ]] \
+     && ! grep -qw allmat "${prefix}.fields" 2>/dev/null; then
+    echo "Prepared without se / allmat (needed by EVAL_SCALING=Alignment): preparing again" | tee -a "$CUR_LOG"
+    force=1
+  fi
   if [[ -f "${prefix}.arch" && -f "${prefix}.material" && "$force" == 0 ]]; then
     echo "Already prepared: $prefix" | tee -a "$CUR_LOG"; return 0
   fi
@@ -527,7 +539,7 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
     force=1
   fi
   if [[ "$force" == 1 ]] && (( ! DRY_RUN )); then
-    rm -f "${prefix}".arch "${prefix}".material "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
+    rm -f "${prefix}".arch "${prefix}".material "${prefix}".fields "${prefix}"-[0-9][0-9][0-9][0-9][0-9].*.npy
   fi
   local inputs=("$txt") s
   for s in "${txt}".salvage-*; do [[ -s "$s" ]] && inputs+=("$s"); done
@@ -613,6 +625,7 @@ s_train() {
   [[ -n "$DEVICE" ]] && cmd+=(--device "$DEVICE")
   (( TRAIN_THREADS > 0 )) && cmd+=(--threads "$TRAIN_THREADS")
   (( QAT_START > 0 )) && cmd+=(--qat-start "$QAT_START")
+  cmd+=("${EVAL_ARG[@]}")
   if [[ -f "$RUN_DIR/last.pt" && $NO_RESUME == 0 ]]; then
     cmd+=(--resume "$RUN_DIR/last.pt"); info "Resuming from $(html_escape "$RUN_DIR/last.pt") (epoch ${done_ep})"
   elif (( GEN > 0 )) || [[ -n "$INIT_NET" ]] && [[ "$INIT_FROM_CURRENT" == 1 ]]; then
@@ -666,7 +679,7 @@ s_verify() {
   for e in $(candidates); do
     net="$RUN_DIR/epoch_${e}.nnue"; ck="$RUN_DIR/epoch_${e}.pt"
     [[ -f "$net" ]] || (( DRY_RUN )) || fail "$net not found" || return 1
-    local cmd=("$PYTHON" -u verify.py --engine "$ENGINE" --net "$net")
+    local cmd=("$PYTHON" -u verify.py --engine "$ENGINE" --net "$net" "${EVAL_ARG[@]}")
     [[ -f "$ck" ]] && cmd+=(--checkpoint "$ck")
     run "$CUR_LOG" "${cmd[@]}" || fail "epoch_${e}.nnue is NOT bit-exact with the engine" || return 1
     info "epoch_${e}: $(html_escape "$(grep -h 'bit-exact\|largest' "$CUR_LOG" | tail -2 | tr '\n' ' ')")"
@@ -680,6 +693,7 @@ s_match() {
   [[ -f "$NET_CUR" ]] || (( DRY_RUN )) || fail "Reference net $NET_CUR not found" || return 1
   local e net res mopts sprt
   words mopts "$MATCH_OPTS"; [[ -n "$CHANCE_SCALING" ]] && mopts+=("ChanceScaling=$CHANCE_SCALING")
+  mopts+=("${EVAL_OPT[@]}")
   words sprt "$SPRT"
   for e in $(candidates); do
     net="$RUN_DIR/epoch_${e}.nnue"

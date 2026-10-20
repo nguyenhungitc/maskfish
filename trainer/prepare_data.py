@@ -3,14 +3,18 @@ train.py reads directly (memory-mapped, no parsing during training).
 
     python prepare_data.py data/gen1.txt data/gen2.txt --out data/train [--arch att]
     -> data/train-00000.features.npy  int16 (N, 2, 64): stm / nstm feature indices
-       data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40
+       data/train-00000.meta.npy      (N,) records: bucket, result, score, material, rule40,
+                                      se, allmat
        data/train-00001.* ...         one pair of files per shard
        data/train.arch                architecture of the features
        data/train.material            "major" or "jieqi" (see --jieqi-material)
+       data/train.fields              names of the meta fields
 
 material and rule40 are the inputs of the scaling that the engine's evaluate()
 applies to the network output (see eval_scale.py); train.py applies the same
-scaling before comparing the network with the data scores.
+scaling before comparing the network with the data scores. se (material
+balance for the side to move) and allmat (total material) are those of the
+EvalScaling Alignment option (train.py --eval-scaling alignment).
 
 The threat architectures (--arch threats / att-threats) also write, per shard:
        data/train-00000.threats.npy   uint32 (T,): threat feature indices of all
@@ -45,7 +49,8 @@ import jieqi_features as F
 from textio import open_text
 
 META_DTYPE = np.dtype([("bucket", np.int8), ("result", np.int8), ("score", np.int16),
-                       ("material", np.int16), ("rule40", np.uint8)])
+                       ("material", np.int16), ("rule40", np.uint8), ("se", np.int16),
+                       ("allmat", np.int16)])
 # "-blend" architectures: also the interpolation weight of the layer stacks
 META_DTYPE_BLEND = np.dtype(META_DTYPE.descr + [("blend", np.uint8)])
 CHUNK_LINES = 16384
@@ -91,6 +96,7 @@ def parse_chunk(lines: list[str]):
                 filtered += 1
                 continue
             material, rule40 = E.position_scale_inputs(pos, _JIEQI_MATERIAL)
+            se, allmat = E.alignment_inputs(pos)
             if F.THREATS:
                 phys = F.physical_threats(pos)
                 ts, to = F.active_threats(pos, stm, phys), F.active_threats(pos, 1 - stm, phys)
@@ -105,8 +111,8 @@ def parse_chunk(lines: list[str]):
             continue
         feats[n, 0, :len(s)] = s
         feats[n, 1, :len(o)] = o
-        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255)) \
-            + ((blend,) if F.BLEND else ())
+        meta[n] = (b, result, max(-32000, min(32000, score)), material, min(rule40, 255),
+                   se, allmat) + ((blend,) if F.BLEND else ())
         if F.THREATS:
             counts[n] = (len(ts), len(to))
             threats.append(ts)
@@ -203,6 +209,8 @@ def main():
         f.write(F.feature_arch(args.arch) + "\n")   # the layer stacks do not matter
     with open(args.out + ".material", "w") as f:
         f.write(("jieqi" if args.jieqi_material else "major") + "\n")
+    with open(args.out + ".fields", "w") as f:      # (scripts/pipeline.sh checks it)
+        f.write(" ".join(META_DTYPE.names) + "\n")
     print(f"{total_out} positions in {shard} shard(s) -> {args.out}-*.npy "
           f"({total_filtered} filtered out by score, result or feature count, "
           f"{total_malformed} malformed lines skipped)")
