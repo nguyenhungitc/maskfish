@@ -1,6 +1,7 @@
-# Makes a release, by hand only (Actions > Release > Run workflow, on the
-# branch to release): builds the binaries (Binaries workflow, called here) of
-# the selected commit with the network of the hidden ref refs/assets/net
+# Makes a release, by hand only (Actions > Release > Run workflow), from the
+# branch pro only (started on another branch, it stops at once): builds the
+# binaries (Binaries workflow, called here) of the last commit of pro with the
+# network of the hidden ref refs/assets/net
 # (published by scripts/push_net.sh), then makes a release with their archives:
 #
 #   maskfish-ubuntu-x86-64-universal.tar, maskfish-windows-x86-64-universal.zip,
@@ -42,6 +43,13 @@ jobs:
       sha256: ${{ steps.net.outputs.sha256 }}
       commit: ${{ steps.net.outputs.commit }}
     steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::Releases are made from the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
 
       - name: Network of refs/assets/net

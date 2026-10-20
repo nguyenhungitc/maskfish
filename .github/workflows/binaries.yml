@@ -18,7 +18,8 @@
 # Runs for pushes to pro that touch src/ or scripts/, by hand (Actions >
 # Binaries > Run workflow), and from the Release workflow (release.yml), which
 # makes the release with the archives built here: every release goes through
-# it (this workflow does not attach anything to a release).
+# it (this workflow does not attach anything to a release). It runs on the
+# branch pro only: started by hand on another branch, it stops at once.
 name: Binaries
 
 on:
@@ -35,8 +36,20 @@ permissions:
   contents: read
 
 jobs:
+  branch:
+    name: Branch pro only
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::This workflow runs on the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
   linux:
     name: Linux x86-64-universal
+    needs: branch
     runs-on: ubuntu-24.04
     env:
       ARCHIVE: maskfish-ubuntu-x86-64-universal.tar
@@ -62,6 +75,7 @@ jobs:
 
   windows:
     name: Windows x86-64-universal (MinGW cross build)
+    needs: branch
     runs-on: ubuntu-24.04
     env:
       ARCHIVE: maskfish-windows-x86-64-universal.zip
@@ -109,6 +123,7 @@ jobs:
 
   macos:
     name: macOS universal (x86-64-universal + apple-silicon)
+    needs: branch
     runs-on: macos-latest
     env:
       ARCHIVE: maskfish-macos-universal.tar
@@ -134,6 +149,7 @@ jobs:
 
   android:
     name: Android arm64-universal
+    needs: branch
     runs-on: ubuntu-24.04
     env:
       ARCHIVE: maskfish-android-arm64-universal.tar
