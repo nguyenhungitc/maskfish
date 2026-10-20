@@ -8,7 +8,7 @@
 #
 # The ref is fetched from the remote origin, then from the repository of
 # Maskfish (when origin is a fork without the ref, or cannot be fetched
-# without a prompt, e.g. over ssh with a key that is not in ssh-agent), at
+# without a prompt, e.g. over ssh with a key that has a passphrase), at
 # every run: the copy is replaced when the network of the ref changed. This
 # needs a git clone of the source (`git clone` itself does not fetch this
 # ref). When the ref cannot be fetched (no connection), an existing copy is
@@ -37,8 +37,8 @@ is_valid() {
 }
 
 # git fetch that never prompts: no password (HTTPS), and ssh in batch mode, so
-# that a key with a passphrase that is not in ssh-agent makes the fetch fail
-# instead of asking for it (a GIT_SSH program, e.g. plink, is left as it is)
+# that a key with a passphrase makes the fetch fail instead of asking for it
+# (a GIT_SSH program, e.g. plink, is left as it is)
 fetch_quiet() {
   if [ -z "$GIT_SSH" ]; then
     _ssh="${GIT_SSH_COMMAND:-$(git config core.sshCommand 2> /dev/null || echo ssh)}"

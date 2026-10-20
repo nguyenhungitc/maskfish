@@ -13,8 +13,7 @@
 # directory, ignored by git: put the network to publish there), remote to
 # origin. The file must be a zstd-compressed network, as the engine reads it.
 #
-# Over ssh with a key that has a passphrase, the push asks for it, unless the
-# key is in ssh-agent (ssh-add).
+# Over ssh with a key that has a passphrase, only the push asks for it (once).
 #
 # The ref is not shown on GitHub (files, branches, tags) nor by
 # `git branch -a`, and `git clone` does not fetch it; `git ls-remote` lists it.
@@ -43,8 +42,8 @@ sha256() {
 blob=$(git hash-object -w "$file")
 
 # git fetch that never prompts: no password (HTTPS), and ssh in batch mode, so
-# that a key with a passphrase that is not in ssh-agent makes the fetch fail
-# instead of asking for it (a GIT_SSH program, e.g. plink, is left as it is)
+# that a key with a passphrase makes the fetch fail instead of asking for it
+# (a GIT_SSH program, e.g. plink, is left as it is)
 fetch_quiet() {
   if [ -z "$GIT_SSH" ]; then
     _ssh="${GIT_SSH_COMMAND:-$(git config core.sshCommand 2> /dev/null || echo ssh)}"
