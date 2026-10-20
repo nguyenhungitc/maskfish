@@ -153,7 +153,8 @@ static_assert(PSQTBuckets % 8 == 0,
 // fc_0 has L2 = 32 outputs, all of them activated, and the direct term is the
 // difference of its last two outputs; fc_1 gets a squared activation too, and
 // fc_2 is fed by all the activations (fc_0's and fc_1's, 128 inputs). The
-// quantization is the one of the default layer stacks.
+// quantization is the one of the default layer stacks, or Pikafish's with
+// make quant=2 (see nnue_common.h).
 template<IndexType L1, int L2, int L3>
 struct NetworkArchitecture {
     static constexpr IndexType TransformedFeatureDimensions = L1;
@@ -163,14 +164,15 @@ struct NetworkArchitecture {
     static_assert(FC_0_OUTPUTS >= 2);
 
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS> fc_0;
-    Layers::SqrClippedReLU<FC_0_OUTPUTS>                                           ac_sqr_0;
-    Layers::ClippedReLU<FC_0_OUTPUTS>                                              ac_0;
+    Layers::SqrClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                             ac_sqr_0;
+    Layers::ClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                                ac_0;
     Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS>                        fc_1;
     Layers::SqrClippedReLU<FC_1_OUTPUTS>                                           ac_sqr_1;
     Layers::ClippedReLU<FC_1_OUTPUTS>                                              ac_1;
     Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1>                fc_2;
 
-    // make ctx=yes: weights of the context inputs of fc_0 (scale 64)
+    // make ctx=yes: weights of the context inputs of fc_0 (scale 64; with
+    // quant=2, 128*64*2 / 127: the context tower outputs 127 = 1.0)
     static constexpr IndexType FC_0_CONTEXT_OUTPUTS = FC_0_OUTPUTS;
     std::int8_t fc_0_context[UseContext ? FC_0_CONTEXT_OUTPUTS : 1][ContextOutputs];
 
@@ -194,7 +196,7 @@ struct NetworkArchitecture {
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
         return hashValue ^ (UseContext ? ContextArchHash : 0)
-             ^ (UseLayerStackBlend ? BlendArchHash : 0);
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0);
     }
 
     // Read network parameters
@@ -255,11 +257,20 @@ struct NetworkArchitecture {
 
         fc_2.propagate(buffer.concat, buffer.fc_2_out);
 
+        const std::int64_t skip = std::int64_t(buffer.fc_0_out[FC_0_OUTPUTS - 2])
+                                - buffer.fc_0_out[FC_0_OUTPUTS - 1];
+        if constexpr (UseQuant2)
+        {
+            // fc_2_out is in fc_0 units like the direct term: 1.0 is
+            // HiddenOneVal*(1<<WeightScaleBits)*2, but we want 1.0 to be equal
+            // to 600*OutputScale (64-bit product)
+            const std::int64_t fwdOut = buffer.fc_2_out[0] + skip;
+            return std::int32_t(fwdOut * (600 * OutputScale)
+                                / (std::int64_t(HiddenOneVal) * (1 << WeightScaleBits) * 2));
+        }
         // The direct term, like fc_0_out[15] of the default layer stacks: 1.0
         // is 127*(1<<WeightScaleBits) in quantized form, but we want 1.0 to be
         // equal to 600*OutputScale (64-bit product, see there)
-        const std::int64_t skip = std::int64_t(buffer.fc_0_out[FC_0_OUTPUTS - 2])
-                                - buffer.fc_0_out[FC_0_OUTPUTS - 1];
         std::int32_t fwdOut =
           std::int32_t(skip * (600 * OutputScale) / (127 * (1 << WeightScaleBits)));
         std::int32_t outputValue = buffer.fc_2_out[0] + fwdOut;
@@ -291,14 +302,14 @@ struct NetworkArchitecture {
     static constexpr int       FC_1_OUTPUTS                 = L3;
 
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS + 1> fc_0;
-    Layers::SqrClippedReLU<FC_0_OUTPUTS + 1>                                           ac_sqr_0;
-    Layers::ClippedReLU<FC_0_OUTPUTS + 1>                                              ac_0;
+    Layers::SqrClippedReLU<FC_0_OUTPUTS + 1, Fc0ScaleBits>                             ac_sqr_0;
+    Layers::ClippedReLU<FC_0_OUTPUTS + 1, Fc0ScaleBits>                                ac_0;
     Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS>                            fc_1;
     Layers::ClippedReLU<FC_1_OUTPUTS>                                                  ac_1;
     Layers::AffineTransform<FC_1_OUTPUTS, 1>                                           fc_2;
 
-    // make ctx=yes: weights of the context inputs of fc_0 (scale 64), also
-    // of its last output (the direct term)
+    // make ctx=yes: weights of the context inputs of fc_0 (scale 64; with
+    // quant=2, 128*64*2 / 127), also of its last output (the direct term)
     static constexpr IndexType FC_0_CONTEXT_OUTPUTS = FC_0_OUTPUTS + 1;
     std::int8_t fc_0_context[UseContext ? FC_0_CONTEXT_OUTPUTS : 1][ContextOutputs];
 
@@ -321,7 +332,7 @@ struct NetworkArchitecture {
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
         return hashValue ^ (UseContext ? ContextArchHash : 0)
-             ^ (UseLayerStackBlend ? BlendArchHash : 0);
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0);
     }
 
     // Read network parameters
@@ -376,6 +387,16 @@ struct NetworkArchitecture {
         ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
         fc_2.propagate(buffer.ac_1_out, buffer.fc_2_out);
 
+        if constexpr (UseQuant2)
+        {
+            // fc_2_out is in fc_0 units like the direct term: 1.0 is
+            // HiddenOneVal*(1<<WeightScaleBits)*2, but we want 1.0 to be equal
+            // to 600*OutputScale (64-bit product)
+            const std::int64_t fwdOut =
+              std::int64_t(buffer.fc_2_out[0]) + buffer.fc_0_out[FC_0_OUTPUTS];
+            return std::int32_t(fwdOut * (600 * OutputScale)
+                                / (std::int64_t(HiddenOneVal) * (1 << WeightScaleBits) * 2));
+        }
         // buffer.fc_0_out[FC_0_OUTPUTS] is such that 1.0 is equal to 127*(1<<WeightScaleBits) in
         // quantized form, but we want 1.0 to be equal to 600*OutputScale. The
         // product is computed in 64 bits: in 32 bits it overflows as soon as

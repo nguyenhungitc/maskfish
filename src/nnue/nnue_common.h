@@ -68,6 +68,29 @@ constexpr std::uint32_t OldVersion = 0x7AF32F20u;
 constexpr int OutputScale     = 16;
 constexpr int WeightScaleBits = 6;
 
+// Quantization (make quant=2: that of current Pikafish).
+//               quant=1 (default)                quant=2
+// FT weights    scale 127, accumulators doubled  scale 255, not doubled
+//               and clipped to 0..254            clipped to 0..FtMaxVal = 255
+// FT output     0..127, 1.0 = 127               0..127, 1.0 = HiddenOneVal = 128
+// fc_0          weights scale 64, 1.0 = 127*64   weights scale 128, 1.0 = 128*64*2
+//               activations >> 6                 activations >> 7 (and sqr >> 21)
+// fc_1          weights scale 64, >> 6           weights scale 64, >> 6 (1.0 = 128*64)
+// fc_2 output   1.0 = 600 * OutputScale          1.0 = 128*64*2 (fc_0 units), the
+//               direct term rescaled to it       sum with the direct term rescaled
+#ifdef JIEQI_NNUE_QUANT2
+constexpr bool UseQuant2 = true;
+#else
+constexpr bool UseQuant2 = false;
+#endif
+constexpr int FtMaxVal         = UseQuant2 ? 255 : 127 * 2;   // clip of the FT accumulators
+constexpr int FtAccMultiplier  = UseQuant2 ? 1 : 2;           // applied to them first
+constexpr int HiddenOneVal     = UseQuant2 ? 128 : 127;
+constexpr int Fc0ScaleBits     = WeightScaleBits + (UseQuant2 ? 1 : 0);
+// Xored into the hash of the layer stacks (networks of one quantization are
+// rejected by builds of the other)
+constexpr std::uint32_t Quant2ArchHash = 0x0A2C0000u;
+
 // Size of cache line (in bytes)
 constexpr std::size_t CacheLineSize = 64;
 

@@ -30,8 +30,9 @@
 
 namespace Maskfish::Eval::NNUE::Layers {
 
-// Clipped ReLU
-template<IndexType InDims>
+// Squared clipped ReLU: min(127, input^2 >> (2 * WeightScaleBitsLocal + 7)).
+// make quant=2 uses WeightScaleBits + 1 after fc_0 (as Pikafish).
+template<IndexType InDims, int WeightScaleBitsLocal = WeightScaleBits>
 class SqrClippedReLU {
    public:
     // Input/output type
@@ -67,11 +68,15 @@ class SqrClippedReLU {
 
     // Forward propagation
     void propagate(const InputType* input, OutputType* output) const {
+        static_assert(WeightScaleBitsLocal >= 5 && WeightScaleBitsLocal <= 8,
+                      "SqrClippedReLU only supports WeightScaleBitsLocal between 5 and 8");
+        // After squaring we need to shift by WeightScaleBitsLocal * 2 + 7.
+        // MulHi strips the lower 16 bits (a shift by 16), so we shift out the rest.
+        [[maybe_unused]] constexpr int SimdShiftAmount = WeightScaleBitsLocal * 2 + 7 - 16;
 
 #if defined(USE_SSE2)
         constexpr IndexType NumChunks = InputDimensions / 16;
 
-        static_assert(WeightScaleBits == 6);
         const auto in  = reinterpret_cast<const __m128i*>(input);
         const auto out = reinterpret_cast<__m128i*>(output);
         for (IndexType i = 0; i < NumChunks; ++i)
@@ -81,18 +86,14 @@ class SqrClippedReLU {
             __m128i words1 =
               _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3]));
 
-            // We shift by WeightScaleBits * 2 = 12 and divide by 128
-            // which is an additional shift-right of 7, meaning 19 in total.
-            // MulHi strips the lower 16 bits so we need to shift out 3 more to match.
-            words0 = _mm_srli_epi16(_mm_mulhi_epi16(words0, words0), 3);
-            words1 = _mm_srli_epi16(_mm_mulhi_epi16(words1, words1), 3);
+            words0 = _mm_srli_epi16(_mm_mulhi_epi16(words0, words0), SimdShiftAmount);
+            words1 = _mm_srli_epi16(_mm_mulhi_epi16(words1, words1), SimdShiftAmount);
 
             _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
         }
         constexpr IndexType Start = NumChunks * 16;
 
 #elif defined(USE_NEON)
-        static_assert(WeightScaleBits == 6);
         constexpr IndexType NumChunks = InputDimensions / 16;
         const auto          in        = reinterpret_cast<const int32x4_t*>(input);
         const auto          out       = reinterpret_cast<int8x16_t*>(output);
@@ -103,10 +104,10 @@ class SqrClippedReLU {
             const int16x8_t words1 =
               vcombine_s16(vqmovn_s32(in[i * 4 + 2]), vqmovn_s32(in[i * 4 + 3]));
 
-            // vqdmulhq computes (2 * a * b) >> 16, so shift out 4 more bits to
-            // get the same total shift of 19 as the SSE2 code above
-            const int16x8_t r0 = vshrq_n_s16(vqdmulhq_s16(words0, words0), 4);
-            const int16x8_t r1 = vshrq_n_s16(vqdmulhq_s16(words1, words1), 4);
+            // vqdmulhq computes (2 * a * b) >> 16, so shift out one more bit to
+            // get the same total shift as the SSE2 code above
+            const int16x8_t r0 = vshrq_n_s16(vqdmulhq_s16(words0, words0), SimdShiftAmount + 1);
+            const int16x8_t r1 = vshrq_n_s16(vqdmulhq_s16(words1, words1), SimdShiftAmount + 1);
 
             out[i] = vcombine_s8(vqmovn_s16(r0), vqmovn_s16(r1));
         }
@@ -121,7 +122,8 @@ class SqrClippedReLU {
             output[i] = static_cast<OutputType>(
               // Really should be /127 but we need to make it fast so we right-shift
               // by an extra 7 bits instead. Needs to be accounted for in the trainer.
-              std::min(127ll, ((long long) (input[i]) * input[i]) >> (2 * WeightScaleBits + 7)));
+              std::min(127ll,
+                       ((long long) (input[i]) * input[i]) >> (2 * WeightScaleBitsLocal + 7)));
         }
     }
 };

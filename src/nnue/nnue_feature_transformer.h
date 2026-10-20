@@ -233,7 +233,9 @@ class FeatureTransformer {
         // The accumulators are in half units (the weights are not doubled on
         // load). The HalfKA one (and the threat one, added to it) is doubled
         // with saturation, which gives the doubled value clamped to the int16
-        // range: this clamp does not change the clipped result. The HalfKA
+        // range: this clamp does not change the clipped result (make quant=2:
+        // weights at scale 255, the sum is not doubled, see FtAccMultiplier,
+        // and clipped to 0..255). The HalfKA
         // accumulator, bounded by |bias| + 62 x 127, and the threat one,
         // bounded by 144 x 127, never wrap around if |bias| <= 24893 (checked
         // by the trainer), so this is exact.
@@ -264,7 +266,7 @@ class FeatureTransformer {
             constexpr IndexType NumOutputChunks = HalfDimensions / 2 / OutputChunkSize;
 
             const vec_t Zero = vec_zero();
-            const vec_t One  = vec_set_16(127 * 2);
+            const vec_t One  = vec_set_16(FtMaxVal);
 
             const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulations[p][0]));
             const vec_t* in1 =
@@ -274,15 +276,21 @@ class FeatureTransformer {
             const vec_t* thr0 = reinterpret_cast<const vec_t*>(&(threatAccumulations[p][0]));
             const vec_t* thr1 =
               reinterpret_cast<const vec_t*>(&(threatAccumulations[p][HalfDimensions / 2]));
-            // 2 x (HalfKA + threats), saturated (see above)
+            // 2 x (HalfKA + threats), saturated (see above; quant=2: not doubled)
             auto in = [](const vec_t* acc, const vec_t* thr, IndexType i) {
                 const vec_t sum = vec_adds_16(acc[i], thr[i]);
-                return vec_adds_16(sum, sum);
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(sum, sum);
+                else
+                    return sum;
             };
     #else
-            // 2 x HalfKA, saturated (see above)
+            // 2 x HalfKA, saturated (see above; quant=2: not doubled)
             auto in = [](const vec_t* acc, const vec_t*, IndexType i) {
-                return vec_adds_16(acc[i], acc[i]);
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(acc[i], acc[i]);
+                else
+                    return acc[i];
             };
             const vec_t* thr0 = nullptr;
             const vec_t* thr1 = nullptr;
@@ -333,7 +341,8 @@ class FeatureTransformer {
             // and net a 9 bit right shift. Since we scaled everything by
             // two, the values are clipped at 127 * 2 = 254, which occupies
             // 8 bits. Shifting it by 7 bits left will no longer occupy the
-            // signed bit, so we are safe.
+            // signed bit, so we are safe. (make quant=2: the accumulators are
+            // at scale 255 and clipped at 255, which still fits in 8 bits.)
 
             // Note that on NEON processors, we shift left by 6 instead
             // because the instruction "vqdmulhq_s16" also doubles the
@@ -373,10 +382,10 @@ class FeatureTransformer {
                 sum0 += threatAccumulations[p][j + 0];
                 sum1 += threatAccumulations[p][j + HalfDimensions / 2];
     #endif
-                sum0 *= 2;
-                sum1 *= 2;
-                sum0               = std::clamp(sum0, 0, 127 * 2);
-                sum1               = std::clamp(sum1, 0, 127 * 2);
+                sum0 *= FtAccMultiplier;
+                sum1 *= FtAccMultiplier;
+                sum0               = std::clamp(sum0, 0, FtMaxVal);
+                sum1               = std::clamp(sum1, 0, FtMaxVal);
                 output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);
             }
 

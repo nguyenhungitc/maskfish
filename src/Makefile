@@ -116,6 +116,10 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 # meta = yes/no       --- -DJIEQI_NNUE_META  --- meta=yes: meta input features (pool summaries,
 #                                                unidentified losses, visible targets;
 #                                                AB-JChess; needs a matching net)
+# quant = 1/2         --- -DJIEQI_NNUE_QUANT2 --- quant=2: quantization of current Pikafish
+#                                                (feature transformer at scale 255, fc_0 at
+#                                                scale 128 and >> 7, fc_2 in fc_0 units;
+#                                                needs a matching net)
 # embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed the network of the ref
 #                                                refs/assets/net (src/maskfish.nnue, fetched
 #                                                by `make net`) in the binary, as Stockfish
@@ -190,6 +194,7 @@ psqt = yes
 ctx = no
 lsblend = no
 meta = no
+quant = 1
 embed = yes
 bits = 64
 prefetch = no
@@ -754,6 +759,9 @@ ifeq ($(lsblend),yes)
 endif
 ifeq ($(meta),yes)
 	CXXFLAGS += -DJIEQI_NNUE_META
+endif
+ifeq ($(quant),2)
+	CXXFLAGS += -DJIEQI_NNUE_QUANT2
 endif
 
 ### 3.2.0.1 Embedded network
@@ -1585,7 +1593,7 @@ $(TEMP_DIR):
 # one of the goal.
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
-                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) quant=$(quant) \
                    embed=$(embed) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \
