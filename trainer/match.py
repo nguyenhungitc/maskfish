@@ -198,7 +198,7 @@ def parse_opts(items):
     return opts
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", help="engine for A and B (default for --engine-a/--engine-b)")
     ap.add_argument("--engine-a")
@@ -224,16 +224,42 @@ def main():
     ap.add_argument("--adjudicate", type=int, default=3000, help="internal units")
     ap.add_argument("--full-info", action="store_true")
     ap.add_argument("--seed", type=int, default=int(time.time()))
-    args = ap.parse_args()
+    return ap
 
+
+def finalize_args(args):
+    """Fills the defaults that depend on other arguments (engines, network of
+    B, options, the go command). Returns args."""
     args.engine_a = args.engine_a or args.engine
     args.engine_b = args.engine_b or args.engine or args.engine_a
     if not args.engine_a:
         raise SystemExit("--engine or --engine-a is required")
     args.net_b = args.net_b or args.net_a
-    args.opt_a, args.opt_b = parse_opts(args.opt_a), parse_opts(args.opt_b)
+    if not isinstance(args.opt_a, dict):
+        args.opt_a = parse_opts(args.opt_a)
+    if not isinstance(args.opt_b, dict):
+        args.opt_b = parse_opts(args.opt_b)
     args.go = (f"depth {args.depth}" if args.depth else
                f"movetime {args.movetime}" if args.movetime else f"nodes {args.nodes}")
+    return args
+
+
+def play_pairs(args, count: int, seed: int, start: int = 0):
+    """Plays 'count' game pairs (args from finalize_args()) on args.workers
+    processes and yields the results (r1, r2) for A as they finish. Pair i
+    (start <= i < start + count) uses the opening and identities of seed
+    seed * 1000003 + i. Closing the generator (break) stops the games at once."""
+    pool = mp.Pool(args.workers, initializer=worker_init, initargs=(args,))
+    try:
+        seeds = (seed * 1000003 + i for i in range(start, start + count))
+        yield from pool.imap_unordered(play_pair, seeds)
+    finally:
+        pool.terminate()
+        pool.join()
+
+
+def main():
+    args = finalize_args(build_parser().parse_args())
     lower = math.log(args.beta / (1 - args.alpha))
     upper = math.log((1 - args.beta) / args.alpha)
 
@@ -244,10 +270,9 @@ def main():
              if args.sprt else ""), flush=True)
 
     pairs, decision, line = [], None, "no game finished"
-    pool = mp.Pool(args.workers, initializer=worker_init, initargs=(args,))
+    games_iter = play_pairs(args, args.pairs, args.seed)
     try:
-        seeds = (args.seed * 1000003 + i for i in range(args.pairs))
-        for r in pool.imap_unordered(play_pair, seeds):
+        for r in games_iter:
             pairs.append(r)
             penta = pentanomial(pairs)
             games = [x for p in pairs for x in p]
@@ -271,7 +296,7 @@ def main():
     except KeyboardInterrupt:
         print("interrupted")
     finally:
-        pool.terminate()
+        games_iter.close()
     print(line)
     print(decision or "no decision (maximum reached)")
 
