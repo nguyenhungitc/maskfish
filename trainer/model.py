@@ -41,6 +41,15 @@ none of it exists in the engine, coalesced() folds it into the real weights:
 
 Both start at zero, so a freshly built factorized model computes exactly the
 same function as a plain one.
+
+Quantization-aware training (train.py --qat-start, see forward_parts_qat()):
+the forward pass computes what the engine computes, with the weights rounded
+as serialize.quantize() rounds them and the integer arithmetic of the engine
+(shifts, divisions, saturations), in floats holding integer values. The
+roundings let the gradient through unchanged (straight-through estimator),
+so the float weights keep learning while the loss is that of the exported
+network. In float64 it is exactly serialize.quantized_eval() (verify.py
+--checkpoint checks it).
 """
 
 from __future__ import annotations
@@ -69,6 +78,50 @@ MAX_OUTPUT_WEIGHT = QUANTIZED_ONE / OUTPUT_WEIGHT_SCALE
 # wrapping around: |bias| + 62 x 127 <= 32767 (maskfish/src/nnue/nnue_feature_transformer.h)
 MAX_FT_WEIGHT = 127.0 / FT_SCALE
 MAX_FT_BIAS = 16383.0 / FT_SCALE
+
+# Quantized units (see serialize.quantize() and the engine's propagate()):
+# fc0 / fc1 outputs and biases use 1.0 == HIDDEN_ONE, the PSQT and the fc2
+# output 1.0 == OUTPUT_ONE (network unit, then / OUTPUT_SCALE = internal units)
+HIDDEN_ONE = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE        # 8128
+OUTPUT_ONE = NNUE2SCORE * OUTPUT_SCALE                  # 9600
+
+
+def _ste(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Value of y, gradient of x (straight-through estimator)."""
+    return x + (y - x).detach()
+
+
+def q_round(x: torch.Tensor) -> torch.Tensor:
+    return _ste(x, torch.round(x))      # half to even, like np.round in serialize.py
+
+
+def q_round_ft(w: torch.Tensor, scale: float) -> torch.Tensor:
+    """round(w * scale) computed in float32 like serialize.quantize() does for
+    the feature transformer weights (whatever the dtype of w)."""
+    return _ste(w * scale, torch.round(w.float() * scale).to(w.dtype))
+
+
+def q_floor(x: torch.Tensor) -> torch.Tensor:
+    """Arithmetic shift right of the engine (x >> k == floor(x / 2^k))."""
+    return _ste(x, torch.floor(x))
+
+
+def q_tdiv(x: torch.Tensor, d: float) -> torch.Tensor:
+    """C++ integer division by d (truncates toward zero)."""
+    return _ste(x / d, torch.trunc(x / d))
+
+
+def wide(x: torch.Tensor) -> torch.Tensor:
+    """float64 for the few per-position products that exceed the 24 bits
+    float32 holds exactly (not on MPS, which has no float64)."""
+    return x if x.device.type == "mps" else x.double()
+
+
+def _sqr_crelu_q(v: torch.Tensor) -> torch.Tensor:
+    """SqrClippedReLU and ClippedReLU of the engine on integer fc outputs:
+    min(127, v * v >> 19) and clamp(v >> 6, 0, 127)."""
+    sq = torch.clamp(q_floor(v * v / float(1 << 19)), max=127.0)
+    return torch.cat([sq, torch.clamp(q_floor(v / 64.0), 0.0, 127.0)], dim=1)
 
 
 class LayerStacks(nn.Module):
@@ -163,6 +216,65 @@ class LayerStacks(nn.Module):
         b = self.output.bias[buckets]            # (n,)
         out = (h * w).sum(dim=1) + b
         return (out + direct).unsqueeze(1)
+
+    def quantized_weights(self) -> dict:
+        """Integer-valued weights (with straight-through gradients), exactly
+        those serialize.quantize() writes: the shared fc0 part folded in,
+        weights clipped to the int8 range and rounded."""
+        w0 = self.l1.weight
+        if self.l1_fact is not None:
+            v = w0.view(self.count, self.fc0_out, self.in_dim)
+            a = self.act0
+            w0 = torch.cat([v[:, :a] + self.l1_fact.weight.unsqueeze(0), v[:, a:]], dim=1)
+            w0 = w0.reshape(self.count * self.fc0_out, self.in_dim)
+        m, o = MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT
+        q = {"w0": q_round(torch.clamp(w0, -m, m) * HIDDEN_WEIGHT_SCALE),
+             "b0": q_round(self.l1.bias * HIDDEN_ONE),
+             "w1": q_round(torch.clamp(self.l2.weight, -m, m) * HIDDEN_WEIGHT_SCALE),
+             "b1": q_round(self.l2.bias * HIDDEN_ONE),
+             "w2": q_round(torch.clamp(self.output.weight, -o, o) * OUTPUT_WEIGHT_SCALE),
+             "b2": q_round(self.output.bias * OUTPUT_ONE)}
+        if self.l1_ctx is not None:
+            q["w0_ctx"] = q_round(torch.clamp(self.l1_ctx.weight, -m, m) * HIDDEN_WEIGHT_SCALE)
+        return q
+
+    def forward_qat(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None,
+                    blend=None) -> torch.Tensor:
+        """Integer output of the layer stack of each sample (OutputScale
+        units, before the final / 16), as NetworkArchitecture::propagate():
+        x the integer feature transformer output (0..127), ctx the integer
+        context tower output."""
+        q = self.quantized_weights()
+        n = x.shape[0]
+        l1_all = torch.nn.functional.linear(x, q["w0"], q["b0"])
+        if ctx is not None:
+            l1_all = l1_all + torch.nn.functional.linear(ctx, q["w0_ctx"])
+        l1_all = l1_all.reshape(n * self.count, self.fc0_out)
+        b = buckets.long()
+        out = self._forward_stack_qat(q, l1_all, b)
+        if blend is not None:
+            nxt = self._forward_stack_qat(q, l1_all, torch.clamp(b + 1, max=self.count - 1))
+            w = wide(blend.to(out.dtype).unsqueeze(1))
+            out = q_tdiv(wide(out) * (256.0 - w) + wide(nxt) * w, 256.0).to(out.dtype)
+        return out
+
+    def _forward_stack_qat(self, q: dict, l1_all: torch.Tensor, buckets: torch.Tensor):
+        n = buckets.shape[0]
+        idx = torch.arange(n, device=l1_all.device) * self.count + buckets
+        l1 = l1_all[idx]
+        if self.layers == 2:
+            a0 = _sqr_crelu_q(l1)
+            l2 = torch.nn.functional.linear(a0, q["w1"], q["b1"]).reshape(n * self.count, L3)[idx]
+            h = torch.cat([a0, _sqr_crelu_q(l2)], dim=1)
+            direct = l1[:, L2_V2 - 2] - l1[:, L2_V2 - 1]
+        else:
+            a0 = _sqr_crelu_q(l1[:, :L2])
+            l2 = torch.nn.functional.linear(a0, q["w1"], q["b1"]).reshape(n * self.count, L3)[idx]
+            h = torch.clamp(q_floor(l2 / 64.0), 0.0, 127.0)
+            direct = l1[:, L2]
+        out = (h * q["w2"][buckets]).sum(dim=1) + q["b2"][buckets]
+        # the direct term: 1.0 is HIDDEN_ONE, scaled to OUTPUT_ONE (C++ division)
+        return (out + q_tdiv(wide(direct) * OUTPUT_ONE, HIDDEN_ONE).to(out.dtype)).unsqueeze(1)
 
     def clip_weights(self):
         with torch.no_grad():
@@ -377,6 +489,68 @@ class NNUE(nn.Module):
         if F.BLEND and blend is None:
             raise ValueError("this architecture needs the layer stack interpolation weights")
         return psqt, self.stacks(x, buckets, ctx, blend if F.BLEND else None)
+
+    def forward_parts_qat(self, stm_idx: torch.Tensor, nstm_idx: torch.Tensor,
+                          buckets: torch.Tensor, threats=None,
+                          blend=None) -> tuple[torch.Tensor, torch.Tensor]:
+        """(psqt, positional), each (n, 1), in INTERNAL units with integer
+        values: the output of the exported network as the engine computes it
+        (Network::evaluate()), differentiable with straight-through roundings.
+        Costs about one extra copy of the feature transformer weights."""
+        L1 = self.l1_size
+        n = F.NUM_FEATURES
+        w = self.ft.weight[:n]
+        if self.ft_ps is not None:             # the virtual features, folded in
+            rows = torch.arange(n, device=w.device)
+            w = w + self.ft_ps.weight[rows % F.PS_NB]
+            if self.ft_kb is not None:
+                w = w + self.ft_kb.weight[rows // F.PS_NB]
+        pad = w.new_zeros((1, w.shape[1]))
+        wq = torch.cat([q_round_ft(w[:, :L1], FT_SCALE), q_round(w[:, L1:] * OUTPUT_ONE)], dim=1)
+        wq = torch.cat([wq, pad])              # PAD_INDEX row
+        bias = torch.cat([q_round(self.ft_bias[:L1] * FT_SCALE),
+                          self.ft_bias.new_zeros(self.psqt_buckets)])
+        stm = torch.nn.functional.embedding_bag(stm_idx.long(), wq, mode="sum") + bias
+        nstm = torch.nn.functional.embedding_bag(nstm_idx.long(), wq, mode="sum") + bias
+        if self.ft_thr is not None:
+            if threats is None:
+                raise ValueError("this architecture needs the threat features")
+            tw = self.ft_thr.weight
+            tq = torch.cat([q_round_ft(tw[:, :L1], FT_SCALE), q_round(tw[:, L1:] * OUTPUT_ONE)],
+                           dim=1)
+            idx, off = threats
+            t = torch.nn.functional.embedding_bag(idx.long(), tq, off.long(), mode="sum")
+            t = t.view(stm.shape[0], 2, -1)
+            stm = stm + t[:, 0]
+            nstm = nstm + t[:, 1]
+
+        b = buckets.long().unsqueeze(1)
+        if self.psqt_buckets:
+            psqt = q_tdiv(stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b), 2.0)
+        else:
+            psqt = stm.new_zeros((stm.shape[0], 1))
+
+        # FeatureTransformer::transform(): accumulators doubled, clamped to
+        # 0..254, the two halves multiplied, >> 9
+        h = L1 // 2
+        parts = []
+        for acc in (stm, nstm):
+            a = torch.clamp(2.0 * acc[:, :h], 0.0, 254.0)
+            c = torch.clamp(2.0 * acc[:, h:L1], 0.0, 254.0)
+            parts.append(q_floor(a * c / 512.0))
+        x = torch.cat(parts, dim=1)
+
+        ctx = None
+        if self.ctx_tower is not None:
+            m = MAX_HIDDEN_WEIGHT
+            cw = q_round(torch.clamp(self.ctx_tower.weight, -m, m) * HIDDEN_WEIGHT_SCALE)
+            cb = q_round(self.ctx_tower.bias * HIDDEN_ONE)
+            ci = context_from_features(stm_idx).to(x.dtype)
+            ctx = torch.clamp(q_floor(torch.nn.functional.linear(ci, cw, cb) / 64.0), 0.0, 127.0)
+        if F.BLEND and blend is None:
+            raise ValueError("this architecture needs the layer stack interpolation weights")
+        positional = self.stacks.forward_qat(x, buckets, ctx, blend if F.BLEND else None)
+        return q_tdiv(psqt, OUTPUT_SCALE), q_tdiv(positional, OUTPUT_SCALE)
 
     def clip_weights(self):
         self.stacks.clip_weights()

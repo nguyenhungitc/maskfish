@@ -107,3 +107,21 @@ def evaluate_float(psqt, positional, material, rule40):
     nnue = (psqt + positional) * (1.0 - abs(psqt - positional) / COMPLEXITY_DIV)
     v = nnue * ((MATERIAL_BASE + material) / MATERIAL_DIV)
     return v * (1.0 - rule40 / RULE40_DIV)   # rule40 is capped by position_scale_inputs()
+
+
+def evaluate_qat(psqt, positional, material, rule40):
+    """evaluate_int() on torch tensors holding integer values (the output of
+    the quantization-aware forward pass, model.forward_parts_qat()), with the
+    same truncations, differentiable through them (straight-through), the
+    products in float64: equal to evaluate_int() (except for the 32-bit
+    wrap-around, far beyond real scores)."""
+    import torch
+    from model import q_tdiv, wide
+    dtype = psqt.dtype
+    psqt, positional, material, rule40 = (wide(t) for t in (psqt, positional, material, rule40))
+    nnue = psqt + positional
+    complexity = torch.abs(psqt - positional)
+    nnue = nnue - q_tdiv(nnue * complexity, COMPLEXITY_DIV)
+    v = q_tdiv(nnue * (MATERIAL_BASE + material), MATERIAL_DIV)
+    v = v - q_tdiv(v * torch.clamp(rule40, max=RULE40_MAX), RULE40_DIV)
+    return torch.clamp(v, -VALUE_MATE_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1).to(dtype)

@@ -287,13 +287,20 @@ def prefetched(it, depth: int):
         t.join()
 
 
-def model_score(model, batch, eval_scale: bool = True) -> torch.Tensor:
+def model_score(model, batch, eval_scale: bool = True, qat: bool = False) -> torch.Tensor:
     """Score of the model for a batch, internal units: after the engine's
     evaluate() scaling when the batch has material / rule40 and eval_scale is
-    on, otherwise the raw network output."""
+    on, otherwise the raw network output. qat: the score of the quantized
+    network, as the engine computes it (model.forward_parts_qat())."""
     stm, nstm, bucket, _, _, threats = batch[:6]
     material, rule40 = (batch[6], batch[7]) if len(batch) >= 8 else (None, None)
     blend = batch[8] if len(batch) >= 9 else None
+    if qat:
+        psqt, positional = model.forward_parts_qat(stm, nstm, bucket, threats, blend)
+        psqt, positional = psqt.squeeze(1), positional.squeeze(1)
+        if eval_scale and material is not None:
+            return E.evaluate_qat(psqt, positional, material, rule40)
+        return psqt + positional
     if eval_scale and material is not None:
         psqt, positional = model.forward_parts(stm, nstm, bucket, threats, blend)
         return E.evaluate_float(psqt.squeeze(1) * NNUE2SCORE, positional.squeeze(1) * NNUE2SCORE,
@@ -309,18 +316,19 @@ class Scorer(nn.Module):
         super().__init__()
         self.model = model
         self.eval_scale = eval_scale
+        self.qat = False
 
     def forward(self, *batch) -> torch.Tensor:
-        return model_score(self.model, batch, self.eval_scale)
+        return model_score(self.model, batch, self.eval_scale, self.qat)
 
 
 def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_scale: bool = True,
-            score_scaling: float | None = None, power: float = 2.5):
+            score_scaling: float | None = None, power: float = 2.5, qat: bool = False):
     """model: an NNUE, or a Scorer (possibly wrapped in DDP), which then
-    computes the score itself (with its own eval_scale)."""
+    computes the score itself (with its own eval_scale and qat)."""
     bucket, score, result = batch[2], batch[3], batch[4]
     if isinstance(model, NNUE):
-        out = model_score(model, batch, eval_scale)
+        out = model_score(model, batch, eval_scale, qat)
     else:
         out = model(*batch)
     q = torch.sigmoid(out / scaling)
@@ -398,6 +406,12 @@ def main():
                     help="compare the raw network output with the data scores, without the "
                          "engine's evaluate() scaling (old behaviour; the scale of the "
                          "evaluation then shrinks from one generation to the next)")
+    ap.add_argument("--qat-start", type=int, default=0, metavar="EPOCH",
+                    help="quantization-aware training from this epoch on (1: every epoch; "
+                         "0: off): the loss is that of the exported integer network")
+    ap.add_argument("--val-qat", action="store_true",
+                    help="before --qat-start, also print the validation loss of the quantized "
+                         "network (\"quantized net loss\"): what the engine will play with")
     ap.add_argument("--prefetch", type=int, default=4, metavar="N",
                     help="batches read ahead in a background thread (0: none)")
     ap.add_argument("--tensorboard", action="store_true",
@@ -553,8 +567,12 @@ def main():
     log = MetricsLog(args.out, args.tensorboard) if main_rank else None
     acc_dtype = torch.float32 if device.type == "mps" else torch.float64   # (no float64 on MPS)
 
+    if args.qat_start:
+        say(f"quantization-aware training from epoch {args.qat_start}", flush=True)
     for epoch in range(first_epoch, args.epochs + 1):
         lam = epoch_lambda(epoch)
+        qat = 0 < args.qat_start <= epoch
+        (scorer.module if dist.world > 1 else scorer).qat = qat
         model.train()
         t0 = time.time()
         # running sum on the device: no synchronization with the GPU at every step
@@ -579,27 +597,37 @@ def main():
 
         if main_rank:
             msg = f"epoch {epoch}: train loss {train_loss:.6f}"
-            val_loss = None
+            val_loss = qval_loss = None
             if val:
                 model.eval()
-                vl, vn = 0.0, 0
-                with torch.no_grad():
-                    for n, batch in val.sequential(args.batch_size, 1_000_000, device,
-                                                   prefetch=args.prefetch):
-                        vl += loss_fn(model, batch, args.scaling, lam,
-                                      eval_scale=eval_scale, **loss_args).item() * n
-                        vn += n
-                val_loss = vl / max(1, vn)
+
+                def val_pass(quantized: bool) -> float:
+                    vl, vn = 0.0, 0
+                    with torch.no_grad():
+                        for n, batch in val.sequential(args.batch_size, 1_000_000, device,
+                                                       prefetch=args.prefetch):
+                            vl += loss_fn(model, batch, args.scaling, lam, eval_scale=eval_scale,
+                                          qat=quantized, **loss_args).item() * n
+                            vn += n
+                    return vl / max(1, vn)
+
+                val_loss = val_pass(qat)
                 msg += f", val loss {val_loss:.6f}"
+                if args.val_qat and not qat:
+                    # (not "val loss": scripts/pipeline.sh reads the number after that)
+                    qval_loss = val_pass(True)
+                    msg += f", quantized net loss {qval_loss:.6f}"
             if args.lambda_end is not None:
                 msg += f", lambda {lam:.3f}"
+            if qat:
+                msg += ", qat"
             lr = sched.get_last_lr()[0]
             speed = steps * args.batch_size / train_time
             msg += f", lr {lr:.2e}, {time.time() - t0:.0f}s, {speed / 1000:.1f}k pos/s"
             # (validation loss is unweighted: the real distribution of positions)
             print(msg, flush=True)
             log.epoch(epoch, epoch * steps, train_loss, val_loss, lr, lam, speed,
-                      time.time() - t0)
+                      time.time() - t0, qat, val_loss if qat else qval_loss)
 
             ck = {"model": model.state_dict(), "optimizer": opt.state_dict(),
                   "optimizer_name": args.optimizer,
@@ -659,14 +687,17 @@ class MetricsLog:
             self.tb.add_scalar("train/positions_per_s", speed, gstep)
 
     def epoch(self, epoch: int, gstep: int, train_loss: float, val_loss, lr: float, lam: float,
-              speed: float, seconds: float):
+              speed: float, seconds: float, qat: bool = False, quantized_val_loss=None):
         self._write({"type": "epoch", "epoch": epoch, "step": gstep, "train_loss": train_loss,
-                     "val_loss": val_loss, "lr": lr, "lambda": lam,
+                     "val_loss": val_loss, "quantized_val_loss": quantized_val_loss,
+                     "lr": lr, "lambda": lam, "qat": qat,
                      "pos_per_s": round(speed), "seconds": round(seconds, 1)})
         if self.tb:
             self.tb.add_scalar("epoch/train_loss", train_loss, epoch)
             if val_loss is not None:
                 self.tb.add_scalar("epoch/val_loss", val_loss, epoch)
+            if quantized_val_loss is not None:
+                self.tb.add_scalar("epoch/quantized_val_loss", quantized_val_loss, epoch)
             self.tb.add_scalar("epoch/lr", lr, epoch)
             self.tb.add_scalar("epoch/lambda", lam, epoch)
             self.tb.add_scalar("epoch/positions_per_s", speed, epoch)

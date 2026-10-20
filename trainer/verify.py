@@ -11,7 +11,10 @@ output with:
   * the bit-exact integer reference (serialize.quantized_eval): must be equal;
   * the evaluate() scaling of that output (eval_scale.evaluate_int, the
     function train.py applies in the loss): must be equal to the engine's;
-  * the float PyTorch model: must be close (quantization error only).
+  * the float PyTorch model: must be close (quantization error only);
+  * the quantization-aware forward pass of the model (train.py --qat-start,
+    model.forward_parts_qat()): equal, or off by a unit where float32
+    roundings of the weights land on the other side of .5 (reported).
 """
 
 from __future__ import annotations
@@ -108,6 +111,7 @@ def main():
     fens = random_positions(engine, args.positions, args.seed)
 
     exact, worst, scaled, no_final = 0, 0.0, 0, 0
+    qat_exact, qat_worst, qat_final_exact = 0, 0, 0
     for fen in fens:
         engine.send(f"position fen {fen}")
         e_psqt, e_pos, e_bucket, e_final = engine.evalraw_full()
@@ -146,7 +150,17 @@ def main():
             with torch.no_grad():
                 v = model(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
                           torch.tensor([b]), thr, blend).item() * NNUE2SCORE
+                qp, qv = model.forward_parts_qat(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
+                                                 torch.tensor([b]), thr, blend)
             worst = max(worst, abs(v - (e_psqt + e_pos)))
+            qp, qv = int(round(qp.item())), int(round(qv.item()))
+            qat_worst = max(qat_worst, abs(qp - e_psqt), abs(qv - e_pos))
+            qat_exact += (qp, qv) == (e_psqt, e_pos)
+            if e_final is not None:
+                mat, r40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
+                qf = E.evaluate_qat(torch.tensor([float(qp)]), torch.tensor([float(qv)]),
+                                    torch.tensor([float(mat)]), torch.tensor([float(r40)]))
+                qat_final_exact += int(round(qf.item())) == e_final
     engine.quit()
     if tmp:
         os.unlink(tmp.name)
@@ -159,6 +173,9 @@ def main():
         print(f"evaluate() scaling: {scaled}/{len(fens) - no_final} positions bit-exact")
     if model is not None:
         print(f"largest float/quantized difference: {worst:.1f} internal units")
+        print(f"quantization-aware forward: {qat_exact}/{len(fens)} positions equal to the engine "
+              f"(largest difference {qat_worst}), evaluate(): "
+              f"{qat_final_exact}/{len(fens) - no_final}")
     raise SystemExit(0 if exact == len(fens) else 1)
 
 
