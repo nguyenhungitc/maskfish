@@ -39,6 +39,7 @@ code is written specifically for this engine's feature set and file format.
 | `train.py` | Training loop (one GPU, or several with `torchrun`); writes a checkpoint and a `.nnue` file every epoch |
 | `watch_nets.py` | Measures every network of a run against a reference while it trains, ranks them, keeps the best |
 | `textio.py` | Reads / writes text data plain or compressed (`.zst`, `.gz`) |
+| `ftperm.py` | Reorders the feature transformer neurons of a network so that the engine evaluates it faster (same evaluations) |
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
@@ -1044,6 +1045,43 @@ python train.py data/train --val data/val --out runs/gen2 --epochs 45 \
   within the noise of such a run. Whether QAT helps at real scale is open:
   try it on the last few epochs of a generation and decide with `match.py`
   (SPRT), not with the loss.
+
+### 7.11. Engine speed: neuron order (`ftperm.py`)
+
+The first layer of the layer stacks (fc0) reads the 0..127 outputs of the
+feature transformer in chunks of 4 and skips the chunks that are entirely
+zero (`AffineTransformSparseInput`). The order of the neurons is arbitrary,
+so `ftperm.py` (after nnue-pytorch's script of the same name) puts neurons
+that are often zero at the same time in the same chunk:
+
+```
+python ftperm.py nets/gen3.nnue nets/gen3.nnue --data data/gen3.txt.zst
+python ftperm.py nets/gen3.nnue --data data/gen3.txt.zst --stats-only   # report only
+```
+
+- The network computes exactly the same values: the permutation moves the
+  two halves of the feature transformer (biases, HalfKA and threat weights)
+  and the matching fc0 input columns together. The script compares
+  `serialize.quantized_eval()` before and after on held-out positions and
+  writes nothing if one differs; `bench` gives the same node count.
+- Every architecture is supported (checked with `default`, `default-l2`,
+  `threats-blend-ctx`, `att-threats-meta-blend-l2-ctx-nopsqt`: same
+  evaluations, `verify.py` bit-exact, same `bench` node count).
+- The gain depends on how sparse the network is. On a small test network
+  (7 epochs on 92,000 positions, 38 % zero outputs) the all-zero chunks went
+  from 4.1 % to 15.7 % of the held-out positions, and the instructions spent
+  in `Network::evaluate()` during `bench` from 654 to 594 million (−9 %),
+  −1.7 % for the whole bench (measured with callgrind: wall-clock nodes per
+  second on the test machine vary more than that). Well-trained networks are
+  sparser, so the gain should be larger: measure with `bench` on your machine.
+- Run it on the network that will be used (`scripts/pipeline.sh` does it
+  after promoting the SPRT winner, `FTPERM=1`). The permuted `.nnue` no
+  longer matches the training checkpoint column for column, so compare it
+  with `verify.py` without `--checkpoint`; training can continue from it
+  (`--init-net`) or from the checkpoint as before.
+- It takes about a minute and a half (test machine) with the default 20,000 + 5,000 positions
+  (`--positions`, `--holdout`); positions are drawn from the first
+  `--scan` lines of the data.
 
 ## 8. Data formats
 

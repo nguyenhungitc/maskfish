@@ -103,7 +103,7 @@ fi
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
-: "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"
+: "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"; : "${FTPERM:=1}"
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -713,6 +713,20 @@ s_promote() {
   fi
   run "$CUR_LOG" cp "$MATCH_RESULT" "$NET_NEXT" || return 1
   info "🏆 New net: <b>$(html_escape "$NET_NEXT")</b> ← $(html_escape "$MATCH_RESULT")"
+  if [[ "$FTPERM" == 1 ]]; then
+    # Faster engine, same evaluations (ftperm.py checks it); never fails the pipeline
+    local data=() f
+    for f in "data/${LP}gen${GEN}".txt{,.zst,.gz} "data/${LP}gen${GEN}"_*.txt{,.zst,.gz}; do
+      [[ -f "$f" ]] && data+=("$f")
+    done
+    if (( ${#data[@]} == 0 )); then
+      info "⚠ FTPERM: no text data of generation ${GEN} found, $(html_escape "$NET_NEXT") not reordered"
+    elif run "$CUR_LOG" "$PYTHON" -u ftperm.py "$NET_NEXT" "$NET_NEXT" --data "${data[@]}"; then
+      info "⚡ $(html_escape "$(grep -h 'all-zero chunks' "$CUR_LOG" | tail -1)")"
+    else
+      info "⚠ ftperm.py failed (see the log): $(html_escape "$NET_NEXT") kept as trained"
+    fi
+  fi
   info "Next generation: scripts/pipeline.sh -g ${NEXT}"
 }
 
