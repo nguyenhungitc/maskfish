@@ -103,7 +103,7 @@ fi
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
-: "${TRAIN_GPUS:=1}"
+: "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -286,6 +286,7 @@ autotune() {
   declare -A HW=()
   local probe=() k v
   [[ "$MODE" != gen && -z "${USERSET[BATCH_SIZE]:-}" && "$DEVICE" != cpu ]] && (( ! DRY_RUN )) && probe=(--probe-batch)
+  (( ${#probe[@]} && QAT_START > 0 )) && probe+=(--qat)
   local target=$BATCH_TARGET; [[ -n "${USERSET[BATCH_SIZE]:-}" ]] && target=$BATCH_SIZE
   echo "\$ $PYTHON hw_probe.py --arch $ARCH_FULL --batch $target ${probe[*]}" >> "$CUR_LOG"
   while IFS='=' read -r k v; do
@@ -610,6 +611,7 @@ s_train() {
         "${TRAIN_ARCH[@]}" --checkpoint-every "$CHECKPOINT_EVERY")
   [[ -n "$DEVICE" ]] && cmd+=(--device "$DEVICE")
   (( TRAIN_THREADS > 0 )) && cmd+=(--threads "$TRAIN_THREADS")
+  (( QAT_START > 0 )) && cmd+=(--qat-start "$QAT_START")
   if [[ -f "$RUN_DIR/last.pt" && $NO_RESUME == 0 ]]; then
     cmd+=(--resume "$RUN_DIR/last.pt"); info "Resuming from $(html_escape "$RUN_DIR/last.pt") (epoch ${done_ep})"
   elif (( GEN > 0 )) || [[ -n "$INIT_NET" ]] && [[ "$INIT_FROM_CURRENT" == 1 ]]; then

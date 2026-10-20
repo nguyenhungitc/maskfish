@@ -303,6 +303,8 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
+| `--qat-start` | 0 (off) | Quantization-aware training from this epoch on ([section 7.10](#710-quantization-aware-training-qat-start)) |
+| `--val-qat` | | Also print the validation loss of the quantized network before `--qat-start` |
 | `--prefetch` | 4 | Batches read ahead in a background thread while the GPU trains (0: none) |
 | `--tensorboard` | | Also write TensorBoard logs to `<out>/tb` |
 
@@ -806,8 +808,9 @@ current layer stacks (`fc0`: L1 → 15 + 1, `fc1`: 30 → 32, `fc2`: 32 → 1):
   outputs of `fc0` (`fc0[30] − fc0[31]`) instead of a separate 16th output.
 
 The quantization stays that of the current layer stacks (upstream changed the
-quantization scales at the same time, for quantization-aware training — QAT
-— which this trainer does not do).
+quantization scales at the same time, for its quantization-aware training;
+this trainer's QAT, [section 7.10](#710-quantization-aware-training-qat-start),
+works with the current scales and needs no change in the engine).
 
 The new layer stacks work with every feature set: the architecture names get
 the suffix `-l2` (`default-l2`, `att-l2`, `threats-l2`, `att-threats-l2`). The
@@ -988,6 +991,59 @@ A new architecture does not have to start from a material-only network:
 
 `train.py --init-net` converts automatically when it can (the whole network is
 then used), otherwise it takes the feature transformer only; it says which.
+
+### 7.10. Quantization-aware training (`--qat-start`)
+
+The engine plays with the integer network that `serialize.py` exports, not
+with the float model: weights rounded to int8 / int16, the accumulator
+products shifted, the activations saturated, the divisions truncated. The
+difference is what `verify.py --checkpoint` reports as "largest
+float/quantized difference" (a few dozen internal units for a trained
+network, a few hundred for a random one), and the loss printed by the trainer
+is the loss of the float model, not of the network that plays.
+
+With `--qat-start E`, from epoch E on the forward pass is the engine's
+integer computation (`model.forward_parts_qat()`): the weights rounded
+exactly as at export (the virtual features and the shared fc0 part folded
+in), the integer arithmetic of the feature transformer, the layer stacks and
+`evaluate()`. The roundings let the gradient through unchanged
+(straight-through estimator), so the float weights keep learning, while the
+loss is the loss of the exported network. Nothing changes in the file format
+or in the engine; every architecture is supported (`-l2`, `threats`,
+`-ctx`, `-blend`, `-meta`, `-nopsqt`).
+
+```
+# float training, then the last 5 of 40 epochs quantization-aware
+python train.py data/train --val data/val --out runs/gen2 --epochs 40 \
+    --epoch-size 10000000 --init-net nets/gen1.nnue --qat-start 36 --val-qat
+
+# or a short QAT fine-tuning of an existing run
+python train.py data/train --val data/val --out runs/gen2 --epochs 45 \
+    --resume runs/gen2/last.pt --qat-start 41 --lr 2e-4
+```
+
+- `--val-qat` prints, before `--qat-start`, the validation loss of the
+  quantized network as well (`quantized net loss`), so that the effect of QAT
+  can be seen; during QAT, `val loss` is already the quantized network's
+  (the epoch line says `qat`). Both go to `metrics.jsonl` /
+  TensorBoard (`quantized_val_loss`).
+- `verify.py --checkpoint` checks that the QAT forward pass of the
+  checkpoint gives the engine's `evalraw` and `evaluate()` values (line
+  `quantization-aware forward: N/N positions equal to the engine`).
+- Cost: QAT builds a rounded copy of the feature transformer weights at
+  every step (more GPU memory: about 3 × 62 MB for `default`, 3 × 385 MB for
+  `threats`; `scripts/pipeline.sh` probes the batch size with QAT when
+  `QAT_START` is set), but folds the virtual features into it, so it does one
+  embedding lookup instead of two: on the CPU test machine a QAT step was
+  even faster (5.4k instead of 3.7k positions/s). Compare the `pos/s` of the
+  epoch lines on your GPU.
+- Measured so far only at a tiny scale (92,000 positions, 7 epochs, CPU): the
+  quantized network's validation loss was within 0.5 % of the float model's
+  in every epoch, and QAT for the last 3 epochs gave the same quantized loss
+  as float training (0.006771 both), QAT from the first epoch 0.006597, all
+  within the noise of such a run. Whether QAT helps at real scale is open:
+  try it on the last few epochs of a generation and decide with `match.py`
+  (SPRT), not with the loss.
 
 ## 8. Data formats
 
