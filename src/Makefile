@@ -1066,7 +1066,7 @@ help:
 	echo "profile-build           > standard build with profile-guided optimization" && \
 	echo "build                   > skip profile-guided optimization" && \
 	echo "macos-lipo              > macOS x86-64 + Apple silicon universal binary" && \
-	echo "net                     > Fetch the default nnue net (maskfish.nnue, ref refs/assets/net) if missing" && \
+	echo "net                     > Fetch the default nnue net (maskfish.nnue) from the ref refs/assets/net" && \
 	echo "strip                   > Strip executable" && \
 	echo "install                 > Install executable" && \
 	echo "clean                   > Clean up" && \
