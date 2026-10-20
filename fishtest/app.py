@@ -525,10 +525,10 @@ def create_app(settings: dict) -> Flask:
     @protected
     def nets_fetch():
         try:
-            B.fetch_default_net(nets_dir, eff()["net_url"], replace=True)
-            flash(f"Downloaded the latest released network as {B.NET_NAME}.")
+            B.fetch_default_net(repo, nets_dir, eff()["net_url"], replace=True)
+            flash(f"Fetched the network of {B.NET_REF} as {B.NET_NAME}.")
         except Exception as e:
-            flash(f"Download failed: {e}")
+            flash(f"Fetch failed: {e}")
         return redirect(url_for("nets"))
 
     @app.route("/nets/delete/<name>", methods=["POST"])

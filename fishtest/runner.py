@@ -70,11 +70,12 @@ class Runner:
     def loop(self):
         if not B.is_network(self.nets / B.NET_NAME):
             try:
-                B.fetch_default_net(self.nets, self.cfg()["net_url"])
-                print(f"Downloaded the default network to {self.nets / B.NET_NAME}", flush=True)
+                B.fetch_default_net(self.repo, self.nets, self.cfg()["net_url"])
+                print(f"Fetched the default network ({B.NET_REF}) to "
+                      f"{self.nets / B.NET_NAME}", flush=True)
             except Exception as e:
-                print(f"Could not download the default network ({e}); the first build "
-                      "will try again, or upload one on the Networks page.", flush=True)
+                print(f"Could not fetch the default network from {B.NET_REF} ({e}): fetch it "
+                      "or upload one on the Networks page.", flush=True)
         # Tests left active by a previous runner (crash, restart) go back to the queue
         for r in self.db.runs(ACTIVE):
             self.db.update_run(r["id"], status="pending")

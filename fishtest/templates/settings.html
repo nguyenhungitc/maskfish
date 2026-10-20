@@ -65,9 +65,9 @@
         <input name="base_branch" value="{{ cur.base_branch }}">
         {{ hint('base_branch') }}
       </label>
-      <label>URL of the default network
+      <label>Repository of the default network
         <input name="net_url" value="{{ cur.net_url }}" class="mono">
-        <span class="hint">Used by "Download the latest release network" on the Networks page. {{ hint('net_url') }}</span>
+        <span class="hint">Its hidden ref refs/assets/net holds maskfish.nnue (URL, owner/repo or a local path). Used by "Fetch the network of refs/assets/net" on the Networks page. {{ hint('net_url') }}</span>
       </label>
     </div>
   </section>

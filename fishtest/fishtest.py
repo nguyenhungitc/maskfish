@@ -53,7 +53,9 @@ def main():
     ap.add_argument("--repo", default=DEFAULT_REPO,
                     help="default repository of the tests (URL, owner/repo or local path)")
     ap.add_argument("--base-branch", help="default base branch (default: the repository's HEAD)")
-    ap.add_argument("--net-url", default=B.DEFAULT_NET_URL, help="URL of the default network")
+    ap.add_argument("--net-repo", "--net-url", dest="net_url", default=B.DEFAULT_NET_REPO,
+                    help="repository of the default network, which is the maskfish.nnue of its "
+                         "hidden ref refs/assets/net (URL, owner/repo or local path)")
     ap.add_argument("--timemargin", type=int, default=200,
                     help="ms an engine may exceed its clock before losing on time")
     ap.add_argument("--password", default=os.environ.get("FISHTEST_PASSWORD"),

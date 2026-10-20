@@ -37,9 +37,9 @@
 </section>
 <section class="block">
   <h2>Default network</h2>
-  <p>Tests use <span class="mono">maskfish.nnue</span> unless another network is chosen. It comes from the latest release of Maskfish:</p>
+  <p>Tests use <span class="mono">maskfish.nnue</span> unless another network is chosen. It is the network of the hidden ref <span class="mono">refs/assets/net</span> (published by <span class="mono">scripts/push_net.sh</span>) of:</p>
   <p class="mono small">{{ settings.net_url }}</p>
-  <form method="post" action="{{ url_for('nets_fetch') }}"><button class="btn">Download the latest release network</button></form>
+  <form method="post" action="{{ url_for('nets_fetch') }}"><button class="btn">Fetch the network of refs/assets/net</button></form>
 </section>
 </div>
 {% endblock %}

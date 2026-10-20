@@ -39,7 +39,7 @@
         <input name="base_make" value="{{ v.base_make }}" class="mono">
       </label>
     </div>
-    {% if not nets %}<p class="muted">No network yet: the default {{ v.new_net }} is downloaded from the latest release by the runner or the first build (or upload one on the <a href="{{ url_for('nets') }}">Networks</a> page).</p>{% endif %}
+    {% if not nets %}<p class="muted">No network yet: the default {{ v.new_net }} is fetched from the ref refs/assets/net by the runner (or upload one on the <a href="{{ url_for('nets') }}">Networks</a> page).</p>{% endif %}
   </section>
 
   <section class="block">

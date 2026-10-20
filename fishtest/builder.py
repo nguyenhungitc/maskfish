@@ -129,22 +129,40 @@ def is_network(path: Path) -> bool:
         return False
 
 
-DEFAULT_NET_URL = "https://github.com/nguyenhungitc/maskfish/releases/latest/download/maskfish.nnue"
+# The default network is only in the hidden ref refs/assets/net of the
+# repository (a commit holding only maskfish.nnue, published by
+# scripts/push_net.sh): the releases no longer hold it as a separate file.
+DEFAULT_NET_REPO = "https://github.com/nguyenhungitc/maskfish"
+NET_REF = "refs/assets/net"
 
 
-def fetch_default_net(nets_dir: Path, url: str = DEFAULT_NET_URL, replace: bool = False) -> Path:
-    """Downloads the network of the latest release as nets_dir/maskfish.nnue."""
-    import urllib.request
+def net_repo(url: str | None) -> str:
+    """Repository of the default network. A setting of the time the network was
+    downloaded from the releases (a URL of a release file) gives the default."""
+    url = (url or "").strip()
+    if not url or "/releases/" in url or url.endswith(".nnue"):
+        return DEFAULT_NET_REPO
+    return normalize_repo(url)
+
+
+def fetch_default_net(repo: Repo, nets_dir: Path, url: str | None = None,
+                      replace: bool = False) -> Path:
+    """Fetches maskfish.nnue of the ref refs/assets/net of the repository url (by
+    default the one of Maskfish) as nets_dir/maskfish.nnue."""
     dest = Path(nets_dir) / NET_NAME
     if is_network(dest) and not replace:
         return dest
+    url = net_repo(url)
+    local = f"refs/ft/{Repo.key(url)}/assets/net"
+    with repo._lock:
+        repo.git("fetch", "--force", "--no-tags", url, f"+{NET_REF}:{local}")
+    data = repo.git("cat-file", "blob", f"{local}:{NET_NAME}", binary=True).stdout
     Path(nets_dir).mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".download")
-    with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f)
+    tmp.write_bytes(data)
     if not is_network(tmp):
         tmp.unlink(missing_ok=True)
-        raise BuildError(f"{url} is not a network")
+        raise BuildError(f"{NET_NAME} of {NET_REF} of {url} is not a network")
     os.replace(tmp, dest)
     return dest
 
@@ -176,7 +194,10 @@ def build(repo: Repo, sha: str, make_args: str, arch: str, jobs: int, builds_dir
         src = tmp / "src"
         if not (src / "Makefile").exists():
             raise BuildError("no src/Makefile in this commit")
-        # Give the build the cached network so that `make net` does not download it
+        # Give the build the default network: the exported tree is not a git
+        # clone, so `make net` cannot fetch the ref refs/assets/net (it keeps
+        # this copy, which the build embeds), and older commits would download
+        # it from the releases, which no longer hold it
         cached_net = nets_dir / NET_NAME
         if is_network(cached_net):
             shutil.copy(cached_net, src / NET_NAME)
@@ -189,11 +210,6 @@ def build(repo: Repo, sha: str, make_args: str, arch: str, jobs: int, builds_dir
         if r.returncode != 0 or not (src / binary_name()).exists():
             raise BuildError("build failed:\n" + "\n".join(output[-60:]))
         log("\n".join(output[-3:]) + "\nBuild OK\n")
-        # Keep the network downloaded by the first build as the default network
-        if not is_network(cached_net) and is_network(src / NET_NAME):
-            nets_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src / NET_NAME, cached_net)
-            log(f"Saved the downloaded network as {NET_NAME}\n")
         out_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src / binary_name(), binary)
         return binary

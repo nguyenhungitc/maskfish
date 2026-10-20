@@ -15,8 +15,9 @@ decides.
   number of games, priority.
 * Test page: Elo, nElo, LOS, LLR graph, build log and benches, stop / resume /
   rerun / delete, diff (local, and a link to GitHub), the games as text.
-* Networks page: upload networks exported by the trainer, download the latest
-  released one.
+* Networks page: upload networks exported by the trainer, fetch the default
+  one (`maskfish.nnue` of the hidden ref `refs/assets/net`, published by
+  `scripts/push_net.sh`).
 * Optional **SPSA tuning**, as on fishtest.
 * **Settings page**: pause / resume the runner, games at a time, build options,
   SPSA on/off, form defaults, password, cached builds, without restarting.
@@ -129,8 +130,8 @@ with write access). In a fork, set the repository variable
   on/off. A new concurrency applies at once: the current test's games are
   restarted with the new number of processes. A new `ARCH` applies from the
   next build.
-* **Defaults of the New test form**: repository, base branch, URL of the
-  default network.
+* **Defaults of the New test form**: repository, base branch, repository of
+  the default network (its ref `refs/assets/net`).
 * **Password**: set or remove the password asked for every change (stored
   hashed in the database; it replaces `--password`).
 * **Storage**: sizes, and a button to delete the cached builds.

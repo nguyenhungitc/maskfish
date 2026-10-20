@@ -1,5 +1,6 @@
 # Builds the Docker image of fishtest/ and pushes it to Docker Hub whenever
-# fishtest changes on the pro branch.
+# fishtest changes on the pro branch (started by hand on another branch, it
+# stops at once: it runs on pro only).
 #
 # Repository settings (Settings > Secrets and variables > Actions):
 #   secret    DOCKERHUB_TOKEN     Docker Hub access token (Account settings > Personal access tokens, Read & Write)
@@ -34,6 +35,13 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'nguyenhungitc' }}
     steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::This workflow runs on the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
 
       - name: Check the secret
