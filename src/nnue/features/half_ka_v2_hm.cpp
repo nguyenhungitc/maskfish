@@ -170,8 +170,14 @@ void HalfKAv2_hm::make_meta_indices(const Position& pos,
 
 // Get layer stack bucket
 IndexType HalfKAv2_hm::make_layer_stack_bucket(const Position& pos) {
-#ifdef JIEQI_NNUE_BLEND
+#if defined(JIEQI_NNUE_BLEND)
     return IndexType(make_layer_stack_selection(pos).floor);
+#elif defined(JIEQI_NNUE_STACKS32)
+    // make stacks=32: the bucket of the piece count, split by whether more
+    // than half of the pieces other than the kings are still dark
+    const int pieces = pos.count<ALL_PIECES>();
+    const int dark   = popcount(pos.pieces(DARK));
+    return IndexType(2 * LayerStackBuckets[pieces] + int(2 * dark > pieces - 2));
 #else
     return LayerStackBuckets[pos.count<ALL_PIECES>()];
 #endif

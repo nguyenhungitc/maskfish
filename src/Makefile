@@ -120,6 +120,10 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 #                                                (feature transformer at scale 255, fc_0 at
 #                                                scale 128 and >> 7, fc_2 in fc_0 units;
 #                                                needs a matching net)
+# stacks = 16/32      --- -DJIEQI_NNUE_STACKS32 --- stacks=32: 32 layer stacks, each piece count
+#                                                bucket split by the share of dark pieces
+#                                                (Pikafish 32 LayerStack buckets; not with
+#                                                lsblend=yes; needs a matching net)
 # embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed the network of the ref
 #                                                refs/assets/net (src/maskfish.nnue, fetched
 #                                                by `make net`) in the binary, as Stockfish
@@ -195,6 +199,7 @@ ctx = no
 lsblend = no
 meta = no
 quant = 1
+stacks = 16
 embed = yes
 bits = 64
 prefetch = no
@@ -762,6 +767,14 @@ ifeq ($(meta),yes)
 endif
 ifeq ($(quant),2)
 	CXXFLAGS += -DJIEQI_NNUE_QUANT2
+endif
+ifeq ($(stacks),32)
+	ifeq ($(lsblend),yes)
+		$(error stacks=32 and lsblend=yes cannot be combined)
+	endif
+	CXXFLAGS += -DJIEQI_NNUE_STACKS32
+else ifneq ($(stacks),16)
+	$(error stacks must be 16 or 32)
 endif
 
 ### 3.2.0.1 Embedded network
@@ -1593,7 +1606,7 @@ $(TEMP_DIR):
 # one of the goal.
 UNIVERSAL_CONFIG := $(TEMP_DIR)/.config
 universal_config = arch=$(ARCH) comp=$(COMP) cxx=$(CXX) target=$(UOBJ_TGT) \
-                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) quant=$(quant) \
+                   nnue=$(nnue) threats=$(threats) layers=$(layers) psqt=$(psqt) ctx=$(ctx) lsblend=$(lsblend) meta=$(meta) quant=$(quant) stacks=$(stacks) \
                    embed=$(embed) \
                    libcxx=$(UNIVERSAL_LIBCXX) macos=$(MACOSX_VERSION_MIN) \
                    cxxflags=$(ENV_CXXFLAGS) extracxxflags=$(EXTRACXXFLAGS) \

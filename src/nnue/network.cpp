@@ -157,8 +157,8 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
     ASSERT_ALIGNED(transformedFeatures, alignment);
 
     const int  bucket = FeatureSet::make_layer_stack_bucket(pos);
-    const auto psqt =
-      featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
+    const auto psqt   = featureTransformer.transform(pos, accumulatorStack, cache,
+                                                     transformedFeatures, psqt_bucket(bucket));
 
     std::uint8_t context[ContextOutputs] = {};
     if constexpr (UseContext)
@@ -294,8 +294,8 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     t.correctBucket = FeatureSet::make_layer_stack_bucket(pos);
     for (IndexType bucket = 0; bucket < LayerStacks; ++bucket)
     {
-        const auto materialist =
-          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
+        const auto materialist = featureTransformer.transform(
+          pos, accumulatorStack, cache, transformedFeatures, psqt_bucket(int(bucket)));
         std::uint8_t context[ContextOutputs] = {};
         if constexpr (UseContext)
             compute_context(pos, context);

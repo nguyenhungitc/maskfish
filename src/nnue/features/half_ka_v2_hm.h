@@ -255,7 +255,9 @@ class HalfKAv2_hm {
                                   const int       bucket[COLOR_NB],
                                   IndexType       out[COLOR_NB][MetaFeatures]);
 
-    // Get layer stack bucket
+    // Get layer stack bucket: LayerStackBuckets[piece count], or with make
+    // stacks=32, twice it plus 1 if more than half of the pieces other than
+    // the kings are dark (make lsblend=yes: the floor of the selection below)
     static IndexType make_layer_stack_bucket(const Position& pos);
 
     // make lsblend=yes: the layer stack selection of AB-JChess. The bucket

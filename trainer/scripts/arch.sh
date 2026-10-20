@@ -4,6 +4,7 @@
 #   NNUE_ARCH  default | att | threats | att-threats   (feature set)
 #   META       0 | 1    meta features            (make meta=yes,    README 7.8)
 #   BLEND      0 | 1    layer stack selection    (make lsblend=yes, README 7.7)
+#   STACKS     16 | 32  number of layer stacks   (make stacks=32,   README 7.14)
 #   LAYERS     1 | 2    layer stacks             (make layers=2,    README 7.4)
 #   CTX        0 | 1    inventory context        (make ctx=yes,     README 7.6)
 #   PSQT       1 | 0    PSQT part of the network (make psqt=no,     README 7.5)
@@ -21,6 +22,7 @@
 set_arch_vars() {
   : "${NNUE_ARCH:=default}"; : "${LAYERS:=1}"
   : "${META:=0}"; : "${BLEND:=0}"; : "${CTX:=0}"; : "${PSQT:=1}"; : "${QUANT:=1}"
+  : "${STACKS:=16}"
   case "$NNUE_ARCH" in
     default)     BIN_BASE="maskfish";         MAKE_FLAGS=() ;;
     att)         BIN_BASE="maskfish-att";     MAKE_FLAGS=(nnue=att) ;;
@@ -34,11 +36,16 @@ set_arch_vars() {
   done
   [[ "$LAYERS" == 1 || "$LAYERS" == 2 ]] || { echo "LAYERS must be 1 or 2" >&2; return 1; }
   [[ "$QUANT" == 1 || "$QUANT" == 2 ]] || { echo "QUANT must be 1 or 2" >&2; return 1; }
+  [[ "$STACKS" == 16 || "$STACKS" == 32 ]] || { echo "STACKS must be 16 or 32" >&2; return 1; }
+  if (( BLEND && STACKS == 32 )); then
+    echo "BLEND=1 and STACKS=32 cannot be combined" >&2; return 1
+  fi
 
   # suffixes in the order of jieqi_features.SUFFIXES
   ARCH_FULL="$NNUE_ARCH"; TRAIN_ARCH=(--layers "$LAYERS")
   if (( META ));      then ARCH_FULL+="-meta";   BIN_BASE+="-meta";   MAKE_FLAGS+=(meta=yes); fi
   if (( BLEND ));     then ARCH_FULL+="-blend";  BIN_BASE+="-blend";  MAKE_FLAGS+=(lsblend=yes); fi
+  if (( STACKS == 32 )); then ARCH_FULL+="-s32"; BIN_BASE+="-s32";    MAKE_FLAGS+=(stacks=32); fi
   FEATURE_ARCH="$ARCH_FULL"
   if (( LAYERS == 2 )); then ARCH_FULL+="-l2";   BIN_BASE+="-l2";     MAKE_FLAGS+=(layers=2); fi
   if (( CTX ));       then ARCH_FULL+="-ctx";    BIN_BASE+="-ctx";    MAKE_FLAGS+=(ctx=yes); TRAIN_ARCH+=(--ctx); fi

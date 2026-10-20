@@ -46,8 +46,7 @@ struct EvalFile {
 };
 
 struct NnueEvalTrace {
-    static_assert(LayerStacks == PSQTBuckets);
-
+    // psqt[b]: the PSQT bucket of the layer stack b (psqt_bucket())
     Value       psqt[LayerStacks];
     Value       positional[LayerStacks];
     std::size_t correctBucket;

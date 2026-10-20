@@ -33,6 +33,8 @@ in this order (e.g. "threats-l2-nopsqt"):
 * "-blend": the layer stack selection of AB-JChess (`make lsblend=yes`, see
   layer_stack_selection()), which changes the prepared data (layer stack and
   interpolation weight of each position);
+* "-s32": 32 layer stacks (`make stacks=32`, see layer_stack_bucket()), which
+  changes the prepared data (layer stack of each position); not with "-blend";
 * "-l2": the layer stacks of `make layers=2` (see model.py);
 * "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
   from AB-JChess, see context_inputs());
@@ -65,7 +67,7 @@ MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62 (+ 9 meta
 MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (types.h)
 
 NUM_PSQT_BUCKETS = 16
-NUM_LAYER_STACKS = 16
+NUM_LAYER_STACKS = 16               # 32 with "-s32" (set_arch())
 
 class Arch(NamedTuple):
     attack_buckets: int
@@ -78,6 +80,7 @@ class Arch(NamedTuple):
     ctx: bool = False
     psqt: bool = True
     quant2: bool = False
+    stacks: int = 16
 
 
 BASE_ARCHS = {
@@ -93,6 +96,7 @@ BASE_ARCHS = {
 SUFFIXES = (
     ("-meta", "meta", True, True),
     ("-blend", "blend", True, True),
+    ("-s32", "stacks", 32, True),
     ("-l2", "layers", 2, False),
     ("-ctx", "ctx", True, False),
     ("-nopsqt", "psqt", False, False),
@@ -110,6 +114,8 @@ def _all_archs() -> dict:
                 if mask >> k & 1:
                     name += suffix
                     fields[field] = value
+            if fields.get("blend") and fields.get("stacks") == 32:
+                continue    # make stacks=32 lsblend=yes is refused
             archs[name] = Arch(*values, **fields)
     return archs
 
@@ -139,7 +145,8 @@ def split_arch(name: str) -> tuple[str, dict]:
 
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2 = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2, \
+    _STACKS = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -148,14 +155,14 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
     global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT
-    global QUANT2
+    global QUANT2, NUM_LAYER_STACKS
     global NUM_FEATURES, PS_NB, MAX_ACTIVE
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2 = \
-        ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2, \
+        NUM_LAYER_STACKS = ARCHS[name]
     FEATURE_HASH ^= META_HASH if META else 0
     PS_NB = PS_META + (META_NB if META else 0)
     MAX_ACTIVE = 80 if META else 64
@@ -528,9 +535,23 @@ def meta_offsets(pos: JieqiPosition, perspective: int) -> list[int]:
 
 
 def layer_stack_bucket(pos: JieqiPosition) -> int:
+    """Layer stack of a position (engine: HalfKAv2_hm::make_layer_stack_bucket()):
+    the bucket of the piece count, or with "-s32" (make stacks=32) twice it,
+    plus 1 if more than half of the pieces other than the kings are dark."""
     if BLEND:
         return layer_stack_selection(pos)[0]
-    return LAYER_STACK_BUCKETS[pos.piece_count()]
+    pieces = pos.piece_count()
+    if NUM_LAYER_STACKS == 32:
+        dark = sum(1 for s in range(SQUARE_NB) if pos.board[s] and pos.dark[s])
+        return 2 * LAYER_STACK_BUCKETS[pieces] + int(2 * dark > pieces - 2)
+    return LAYER_STACK_BUCKETS[pieces]
+
+
+def psqt_bucket(stack):
+    """PSQT bucket of a layer stack (engine: psqt_bucket()): with "-s32" the
+    layer stacks 2b and 2b + 1 share the PSQT bucket b. Works on ints, numpy
+    arrays and torch tensors."""
+    return stack // (NUM_LAYER_STACKS // NUM_PSQT_BUCKETS)
 
 
 # Layer stack selection of the "-blend" architectures (make lsblend=yes, from

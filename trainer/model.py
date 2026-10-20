@@ -36,7 +36,7 @@ none of it exists in the engine, coalesced() folds it into the real weights:
   architecture (24 buckets). Optionally (kb_factor, used by AB-JChess) also
   a row per king bucket (ft_kb); it is added once per active feature, so it
   learns very fast, and it made results worse in a small test: off by default.
-* l1_fact: a fc0 component shared by the 16 layer stacks, so that rarely
+* l1_fact: a fc0 component shared by all the layer stacks, so that rarely
   selected stacks (endgames) start from what the frequent ones learnt.
 
 Both start at zero, so a freshly built factorized model computes exactly the
@@ -127,7 +127,7 @@ def _sqr_crelu_q(v: torch.Tensor, shift: int) -> torch.Tensor:
 
 
 class LayerStacks(nn.Module):
-    """All 16 layer stacks, evaluated for the bucket of each sample.
+    """All the layer stacks (16, 32 for "-s32"), evaluated for the bucket of each sample.
 
     Layer stacks 1 (default):
         fc0: L1 -> 16 (output 15 is added directly to the result)
@@ -138,9 +138,9 @@ class LayerStacks(nn.Module):
         fc2: [a0, a1] (128) -> 1, plus the direct term fc0[30] - fc0[31]
     """
 
-    def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
+    def __init__(self, count: int | None = None, l1_fact: bool = False):
         super().__init__()
-        self.count = count
+        self.count = count = F.NUM_LAYER_STACKS if count is None else count
         self.s = Q.scales()          # quantization of the architecture
         self.ctx = F.CTX
         self.in_dim = F.L1
@@ -486,7 +486,7 @@ class NNUE(nn.Module):
             stm = stm + t[:, 0]
             nstm = nstm + t[:, 1]
 
-        b = buckets.long().unsqueeze(1)
+        b = F.psqt_bucket(buckets.long()).unsqueeze(1)       # PSQT bucket of the stack
         if self.psqt_buckets:
             psqt = (stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b)) * 0.5
         else:
@@ -539,7 +539,7 @@ class NNUE(nn.Module):
             stm = stm + t[:, 0]
             nstm = nstm + t[:, 1]
 
-        b = buckets.long().unsqueeze(1)
+        b = F.psqt_bucket(buckets.long()).unsqueeze(1)       # PSQT bucket of the stack
         if self.psqt_buckets:
             psqt = q_tdiv(stm[:, L1:].gather(1, b) - nstm[:, L1:].gather(1, b), 2.0)
         else:

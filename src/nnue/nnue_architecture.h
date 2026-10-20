@@ -67,7 +67,21 @@ constexpr bool UsePSQT = false;
 #else
 constexpr bool UsePSQT = true;
 #endif
+// make stacks=32: 32 layer stacks instead of 16 (Pikafish "32 LayerStack
+// buckets"), see HalfKAv2_hm::make_layer_stack_bucket(). The PSQT buckets stay
+// 16: layer stacks 2b and 2b + 1 use the PSQT bucket b (psqt_bucket()).
+#ifdef JIEQI_NNUE_STACKS32
+constexpr IndexType LayerStacks = 32;
+#else
 constexpr IndexType LayerStacks = 16;
+#endif
+static_assert(LayerStacks % PSQTBuckets == 0);
+
+// PSQT bucket of a layer stack
+constexpr int psqt_bucket(int stack) { return stack / int(LayerStacks / PSQTBuckets); }
+
+// Xored into the hash of the layer stacks with make stacks=32
+constexpr std::uint32_t Stacks32ArchHash = 0x5A320000u;
 
 // make ctx=yes: the "inventory context" of AB-JChess. 16 values describing
 // the uncertainty of the position (pool counts, numbers of dark pieces and of
@@ -197,7 +211,8 @@ struct NetworkArchitecture {
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
         return hashValue ^ (UseContext ? ContextArchHash : 0)
-             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0);
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0)
+             ^ (LayerStacks == 32 ? Stacks32ArchHash : 0);
     }
 
     // Read network parameters
@@ -344,7 +359,8 @@ struct NetworkArchitecture {
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
         return hashValue ^ (UseContext ? ContextArchHash : 0)
-             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0);
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0)
+             ^ (LayerStacks == 32 ? Stacks32ArchHash : 0);
     }
 
     // Read network parameters

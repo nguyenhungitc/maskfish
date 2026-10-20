@@ -1206,6 +1206,50 @@ of the data used. `scripts/pipeline.sh`: `EVAL_SCALING=Alignment` sets the
 option for the data generation, the checks and the SPRT, and
 `--eval-scaling alignment` for the training. It suits `PSQT=0` best.
 
+### 7.14. 32 layer stacks (`make stacks=32`)
+
+Pikafish went from 16 to 32 layer stacks ("32 LayerStack buckets", October
+2026), splitting its buckets (rooks and knights + cannons of each side) more
+finely. Maskfish selects its 16 layer stacks by the number of pieces; with
+`stacks=32` each of these buckets is split in two by the share of dark
+pieces: layer stack `2b + 1` when more than half of the pieces other than the
+kings are still dark, `2b` otherwise (`HalfKAv2_hm::make_layer_stack_bucket()`,
+`jieqi_features.layer_stack_bucket()`). Two positions with the same number of
+pieces, one still closed (many unknown identities) and one almost revealed,
+then have their own layer stacks. This split is a choice of Maskfish (the one
+of AB-JChess's `lsblend` uses the dark pieces too), not Pikafish's: test it
+with an SPRT. The layer stacks `2b` and `2b + 1` share the PSQT bucket `b`, so
+the feature transformer is the same as with 16 layer stacks; the network file
+has 32 layer stacks (about 0.5 MB more) and the engine still evaluates one
+layer stack per position, so its speed should hardly change. Not with
+`lsblend=yes`.
+
+The architecture names get the suffix `-s32`, after `-meta` / `-blend`
+(`default-s32`, `att-meta-s32-l2`, ...). **The prepared data changes** (layer
+stack of each position): prepare it with `--arch default-s32`. A network with
+16 layer stacks converts into `-s32` with the same evaluation (each layer
+stack copied into the two that split it), so a new line can start from the
+current network:
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 stacks=32 && mv maskfish maskfish-s32
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-s32 --arch default-s32
+python prepare_data.py data/gen5.txt --out data/train5-s32 --arch default-s32
+python train.py data/train5-s32 --out runs/s32 --epochs 40 --epoch-size 10000000 \
+    --init-net nets/gen5.nnue --stack-balance 8
+python match.py --engine-a ../src/maskfish-s32 --net-a runs/s32/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/gen5.nnue --movetime 100 --workers 15 --sprt 0 5
+```
+
+(`python serialize.py --convert default-s32 nets/gen5.nnue nets/gen5-s32.nnue`
+writes the converted network itself.) The layer stacks of the endgames and of
+the openings with many revealed pieces are seen less often: `--stack-balance`
+weights them up. `scripts/pipeline.sh`: `STACKS=32` (with `INIT_NET` of 16
+layer stacks: the same evaluation at generation 0).
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and

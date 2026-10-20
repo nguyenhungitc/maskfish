@@ -127,11 +127,11 @@ scripts/pipeline.sh -g 3 --dry-run          # print the commands, run nothing
 | `--test-telegram` | Send a test message |
 
 **Architecture** (`pipeline.env`, shared with `autotune.sh` by `scripts/arch.sh`):
-`NNUE_ARCH` (feature set), `LAYERS`, `META`, `BLEND`, `CTX`, `PSQT` select the
-network (README sections 7.4 to 7.8); each architecture has its own engine
-binary (`src/maskfish-meta-ctx`, ...), its own line of nets
-(`nets/default-meta-ctx-genN.nnue`, ...) and, for `META` / `BLEND`, its own
-prepared data (`data/prep-default-meta`, ...). With `INIT_NET` set, generation 0
+`NNUE_ARCH` (feature set), `LAYERS`, `META`, `BLEND`, `CTX`, `PSQT`, `QUANT`,
+`STACKS` select the network (README sections 7.4 to 7.8, 7.12, 7.14); each
+architecture has its own engine binary (`src/maskfish-meta-ctx`, ...), its own
+line of nets (`nets/default-meta-ctx-genN.nnue`, ...) and, for `META` /
+`BLEND` / `STACKS`, its own prepared data (`data/prep-default-meta`, ...). With `INIT_NET` set, generation 0
 of a new line is that net converted (README section 7.9) instead of a
 material-only net: with `META=1` / `CTX=1` it evaluates exactly as the original,
 so the new line starts at the strength of the current one:

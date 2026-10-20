@@ -15,7 +15,7 @@ File layout (maskfish/src/nnue/network.cpp, nnue_feature_transformer.h, layers/)
     context architectures only ("*-ctx", make ctx=yes):
     u32 context tower hash (0x0C7A16C7)
       int32 bias[16] (scale 64*127), int8 weight[16][16] (scale 64)
-    16 x layer stack:
+    16 x layer stack (32 for "*-s32", make stacks=32):
       u32 architecture hash
       fc0: int32 bias[16]  (scale 64*127), int8 weight[16][L1] (scale 64)
            "*-ctx" only: int8 context weight[16][16]  (scale 64)
@@ -81,10 +81,12 @@ CTX_ARCH_HASH = 0x0C7A0000    # engine: ContextArchHash, xored into the layer st
 BLEND_ARCH_HASH = 0x0B1E0000  # engine: BlendArchHash (make lsblend=yes)
 CTX_TOWER_HASH = 0x0C7A16C7   # engine: ContextTower::get_hash_value()
 QUANT2_ARCH_HASH = 0x0A2C0000  # engine: Quant2ArchHash (make quant=2)
+STACKS32_ARCH_HASH = 0x5A320000  # engine: Stacks32ArchHash (make stacks=32)
 
 
 def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None = None,
-              blend: bool | None = None, quant2: bool | None = None) -> int:
+              blend: bool | None = None, quant2: bool | None = None,
+              stacks: int | None = None) -> int:
     """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
     (0x63336B4A for L1 = 2048, 0x63336A4A for 1024; xored with CTX_ARCH_HASH
     with the context inputs)."""
@@ -93,6 +95,7 @@ def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None
     ctx = F.CTX if ctx is None else ctx
     blend = F.BLEND if blend is None else blend
     quant2 = F.QUANT2 if quant2 is None else quant2
+    stacks = F.NUM_LAYER_STACKS if stacks is None else stacks
 
     def affine(prev, outputs):
         h = (0xCC03DAE4 + outputs) & m
@@ -105,7 +108,7 @@ def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None
     h = crelu(affine(h, stack_dims(layers)["fc0_out"]))
     h = crelu(affine(h, L3))
     return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0) ^ (BLEND_ARCH_HASH if blend else 0) \
-        ^ (QUANT2_ARCH_HASH if quant2 else 0)
+        ^ (QUANT2_ARCH_HASH if quant2 else 0) ^ (STACKS32_ARCH_HASH if stacks == 32 else 0)
 
 
 NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
@@ -126,7 +129,7 @@ def network_hash() -> int:
 
 ARCH_HASH = arch_hash(2048)   # kept for compatibility (default architecture)
 PSQT = F.NUM_PSQT_BUCKETS
-STACKS = F.NUM_LAYER_STACKS
+# (the number of layer stacks is F.NUM_LAYER_STACKS: 16, or 32 with "-s32")
 FC1_PADDED_IN = 32
 
 
@@ -243,6 +246,7 @@ def quantize(model) -> dict:
 
         d = stack_dims()
         st = model.stacks
+        STACKS = F.NUM_LAYER_STACKS
         l1w = st.l1.weight.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"], L1)
         l1b = st.l1.bias.detach().cpu().double().numpy().reshape(STACKS, d["fc0_out"])
         l2w = st.l2.weight.detach().cpu().double().numpy().reshape(STACKS, L3, d["fc1_in"])
@@ -262,7 +266,7 @@ def quantize(model) -> dict:
     q["fc0_bias"] = np.round(l1b * sc.one0).astype(np.int64)
     q["fc0_weight"] = qw(l1w, sc.w0)
     q["fc1_bias"] = np.round(l2b * sc.one1).astype(np.int64)
-    fc1 = np.zeros((STACKS, L3, d["fc1_file"]), dtype=np.int64)
+    fc1 = np.zeros((F.NUM_LAYER_STACKS, L3, d["fc1_file"]), dtype=np.int64)
     fc1[:, :, :d["fc1_in"]] = qw(l2w, sc.w1)
     q["fc1_weight"] = fc1
     q["fc2_bias"] = np.round(ob * sc.out2).astype(np.int64)
@@ -300,7 +304,7 @@ def write_nnue(q: dict, path: str, description: str = "Jieqi NNUE trained with t
         buf.write(q["ctx_weight"].astype(np.int8).tobytes())
 
     ahash = arch_hash()
-    for k in range(STACKS):
+    for k in range(F.NUM_LAYER_STACKS):
         buf.write(struct.pack("<I", ahash))
         buf.write(q["fc0_bias"][k].astype("<i4").tobytes())
         buf.write(q["fc0_weight"][k].astype(np.int8).tobytes())
@@ -366,7 +370,7 @@ def read_nnue(path: str) -> dict:
         + (("fc0_ctx",) if F.CTX else ())
     parts = {k: [] for k in keys}
     d = stack_dims()
-    for _ in range(STACKS):
+    for _ in range(F.NUM_LAYER_STACKS):
         (ah,) = struct.unpack("<I", f.read(4))
         if ah != arch_hash():
             raise ValueError("architecture hash mismatch")
@@ -387,7 +391,7 @@ def _arch_network_hashes() -> dict:
     out = {}
     for name, a in F.ARCHS.items():
         out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx, a.blend,
-                                           a.quant2)
+                                           a.quant2, a.stacks)
     return out
 
 
@@ -424,7 +428,8 @@ def convertible(src: str, dst: str, requantize: bool = False) -> str | None:
     """None if a network of architecture src can be converted into dst by
     convert(), otherwise the reason. The conversions add options: "-meta" and
     "-ctx" (zero weights: the same evaluation), "-blend" (the layer stacks are
-    kept, the evaluation changes since they are selected differently).
+    kept, the evaluation changes since they are selected differently), "-s32"
+    (each layer stack copied into the two that split it: the same evaluation).
     requantize: the quantizations ("-q2") may differ too: the network keeps
     its integers and its "quant2" key, load_into_model() dequantizes it with
     its own scales (train.py --init-net); not for writing a file."""
@@ -440,6 +445,8 @@ def convertible(src: str, dst: str, requantize: bool = False) -> str | None:
     for field in ("meta", "ctx", "blend"):
         if sf[field] and not df[field]:
             return f"{field} cannot be removed"
+    if sf["stacks"] > df["stacks"]:
+        return "layer stacks cannot be removed"
     return None
 
 
@@ -462,11 +469,19 @@ def convert(q: dict, src: str, dst: str, requantize: bool = False) -> dict:
             return np.concatenate([a, z], axis=1).reshape(buckets * F.PS_NB, -1)
         q["ft_weight"] = expand(q["ft_weight"])
         q["psqt"] = expand(q["psqt"])
+    if df["stacks"] != sf["stacks"]:
+        # "-s32": the layer stacks 2b and 2b + 1 split the bucket b of the
+        # piece count and share its PSQT bucket: both are copies of the stack b
+        k = df["stacks"] // sf["stacks"]
+        for key in ("fc0_bias", "fc0_weight", "fc1_bias", "fc1_weight", "fc2_bias", "fc2_weight",
+                    "fc0_ctx"):
+            if key in q:
+                q[key] = np.repeat(np.asarray(q[key]), k, axis=0)
     if df["ctx"] and not sf["ctx"]:
         n = F.CONTEXT_INPUTS
         q["ctx_bias"] = np.zeros(n, dtype=np.int64)
         q["ctx_weight"] = np.zeros((n, n), dtype=np.int64)
-        q["fc0_ctx"] = np.zeros((STACKS, stack_dims()["fc0_out"], n), dtype=np.int64)
+        q["fc0_ctx"] = np.zeros((F.NUM_LAYER_STACKS, stack_dims()["fc0_out"], n), dtype=np.int64)
     return q
 
 
@@ -573,7 +588,7 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
         a = np.clip(acc[:L1 // 2], 0, sc.ft_clip)
         b = np.clip(acc[L1 // 2:], 0, sc.ft_clip)
         transformed.append((a * b) // 512)
-        psqt_acc.append(ps[bucket])
+        psqt_acc.append(ps[F.psqt_bucket(bucket)])
     x = np.concatenate(transformed)                  # uint8 in the engine
 
     ctx_out = None
@@ -600,8 +615,8 @@ def main():
     ap.add_argument("--upgrade", action="store_true",
                     help="convert a .nnue file of the old version (16-bit HalfKA weights)")
     ap.add_argument("--convert", metavar="ARCH",
-                    help="convert a .nnue file into architecture ARCH, adding -meta / -ctx "
-                         "(same evaluation) or -blend (layer stacks kept)")
+                    help="convert a .nnue file into architecture ARCH, adding -meta / -ctx / "
+                         "-s32 (same evaluation) or -blend (layer stacks kept)")
     args = ap.parse_args()
 
     if args.convert:
