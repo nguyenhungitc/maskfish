@@ -36,7 +36,9 @@ code is written specifically for this engine's feature set and file format.
 | `init_net.py` | Creates a material-only starting network |
 | `gen_data.py` | Self-play data generation with real hidden identities, multi-process |
 | `prepare_data.py` | Converts text data into shuffled binary shards (streamed, fixed RAM) |
-| `train.py` | Training loop; writes a checkpoint and a `.nnue` file every epoch |
+| `train.py` | Training loop (one GPU, or several with `torchrun`); writes a checkpoint and a `.nnue` file every epoch |
+| `watch_nets.py` | Measures every network of a run against a reference while it trains, ranks them, keeps the best |
+| `textio.py` | Reads / writes text data plain or compressed (`.zst`, `.gz`) |
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
@@ -72,6 +74,8 @@ The engine has two things dedicated to the trainer: the UCI option `RawScore`
 - A C++17 compiler (g++ or clang) and `make` to build the engine.
 - Python 3.9 or later.
 - The packages of `requirements.txt`: `torch`, `numpy`, `zstandard`.
+- Optional: `tensorboard` (`pip install tensorboard`) for `train.py
+  --tensorboard` / `watch_nets.py --tensorboard`.
 
 ## 3. Setup
 
@@ -226,9 +230,13 @@ Good to know:
   together (several files given to `prepare_data.py`) or separately into
   different prefixes; `train.py` accepts several prefixes.
 - Keep the text files: they are needed to prepare the data again when the
-  architecture changes (e.g. `att`) and to run `fit_scaling.py`. They can be
-  compressed for storage, but `prepare_data.py` only reads plain text files,
-  so decompress them before use.
+  architecture changes (e.g. `att`) and to run `fit_scaling.py`.
+- **Compressed text:** `--out data/gen0.txt.zst` writes a zstd file, about 6
+  times smaller (15 bytes per position instead of 92 in a test). The
+  `.partN` files stay plain until they are merged. `prepare_data.py`,
+  `fit_scaling.py`, `chance_tables.py` and `rescore.py` (input) read `.zst`
+  and `.gz` files directly, so existing files can also be compressed with
+  `zstd --rm data/gen0.txt` and used as `data/gen0.txt.zst`.
 
 ### Step 3. Prepare the data
 
@@ -295,6 +303,8 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
+| `--prefetch` | 4 | Batches read ahead in a background thread while the GPU trains (0: none) |
+| `--tensorboard` | | Also write TensorBoard logs to `<out>/tb` |
 
 The loss is that of nnue-pytorch: the network's score and the data score are
 both converted to a win probability with `sigmoid(score / scaling)`, the
@@ -354,10 +364,49 @@ these techniques) can still be loaded and trained further; their optimizer
 state is then created anew.
 
 **Monitoring:** the average loss is printed every 100 steps; at the end of
-every epoch the train loss, the validation loss, the learning rate and the
-time. The validation loss should go down and then level off. Only compare
-validation losses of runs that use **the same validation set**; a lower loss
-does not mean a stronger network, only a match tells (step 6).
+every epoch the train loss, the validation loss, the learning rate, the
+time and the training speed (positions per second). The validation loss
+should go down and then level off. Only compare validation losses of runs
+that use **the same validation set**; a lower loss does not mean a stronger
+network, only a match tells (step 6).
+
+The same numbers are appended to `runs/gen1/metrics.jsonl` (one JSON object
+per line: `"type": "step"` every 100 steps, `"type": "epoch"` per epoch; it
+continues across `--resume`). With `--tensorboard` they also go to
+`runs/gen1/tb`:
+
+```
+tensorboard --logdir runs        # then open http://localhost:6006
+```
+
+**Data loading:** batches are read from the memory-mapped shards in a
+background thread (`--prefetch`, 4 batches ahead) while the GPU computes the
+previous step, in page-locked memory, and are sent to the GPU in their
+stored types (16-bit feature indices, 4 times fewer bytes than before),
+then converted there. The batches and their order do not depend on
+`--prefetch` (same seed, same batches). On a 2-core test machine, building
+a batch of 16384 positions took 3.0 ms instead of 4.8 ms, and it now
+overlaps the GPU step instead of adding to it.
+
+**Several GPUs** (one machine): start the same command with `torchrun`:
+
+```
+torchrun --standalone --nproc_per_node 4 train.py data/train0 --val data/val0 \
+    --out runs/gen1 --epochs 40 --epoch-size 10000000 --batch-size 16384
+```
+
+- `--batch-size` stays the **total** batch: each of the 4 processes draws its
+  own random 4096 positions, and DistributedDataParallel averages the
+  gradients, so a step is the same as a step on one GPU with 16384 positions:
+  same hyperparameters, same number of steps per epoch, about 4 times
+  faster when the GPUs are the bottleneck. `--batch-size` must be a multiple
+  of the number of processes.
+- Only process 0 prints, validates and writes the files; `--resume`,
+  `--init-net` and every other option work as with one GPU.
+- With threats networks (about 400 MB of gradients to average per step) the
+  speed-up depends on the link between the GPUs (NVLink ≫ PCIe).
+- `scripts/pipeline.sh`: set `TRAIN_GPUS=4` in `pipeline.env`.
+- On the CPU (`--device cpu`, tests only) the processes use the gloo backend.
 
 **Output** in `runs/gen1/`: for every epoch `epoch_K.pt` (checkpoint, about
 190 MB, about 750 MB for `att`, about 1.3 GB for `threats`) and `epoch_K.nnue`
@@ -400,6 +449,23 @@ python match.py --engine ../src/maskfish \
 - Use the same kind of limit as the engine will play with (`--nodes`,
   `--depth` or `--movetime`). Every engine uses 1 thread; `--workers` pairs
   of games run in parallel.
+
+**Measuring every epoch while training** (as nnue-pytorch's `run_games.py`):
+`watch_nets.py` plays a fixed number of pairs of every new `epoch_K.nnue`
+against the reference, with the same openings for every network, prints a
+ranking, and keeps the best one as `runs/gen1/best.nnue`. Run it next to the
+training, on the CPU cores the trainer does not use:
+
+```
+python watch_nets.py runs/gen1 --engine ../src/maskfish --ref nets/gen0.nnue \
+    --pairs 200 --nodes 5000 --workers 8 --every 2 --follow --until-epoch 40
+```
+
+Results are kept in `runs/gen1/watch.json` (restartable; a larger `--pairs`
+tops up the networks already measured), and `--tensorboard` adds the Elo of
+each epoch to the run's TensorBoard logs. A few hundred pairs give about
+±15–30 Elo: use the ranking to choose which epochs go to the SPRT above,
+not as the final decision.
 
 If the new network wins (H1), copy it as the current network:
 
@@ -926,7 +992,8 @@ then used), otherwise it takes the feature transformer only; it says which.
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
-`fit_scaling.py`):
+`fit_scaling.py`; plain, or compressed when the name ends with `.zst` or
+`.gz`, see `textio.py`):
 
 ```
 xxxxkxxxx/9/1x5x1/x1x1x3x/1P4n2/9/X1X1X1X1X/6B2/9/XXXXKXXXX b R2A2C2P4N2B1r2a2c2p5n1b2 5 3 | -272 | 1
@@ -966,9 +1033,9 @@ your own machine.
 | --- | --- |
 | Data generation speed | about 40–50 positions/s per worker with `--nodes 5000` (roughly inversely proportional to the node count) |
 | 16-core machine, `--nodes 5000` | about 2–2.5 million positions/hour |
-| Text file | about 100 bytes/position (10 million ≈ 1 GB) |
+| Text file | about 100 bytes/position (10 million ≈ 1 GB); `.zst`: about 15 bytes/position |
 | Prepared data | about 260 bytes/position (10 million ≈ 2.6 GB) |
-| `prepare_data.py` | about 15,000 lines/s per CPU core |
+| `prepare_data.py` | about 15,000 lines/s per CPU core (`threats`: about 6,500): 50 million positions take a few minutes on 16 cores, much less than generating them |
 | Checkpoint | about 190 MB (`att`: 750 MB, `threats`: 1.3 GB) per epoch |
 | `.nnue` file | about 8 MB (`att`: larger, `threats`: up to about 60 MB), zstd compressed |
 
@@ -990,7 +1057,10 @@ Training speed depends on the GPU; run a small epoch first
 | `train.py` runs out of GPU memory | Lower `--batch-size` (e.g. 8192); the `att` architecture needs more |
 | The loss becomes `nan` or jumps up | Lower `--lr` (e.g. 5e-4), check the data for abnormal scores (lower `--max-score`); try `--no-factorize` to see whether factorization is the cause |
 | `warning: optimizer state not restored` with `--resume` | The checkpoint was made by an old trainer version (a single parameter group): the model is loaded, only the optimizer state is created anew |
-| Slow training, GPU idle | The data is on a slow disk: move it to an SSD; increase `--batch-size` |
+| Slow training, GPU idle | The data is on a slow disk: move it to an SSD; increase `--batch-size` or `--prefetch`; compare the `pos/s` of the epoch lines |
+| `torchrun`: `--batch-size N is not a multiple of the K processes` | Choose a batch size divisible by `--nproc_per_node` |
+| `torchrun` hangs at the start, or NCCL errors | Check that every process sees its GPU (`CUDA_VISIBLE_DEVICES`), try `NCCL_P2P_DISABLE=1`; one GPU (plain `python train.py`) is always a fallback |
+| `watch_nets.py` measures nothing | The networks are younger than 2 seconds, not multiples of `--every`, or already measured with the same `--ref` and limit (see `watch.json`) |
 | `gen_data.py` was interrupted | Use the remaining `.partN` files as normal data |
 | AB-JChess / the old branch print `No such option: RawScore` | Normal: these engines do not have that option; their scores must be rescaled with `--score-scale` ([section 6.3](#63-rescale-the-scores-and-train)) |
 | Two data generation runs are identical | `--seed` was not set to different values |

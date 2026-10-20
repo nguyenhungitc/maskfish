@@ -103,6 +103,7 @@ fi
 : "${EPOCHS:=40}"; : "${EPOCH_SIZE:=10000000}"; : "${BATCH_SIZE:=16384}"; : "${LR:=8.75e-4}"
 : "${GAMMA:=0.992}"; : "${LAMBDA:=1.0}"; : "${SCALING:=361}"; : "${TRAIN_FROM:=0}"
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
+: "${TRAIN_GPUS:=1}"
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -333,8 +334,12 @@ autotune() {
   local gpu_txt="none"
   if [[ "${HW[CUDA]:-0}" == 1 && -n "${HW[GPU_NAME]:-}" ]]; then
     gpu_txt="${HW[GPU_NAME]//_/ } (#${HW[GPU_INDEX]:-0}) $(gb "${HW[GPU_TOTAL_MB]:-0}") GB, $(gb "${HW[GPU_FREE_MB]:-0}") GB free"
-    (( ${HW[GPU_COUNT]:-1} > 1 )) && gpu_txt+=" · ${HW[GPU_COUNT]} GPUs, using the one with the most free memory"
-    if (( ${HW[GPU_COUNT]:-1} > 1 )) && [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    if (( TRAIN_GPUS > 1 )); then
+      gpu_txt+=" · ${HW[GPU_COUNT]:-1} GPUs, training on ${TRAIN_GPUS} (DDP)"
+    elif (( ${HW[GPU_COUNT]:-1} > 1 )); then
+      gpu_txt+=" · ${HW[GPU_COUNT]} GPUs, using the one with the most free memory"
+    fi
+    if (( ${HW[GPU_COUNT]:-1} > 1 && TRAIN_GPUS <= 1 )) && [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
       export CUDA_VISIBLE_DEVICES=${HW[GPU_INDEX]:-0}
     fi
     if (( ${HW[GPU_FREE_MB]:-0} * 10 < ${HW[GPU_TOTAL_MB]:-0} * 7 )); then
@@ -363,6 +368,13 @@ autotune() {
     fi
     if [[ -z "${USERSET[TRAIN_THREADS]:-}" ]]; then
       if [[ "$DEVICE" == cpu ]]; then TRAIN_THREADS=$cpus; else TRAIN_THREADS=0; fi
+    fi
+    if (( TRAIN_GPUS > 1 )); then
+      [[ "$DEVICE" != cpu ]] || fail "TRAIN_GPUS=$TRAIN_GPUS needs CUDA (DEVICE=cpu is set)" || return 1
+      (( TRAIN_GPUS <= ${HW[GPU_COUNT]:-0} )) || fail "TRAIN_GPUS=$TRAIN_GPUS but only ${HW[GPU_COUNT]:-0} GPU(s) found" || return 1
+      # BATCH_SIZE is the global batch (train.py splits it between the GPUs)
+      BATCH_SIZE=$(( BATCH_SIZE / TRAIN_GPUS * TRAIN_GPUS ))
+      batch_txt+=" · ${TRAIN_GPUS} GPUs × $(( BATCH_SIZE / TRAIN_GPUS ))"
     fi
 
     # Disk: data (if generated) + one .nnue per epoch + checkpoints → pick a CHECKPOINT_EVERY that fits
@@ -394,7 +406,7 @@ autotune() {
   fi
   [[ "$MODE" != gen ]] && (( ! SKIP_MATCH )) && info "SPRT: ${MATCH_WORKERS} worker$(src MATCH_WORKERS)"
   local line; for line in "GEN_WORKERS=$GEN_WORKERS" "MATCH_WORKERS=$MATCH_WORKERS" "PREP_WORKERS=$PREP_WORKERS" \
-      "SHARD_SIZE=$SHARD_SIZE" "BATCH_SIZE=$BATCH_SIZE" "CHECKPOINT_EVERY=$CHECKPOINT_EVERY" "TRAIN_THREADS=$TRAIN_THREADS" "DEVICE=$DEVICE"; do
+      "SHARD_SIZE=$SHARD_SIZE" "BATCH_SIZE=$BATCH_SIZE" "CHECKPOINT_EVERY=$CHECKPOINT_EVERY" "TRAIN_THREADS=$TRAIN_THREADS" "DEVICE=$DEVICE" "TRAIN_GPUS=$TRAIN_GPUS"; do
     echo "chosen: $line" >> "$CUR_LOG"
   done
   return 0
@@ -587,6 +599,10 @@ s_train() {
   words extra "$EXTRA_TRAIN"; train+=("${extra[@]}")
   (( ${#train[@]} )) || (( DRY_RUN )) || fail "No prepared data in $PREP_DIR (run --gen-only first)" || return 1
   local cmd=("$PYTHON" -u train.py "${train[@]}")
+  if (( TRAIN_GPUS > 1 )); then   # one process per GPU (train.py: Distributed)
+    cmd=(env PYTHONUNBUFFERED=1 "$PYTHON" -m torch.distributed.run --standalone
+         --nproc_per_node "$TRAIN_GPUS" train.py "${train[@]}")
+  fi
   if (( ${#val[@]} )); then cmd+=(--val "${val[@]}"); else
     echo "Warning: no validation set" | tee -a "$CUR_LOG"; info "⚠ No validation set"; fi
   cmd+=(--out "$RUN_DIR" --epochs "$EPOCHS" --epoch-size "$EPOCH_SIZE" --batch-size "$BATCH_SIZE"
