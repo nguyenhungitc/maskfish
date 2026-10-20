@@ -383,6 +383,16 @@ vice versa. Train such a network with `train.py --no-psqt` (section 7.5 of
 the [trainer README](trainer/README.md)), like AB-JChess's networks, which
 have no PSQT part either. The default build keeps the PSQT outputs.
 
+`make -j build quant=2` (combinable with every option) uses the
+**quantization of current Pikafish**: feature transformer at scale 255
+(not doubled), first layer at scale 128 with activations shifted by 7, last
+layer in the units of the first one. The networks (`*-q2` in the trainer)
+have a different hash (`0x0A2C0000` is xored into the layer stacks hash).
+Train them with `train.py --quant2`, or requantize a network with
+`serialize.py --convert default-q2` (section 7.12 of the
+[trainer README](trainer/README.md)). The default build keeps the current
+quantization, unchanged.
+
 `make -j build ctx=yes` (combinable with the options above) adds the
 **inventory context** of AB-JChess: 16 values describing the uncertainty of
 the position, from the side to move (its pool counts by piece type, the

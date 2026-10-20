@@ -39,6 +39,7 @@ code is written specifically for this engine's feature set and file format.
 | `train.py` | Training loop (one GPU, or several with `torchrun`); writes a checkpoint and a `.nnue` file every epoch |
 | `watch_nets.py` | Measures every network of a run against a reference while it trains, ranks them, keeps the best |
 | `textio.py` | Reads / writes text data plain or compressed (`.zst`, `.gz`) |
+| `quant.py` | The two quantization schemes of the engine (`make quant=1/2`) as scales |
 | `ftperm.py` | Reorders the feature transformer neurons of a network so that the engine evaluates it faster (same evaluations) |
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
@@ -808,10 +809,9 @@ current layer stacks (`fc0`: L1 → 15 + 1, `fc1`: 30 → 32, `fc2`: 32 → 1):
 - the term added directly to the result is the difference of the last two
   outputs of `fc0` (`fc0[30] − fc0[31]`) instead of a separate 16th output.
 
-The quantization stays that of the current layer stacks (upstream changed the
-quantization scales at the same time, for its quantization-aware training;
-this trainer's QAT, [section 7.10](#710-quantization-aware-training-qat-start),
-works with the current scales and needs no change in the engine).
+The quantization stays that of the current layer stacks by default; the
+quantization of current Pikafish is an option of its own (`make quant=2`,
+[section 7.12](#712-quantization-of-current-pikafish-make-quant2)).
 
 The new layer stacks work with every feature set: the architecture names get
 the suffix `-l2` (`default-l2`, `att-l2`, `threats-l2`, `att-threats-l2`). The
@@ -1083,6 +1083,76 @@ python ftperm.py nets/gen3.nnue --data data/gen3.txt.zst --stats-only   # report
   (`--positions`, `--holdout`); positions are drawn from the first
   `--scan` lines of the data.
 
+### 7.12. Quantization of current Pikafish (`make quant=2`)
+
+Pikafish's networks use another quantization than Maskfish's default (since
+before its "Update nnue-architecture"): the feature transformer at scale 255
+instead of 127 doubled (twice the resolution, half the range: weights within
+±0.498 instead of ±1), fc0 at scale 128 with activations shifted by 7 (twice
+the resolution), and the last layer in the units of fc0 (scale 128 instead of
+75.6: twice the resolution, weights within ±0.99 instead of ±1.68), the direct
+term added before the final conversion. `make quant=2` builds the engine
+with it, for both layer stacks (`layers=1` and `2`) and every other option;
+the networks are the `*-q2` architectures (`default-q2`, `default-l2-q2`,
+`threats-l2-ctx-q2`, ...), with another hash: each build rejects the
+networks of the other. `quant.py` lists the scales of both schemes; the
+default (`quant=1`) is unchanged, bit for bit (same `bench` node count as
+before).
+
+Checked: `verify.py` bit-exact, and the QAT forward pass equal to the engine,
+with `default-q2`, `default-l2-q2`, `threats-blend-ctx-q2` and
+`att-threats-meta-blend-l2-ctx-nopsqt-q2`.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 quant=2 && mv maskfish maskfish-q2
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-q2 --arch default-q2
+```
+
+**Starting from a network of the default quantization** (same feature set):
+
+```
+# the same network requantized (rounded to the new grid, the feature
+# transformer weights beyond +-0.498 clipped; the script says how many)
+python serialize.py --convert default-q2 nets/gen5.nnue nets/gen5-q2.nnue
+
+# or trained further in the new quantization
+python train.py data/train --val data/val --out runs/q2 --quant2 \
+    --init-net nets/gen5.nnue --epochs 40 --epoch-size 10000000 [--qat-start 36]
+```
+
+`--init-net` with the other quantization dequantizes the network with its own
+scales and clips it into the new ranges (it prints how many feature
+transformer weights were clipped). The prepared data is shared (`-q2` does not
+change the features). In `scripts/pipeline.sh`, `QUANT=2` (with `INIT_NET` to
+start from an existing network) is a line of networks of its own
+(`nets/default-q2-genN.nnue`, ...).
+
+**Testing it with an SPRT**: compare networks trained the same way, one in
+each quantization, each with its own build:
+
+```
+python train.py data/train --val data/val --out runs/q1 --init-net nets/gen5.nnue \
+    --epochs 40 --epoch-size 10000000 --seed 1
+python train.py data/train --val data/val --out runs/q2 --init-net nets/gen5.nnue \
+    --epochs 40 --epoch-size 10000000 --seed 1 --quant2
+python match.py --engine-a ../src/maskfish-q2 --net-a runs/q2/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b runs/q1/epoch_40.nnue \
+    --movetime 100 --workers 15 --sprt 0 5
+```
+
+`--movetime` makes the speed of each build count (on the test machine the
+two had the same speed within the noise of `bench`); `--nodes` measures the
+networks alone. The requantized network of the first command above only
+tests the rounding (it should be within a few Elo of the original: on a small
+test network its raw evaluations differed by 0.9 internal units on average,
+8 at most); the real question is whether training in the new quantization
+gives a stronger network, which only the trained pair answers. Combine with
+QAT (section 7.10) in a second test rather than in the same one, to know
+which change helped.
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
@@ -1141,7 +1211,7 @@ Training speed depends on the GPU; run a small epoch first
 | Symptom | Cause / fix |
 | --- | --- |
 | `verify.py` reports `MISMATCH` | The engine and the trainer do not use the same architecture. Use the engine and the trainer of the same Maskfish commit and rebuild the engine; for `att` / `threats` remember `make clean` and the matching `--arch` |
-| The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att` and `layers=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
+| The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att`, `layers=2` and `quant=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
 | `no threat data (prepare the data again ...)` | The data was prepared by an old version of `prepare_data.py`; run it again with `--arch threats` |
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |
 | `the train data has no material / rule40` | The data was prepared before the loss used the `evaluate()` scaling: run `prepare_data.py` again on the text files (or train with `--no-eval-scale`) |

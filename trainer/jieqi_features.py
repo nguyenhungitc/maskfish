@@ -36,9 +36,10 @@ in this order (e.g. "threats-l2-nopsqt"):
 * "-l2": the layer stacks of `make layers=2` (see model.py);
 * "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
   from AB-JChess, see context_inputs());
-* "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`).
+* "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`);
+* "-q2": the quantization of current Pikafish (`make quant=2`, see quant.py).
 
-The last three only change the model: the input features, and so the prepared
+The last four only change the model: the input features, and so the prepared
 data, are those of the name without them (feature_arch()).
 
 If you change the feature set in the engine, change it here too and re-run
@@ -76,6 +77,7 @@ class Arch(NamedTuple):
     layers: int = 1
     ctx: bool = False
     psqt: bool = True
+    quant2: bool = False
 
 
 BASE_ARCHS = {
@@ -94,6 +96,7 @@ SUFFIXES = (
     ("-l2", "layers", 2, False),
     ("-ctx", "ctx", True, False),
     ("-nopsqt", "psqt", False, False),
+    ("-q2", "quant2", True, False),
 )
 LAYERS2_SUFFIX = "-l2"
 
@@ -136,7 +139,7 @@ def split_arch(name: str) -> tuple[str, dict]:
 
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2 = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -145,12 +148,14 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
     global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT
+    global QUANT2
     global NUM_FEATURES, PS_NB, MAX_ACTIVE
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2 = \
+        ARCHS[name]
     FEATURE_HASH ^= META_HASH if META else 0
     PS_NB = PS_META + (META_NB if META else 0)
     MAX_ACTIVE = 80 if META else 64
@@ -174,10 +179,11 @@ def input_arch(name: str) -> str:
     return arch_name(base, meta=fields["meta"])
 
 
-def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True) -> str:
+def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True,
+               quant2: bool = False) -> str:
     """Architecture with the input features of `name` and these model options."""
     base, fields = split_arch(feature_arch(name))
-    fields.update(layers=layers, ctx=ctx, psqt=psqt)
+    fields.update(layers=layers, ctx=ctx, psqt=psqt, quant2=quant2)
     return arch_name(base, **fields)
 
 

@@ -28,6 +28,12 @@ File layout (maskfish/src/nnue/network.cpp, nnue_feature_transformer.h, layers/)
 
 L1 = 2048, or 1024 for the threat architectures. (7560 is 30240 for "att".)
 
+The "*-q2" architectures (make quant=2) have the same layout with the scales
+of quant.py: feature transformer weights and biases at scale 255 (not doubled
+by the engine), fc0 weights at 128 (biases 128*128), fc1 at 64 (biases
+128*64), fc2 weights at 128 (bias 128*128), fc0 context weights at 128*128/127;
+the layer stacks hash is xored with QUANT2_ARCH_HASH.
+
 The whole file is then compressed with zstd, which the engine requires.
 
 Files of version 0x7AF32F20 (before the engine had 8-bit HalfKA weights)
@@ -37,6 +43,7 @@ evaluation is unchanged if no weight is beyond +-127, which is reported).
 Usage:
     python serialize.py checkpoint.pt out.nnue [--description "..."]
     python serialize.py --convert default-meta-ctx in.nnue out.nnue (add architecture options)
+    python serialize.py --convert default-q2 in.nnue out.nnue  (requantize, see quant.py)
     python serialize.py --to-checkpoint in.nnue out.pt     (start from a net)
     python serialize.py --upgrade old.nnue new.nnue        (old file version)
 """
@@ -50,6 +57,7 @@ import struct
 import numpy as np
 
 import jieqi_features as F
+import quant as Q
 
 VERSION = 0x7AF32F21
 OLD_VERSION = 0x7AF32F20      # 16-bit HalfKA weights (LEB128)
@@ -72,10 +80,11 @@ def stack_dims(layers: int | None = None) -> dict:
 CTX_ARCH_HASH = 0x0C7A0000    # engine: ContextArchHash, xored into the layer stacks hash
 BLEND_ARCH_HASH = 0x0B1E0000  # engine: BlendArchHash (make lsblend=yes)
 CTX_TOWER_HASH = 0x0C7A16C7   # engine: ContextTower::get_hash_value()
+QUANT2_ARCH_HASH = 0x0A2C0000  # engine: Quant2ArchHash (make quant=2)
 
 
 def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None = None,
-              blend: bool | None = None) -> int:
+              blend: bool | None = None, quant2: bool | None = None) -> int:
     """Layer stacks hash, computed like NetworkArchitecture::get_hash_value()
     (0x63336B4A for L1 = 2048, 0x63336A4A for 1024; xored with CTX_ARCH_HASH
     with the context inputs)."""
@@ -83,6 +92,7 @@ def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None
     l1 = F.L1 if l1 is None else l1
     ctx = F.CTX if ctx is None else ctx
     blend = F.BLEND if blend is None else blend
+    quant2 = F.QUANT2 if quant2 is None else quant2
 
     def affine(prev, outputs):
         h = (0xCC03DAE4 + outputs) & m
@@ -94,7 +104,8 @@ def arch_hash(l1: int | None = None, layers: int | None = None, ctx: bool | None
     h = 0xEC42E90D ^ (l1 * 2)
     h = crelu(affine(h, stack_dims(layers)["fc0_out"]))
     h = crelu(affine(h, L3))
-    return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0) ^ (BLEND_ARCH_HASH if blend else 0)
+    return affine(h, 1) ^ (CTX_ARCH_HASH if ctx else 0) ^ (BLEND_ARCH_HASH if blend else 0) \
+        ^ (QUANT2_ARCH_HASH if quant2 else 0)
 
 
 NO_PSQT_HASH = 0x5E0D0000     # engine: FeatureTransformer::get_hash_value(), make psqt=no
@@ -193,8 +204,8 @@ def quantize(model) -> dict:
     factorized model is coalesced first (virtual features and the shared fc0
     part are folded into the real weights)."""
     import torch
-    from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
-                       NNUE2SCORE, OUTPUT_SCALE, MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT)
+    sc = Q.scales()
+    FT_SCALE = sc.ft
 
     L1 = F.L1
     model = model.coalesced()
@@ -204,7 +215,7 @@ def quantize(model) -> dict:
         w = model.ft.weight.detach()[:F.NUM_FEATURES]
         b = model.ft_bias.detach().cpu().double().numpy()
 
-        q = {}
+        q = {"quant2": F.QUANT2}
         q["ft_bias"] = np.round(b[:L1] * FT_SCALE).astype(np.int64)
         ftw = torch.round(w[:, :L1].float() * FT_SCALE)
         if ftw.abs().max().item() > 127:
@@ -216,7 +227,7 @@ def quantize(model) -> dict:
         del ftw
         if F.PSQT:
             q["psqt"] = np.round(w[:, L1:].cpu().double().numpy()
-                                 * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
+                                 * Q.OUTPUT_ONE).astype(np.int64)
         else:
             q["psqt"] = np.zeros((F.NUM_FEATURES, PSQT), dtype=np.int64)
         if F.THREATS:
@@ -227,7 +238,7 @@ def quantize(model) -> dict:
             q["thr_weight"] = tq.to(torch.int8).cpu().numpy()
             del tq
             q["thr_psqt"] = (np.round(tw[:, L1:].cpu().double().numpy()
-                                      * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64) if F.PSQT
+                                      * Q.OUTPUT_ONE).astype(np.int64) if F.PSQT
                              else np.zeros((F.THREAT_DIMS, PSQT), dtype=np.int64))
 
         d = stack_dims()
@@ -244,24 +255,22 @@ def quantize(model) -> dict:
             l1c = st.l1_ctx.weight.detach().cpu().double().numpy().reshape(
                 STACKS, d["fc0_out"], F.CONTEXT_INPUTS)
 
-    hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
-    q["fc0_bias"] = np.round(l1b * hb).astype(np.int64)
-    q["fc0_weight"] = np.round(np.clip(l1w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-                               * HIDDEN_WEIGHT_SCALE).astype(np.int64)
-    q["fc1_bias"] = np.round(l2b * hb).astype(np.int64)
+    def qw(w, scale):       # weights clipped to the int8 range, rounded
+        m = sc.max_weight(scale)
+        return np.round(np.clip(w, -m, m) * scale).astype(np.int64)
+
+    q["fc0_bias"] = np.round(l1b * sc.one0).astype(np.int64)
+    q["fc0_weight"] = qw(l1w, sc.w0)
+    q["fc1_bias"] = np.round(l2b * sc.one1).astype(np.int64)
     fc1 = np.zeros((STACKS, L3, d["fc1_file"]), dtype=np.int64)
-    fc1[:, :, :d["fc1_in"]] = np.round(np.clip(l2w, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-                                       * HIDDEN_WEIGHT_SCALE)
+    fc1[:, :, :d["fc1_in"]] = qw(l2w, sc.w1)
     q["fc1_weight"] = fc1
-    q["fc2_bias"] = np.round(ob * NNUE2SCORE * OUTPUT_SCALE).astype(np.int64)
-    q["fc2_weight"] = np.round(np.clip(ow, -MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
-                               * OUTPUT_WEIGHT_SCALE).astype(np.int64)
+    q["fc2_bias"] = np.round(ob * sc.out2).astype(np.int64)
+    q["fc2_weight"] = qw(ow, sc.w2)
     if F.CTX:
-        q["ctx_bias"] = np.round(cb * hb).astype(np.int64)
-        q["ctx_weight"] = np.round(np.clip(cw, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-                                   * HIDDEN_WEIGHT_SCALE).astype(np.int64)
-        q["fc0_ctx"] = np.round(np.clip(l1c, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-                                * HIDDEN_WEIGHT_SCALE).astype(np.int64)
+        q["ctx_bias"] = np.round(cb * Q.CTX_ONE).astype(np.int64)
+        q["ctx_weight"] = qw(cw, Q.CTX_W)
+        q["fc0_ctx"] = qw(l1c, sc.w0_ctx)
     for k in ("fc0_weight", "fc1_weight", "fc2_weight") + (("ctx_weight", "fc0_ctx") if F.CTX else ()):
         assert np.abs(q[k]).max() <= 127, k
     return q
@@ -326,7 +335,8 @@ def read_nnue(path: str) -> dict:
     if fth != ft_hash():
         raise ValueError("feature transformer hash mismatch")
     L1 = F.L1
-    q = {"description": description, "version": version, "psqt_present": F.PSQT}
+    q = {"description": description, "version": version, "psqt_present": F.PSQT,
+         "quant2": F.QUANT2}
     q["ft_bias"] = _read_leb(f, L1)
     if version == OLD_VERSION:
         q["ft_weight"] = _read_leb(f, F.NUM_FEATURES * L1, np.int16).reshape(F.NUM_FEATURES, L1)
@@ -376,7 +386,8 @@ def read_nnue(path: str) -> dict:
 def _arch_network_hashes() -> dict:
     out = {}
     for name, a in F.ARCHS.items():
-        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx, a.blend)
+        out[name] = ft_hash(a) ^ arch_hash(1024 if a.threats else 2048, a.layers, a.ctx, a.blend,
+                                           a.quant2)
     return out
 
 
@@ -409,15 +420,20 @@ def upgrade(q: dict) -> tuple[int, int]:
     return clamped
 
 
-def convertible(src: str, dst: str) -> str | None:
+def convertible(src: str, dst: str, requantize: bool = False) -> str | None:
     """None if a network of architecture src can be converted into dst by
     convert(), otherwise the reason. The conversions add options: "-meta" and
     "-ctx" (zero weights: the same evaluation), "-blend" (the layer stacks are
-    kept, the evaluation changes since they are selected differently)."""
+    kept, the evaluation changes since they are selected differently).
+    requantize: the quantizations ("-q2") may differ too: the network keeps
+    its integers and its "quant2" key, load_into_model() dequantizes it with
+    its own scales (train.py --init-net); not for writing a file."""
     sb, sf = F.split_arch(src)
     db, df = F.split_arch(dst)
     if sb != db:
         return f"the feature sets differ ({sb} / {db})"
+    if sf["quant2"] != df["quant2"] and not requantize:
+        return "the quantizations differ (not convertible: train with --init-net)"
     for field in ("layers", "psqt"):
         if sf[field] != df[field]:
             return f"the networks differ by {field} (not convertible: train with --init-net)"
@@ -427,10 +443,10 @@ def convertible(src: str, dst: str) -> str | None:
     return None
 
 
-def convert(q: dict, src: str, dst: str) -> dict:
+def convert(q: dict, src: str, dst: str, requantize: bool = False) -> dict:
     """Network q of architecture src as a network of architecture dst (see
     convertible()). F's architecture is left at dst."""
-    reason = convertible(src, dst)
+    reason = convertible(src, dst, requantize)
     if reason:
         raise ValueError(f"cannot convert {src} into {dst}: {reason}")
     sf, df = F.split_arch(src)[1], F.split_arch(dst)[1]
@@ -460,42 +476,41 @@ def load_into_model(q: dict, model, ft_only: bool = False):
     feature transformer (from a network with the same input features but the
     other layer stacks); the layer stacks of the model are kept."""
     import torch
-    from model import (FT_SCALE, HIDDEN_WEIGHT_SCALE, QUANTIZED_ONE, OUTPUT_WEIGHT_SCALE,
-                       NNUE2SCORE, OUTPUT_SCALE)
-    hb = HIDDEN_WEIGHT_SCALE * QUANTIZED_ONE
+    # the scales of the network q (its quantization may differ from the
+    # model's: the model clips the weights into its own ranges when it trains)
+    sc = Q.scales(q.get("quant2", False))
+    FT_SCALE, PSQT_SCALE = sc.ft, Q.OUTPUT_ONE
     L1 = F.L1
     with torch.no_grad():
         model.ft.weight[:F.NUM_FEATURES, :L1] = torch.from_numpy(q["ft_weight"]).float() / FT_SCALE
         # (a network without PSQT leaves the model's initial PSQT weights)
         if model.psqt_buckets and q.get("psqt_present", True):
-            model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / (NNUE2SCORE * OUTPUT_SCALE))
+            model.ft.weight[:F.NUM_FEATURES, L1:] = torch.tensor(q["psqt"] / PSQT_SCALE)
         model.ft.weight[F.PAD_INDEX].zero_()
         model.ft_bias[:L1] = torch.tensor(q["ft_bias"] / FT_SCALE)
         model.ft_bias[L1:] = 0
         if F.THREATS:
             model.ft_thr.weight[:, :L1] = torch.from_numpy(q["thr_weight"].astype(np.float32)) / FT_SCALE
             if model.psqt_buckets and q.get("psqt_present", True):
-                model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"]
-                                                           / (NNUE2SCORE * OUTPUT_SCALE))
+                model.ft_thr.weight[:, L1:] = torch.tensor(q["thr_psqt"] / PSQT_SCALE)
         for name in ("ft_ps", "ft_kb"):
             if getattr(model, name, None) is not None:
                 getattr(model, name).weight.zero_()
         if ft_only:
             return
         if model.ctx_tower is not None and "ctx_weight" in q:
-            model.ctx_tower.weight[:] = torch.tensor(q["ctx_weight"] / HIDDEN_WEIGHT_SCALE)
-            model.ctx_tower.bias[:] = torch.tensor(q["ctx_bias"] / hb)
+            model.ctx_tower.weight[:] = torch.tensor(q["ctx_weight"] / Q.CTX_W)
+            model.ctx_tower.bias[:] = torch.tensor(q["ctx_bias"] / Q.CTX_ONE)
             model.stacks.l1_ctx.weight[:] = torch.tensor(
-                q["fc0_ctx"].reshape(-1, F.CONTEXT_INPUTS) / HIDDEN_WEIGHT_SCALE)
+                q["fc0_ctx"].reshape(-1, F.CONTEXT_INPUTS) / sc.w0_ctx)
         st = model.stacks
-        st.l1.weight[:] = torch.tensor(q["fc0_weight"].reshape(-1, L1) / HIDDEN_WEIGHT_SCALE)
-        st.l1.bias[:] = torch.tensor(q["fc0_bias"].reshape(-1) / hb)
+        st.l1.weight[:] = torch.tensor(q["fc0_weight"].reshape(-1, L1) / sc.w0)
+        st.l1.bias[:] = torch.tensor(q["fc0_bias"].reshape(-1) / sc.one0)
         n = stack_dims()["fc1_in"]
-        st.l2.weight[:] = torch.tensor(q["fc1_weight"][:, :, :n].reshape(-1, n)
-                                       / HIDDEN_WEIGHT_SCALE)
-        st.l2.bias[:] = torch.tensor(q["fc1_bias"].reshape(-1) / hb)
-        st.output.weight[:] = torch.tensor(q["fc2_weight"] / OUTPUT_WEIGHT_SCALE)
-        st.output.bias[:] = torch.tensor(q["fc2_bias"] / (NNUE2SCORE * OUTPUT_SCALE))
+        st.l2.weight[:] = torch.tensor(q["fc1_weight"][:, :, :n].reshape(-1, n) / sc.w1)
+        st.l2.bias[:] = torch.tensor(q["fc1_bias"].reshape(-1) / sc.one1)
+        st.output.weight[:] = torch.tensor(q["fc2_weight"] / sc.w2)
+        st.output.bias[:] = torch.tensor(q["fc2_bias"] / sc.out2)
         if getattr(st, "l1_fact", None) is not None:
             st.l1_fact.weight.zero_()
 
@@ -510,24 +525,30 @@ def _tdiv(a: int, b: int) -> int:
 
 def _stack_eval(q: dict, bucket: int, x: np.ndarray, ctx_out) -> int:
     """Output of a layer stack (OutputScale units), like NetworkArchitecture::propagate()."""
-    def sqr_crelu(v):   # SqrClippedReLU and ClippedReLU, concatenated
-        return np.concatenate([np.minimum(127, (v * v) >> 19), np.clip(v >> 6, 0, 127)])
+    sc = Q.scales()
+
+    def sqr_crelu(v, shift):   # SqrClippedReLU and ClippedReLU, concatenated
+        return np.concatenate([np.minimum(127, (v * v) >> (2 * shift + 7)),
+                               np.clip(v >> shift, 0, 127)])
 
     d = stack_dims()
     fc0 = q["fc0_bias"][bucket] + q["fc0_weight"][bucket] @ x
     if ctx_out is not None:
         fc0 = fc0 + q["fc0_ctx"][bucket] @ ctx_out
     h = np.zeros(d["fc1_file"], dtype=np.int64)
-    h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]])
+    h[:d["fc1_in"]] = sqr_crelu(fc0[:d["act0"]], sc.shift0)
     fc1 = q["fc1_bias"][bucket] + q["fc1_weight"][bucket] @ h
     if F.LAYERS == 2:
-        h2 = np.concatenate([h, sqr_crelu(fc1)])
+        h2 = np.concatenate([h, sqr_crelu(fc1, sc.shift1)])
         direct = int(fc0[L2_V2 - 2]) - int(fc0[L2_V2 - 1])
     else:
-        h2 = np.clip(fc1 >> 6, 0, 127)
+        h2 = np.clip(fc1 >> sc.shift1, 0, 127)
         direct = int(fc0[L2])
     fc2 = int(q["fc2_bias"][bucket] + q["fc2_weight"][bucket] @ h2)
-    return fc2 + _tdiv(direct * (600 * 16), 127 * 64)
+    one0 = int(sc.one0)
+    if sc.quant2:          # fc2 in fc0 units, the sum converted
+        return _tdiv((fc2 + direct) * (600 * 16), one0)
+    return fc2 + _tdiv(direct * (600 * 16), one0)
 
 
 def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
@@ -547,9 +568,10 @@ def quantized_eval(q: dict, fen: str) -> tuple[int, int, int]:
         for i in thr_feats:
             acc += q["thr_weight"][i].astype(np.int64)
             ps += q["thr_psqt"][i]
-        acc *= 2                                     # doubled in transform()
-        a = np.clip(acc[:L1 // 2], 0, 254)
-        b = np.clip(acc[L1 // 2:], 0, 254)
+        sc = Q.scales()
+        acc *= sc.ft_mult                            # doubled in transform() (quant=1)
+        a = np.clip(acc[:L1 // 2], 0, sc.ft_clip)
+        b = np.clip(acc[L1 // 2:], 0, sc.ft_clip)
         transformed.append((a * b) // 512)
         psqt_acc.append(ps[bucket])
     x = np.concatenate(transformed)                  # uint8 in the engine
@@ -587,13 +609,28 @@ def main():
         F.set_arch(src)
         q = read_nnue(args.source)
         try:
-            q = convert(q, src, args.convert)
+            q = convert(q, src, args.convert, requantize=True)
         except ValueError as e:
             raise SystemExit(str(e))
+        note = ""
+        if q["quant2"] != F.QUANT2:
+            # another quantization ("-q2"): dequantized into a model of the
+            # target architecture, clipped into its ranges, quantized again
+            from model import NNUE
+            model = NNUE(init_psqt=False)
+            load_into_model(q, model)
+            sc = Q.scales()
+            w = model.ft.weight[:F.NUM_FEATURES, :F.L1]
+            out = int((w.abs() > sc.max_ft_weight + 1e-6).sum())
+            model.clip_weights()
+            q = {**quantize(model), "description": q["description"]}
+            note = (f", requantized: {out} feature transformer weights clipped to "
+                    f"+-{sc.max_ft_weight:.3f}, the evaluation changes slightly")
         write_nnue(q, args.target, q["description"])
         same = not (F.split_arch(args.convert)[1]["blend"] and not F.split_arch(src)[1]["blend"])
         print(f"written {args.target} (arch {src} -> {F.ARCH}"
-              + (", same evaluation)" if same else ", layer stacks selected differently)"))
+              + (", same evaluation" if same and not note else
+                 note if note else ", layer stacks selected differently") + ")")
         return
 
     if args.upgrade:

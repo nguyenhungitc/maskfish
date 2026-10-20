@@ -58,6 +58,7 @@ import torch
 from torch import nn
 
 import jieqi_features as F
+import quant as Q
 
 L1 = 2048            # feature transformer outputs per perspective (F.L1 for the current arch)
 L2 = 15              # layer stacks 1: activated fc0 outputs (+1 direct term)
@@ -65,7 +66,8 @@ L2_V2 = 32           # layer stacks 2 (make layers=2): fc0 outputs
 L3 = 32
 NNUE2SCORE = 600.0   # network unit -> internal score units
 
-# Quantization constants (must match maskfish/src/nnue)
+# Quantization constants of the default scheme (make quant=1), kept for other
+# scripts; the model uses quant.scales() of its architecture ("-q2": make quant=2)
 FT_SCALE = 127.0                         # file FT scale (the engine doubles the outputs)
 HIDDEN_WEIGHT_SCALE = 64.0               # 1 << WeightScaleBits
 QUANTIZED_ONE = 127.0
@@ -117,11 +119,11 @@ def wide(x: torch.Tensor) -> torch.Tensor:
     return x if x.device.type == "mps" else x.double()
 
 
-def _sqr_crelu_q(v: torch.Tensor) -> torch.Tensor:
+def _sqr_crelu_q(v: torch.Tensor, shift: int) -> torch.Tensor:
     """SqrClippedReLU and ClippedReLU of the engine on integer fc outputs:
-    min(127, v * v >> 19) and clamp(v >> 6, 0, 127)."""
-    sq = torch.clamp(q_floor(v * v / float(1 << 19)), max=127.0)
-    return torch.cat([sq, torch.clamp(q_floor(v / 64.0), 0.0, 127.0)], dim=1)
+    min(127, v * v >> (2 * shift + 7)) and clamp(v >> shift, 0, 127)."""
+    sq = torch.clamp(q_floor(v * v / float(1 << (2 * shift + 7))), max=127.0)
+    return torch.cat([sq, torch.clamp(q_floor(v / float(1 << shift)), 0.0, 127.0)], dim=1)
 
 
 class LayerStacks(nn.Module):
@@ -139,6 +141,7 @@ class LayerStacks(nn.Module):
     def __init__(self, count: int = F.NUM_LAYER_STACKS, l1_fact: bool = False):
         super().__init__()
         self.count = count
+        self.s = Q.scales()          # quantization of the architecture
         self.ctx = F.CTX
         self.in_dim = F.L1
         self.layers = F.LAYERS
@@ -170,10 +173,11 @@ class LayerStacks(nn.Module):
         with torch.no_grad():
             self.l1_fact.weight.zero_()
 
-    @staticmethod
-    def _activate(v: torch.Tensor) -> torch.Tensor:
-        """SqrClippedReLU and ClippedReLU of the engine, concatenated."""
-        return torch.clamp(torch.cat([v.pow(2.0) * (127.0 / 128.0), v], dim=1), 0.0, 1.0)
+    def _activate(self, v: torch.Tensor) -> torch.Tensor:
+        """SqrClippedReLU and ClippedReLU of the engine, concatenated (float:
+        quant=1 clamps to 1.0 with v^2 * 127/128, quant=2 to 127/128 with v^2)."""
+        s = self.s
+        return torch.clamp(torch.cat([v.pow(2.0) * s.sqr_gain, v], dim=1), 0.0, s.act_max)
 
     def forward(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None, blend=None) -> torch.Tensor:
         """Output of the layer stack of each sample. blend ("-blend"
@@ -209,7 +213,7 @@ class LayerStacks(nn.Module):
                 l1x = l1x + fact
             a0 = self._activate(l1x)
             l2 = self.l2(a0).reshape(n * self.count, L3)[idx]
-            h = torch.clamp(l2, 0.0, 1.0)
+            h = torch.clamp(l2, 0.0, self.s.act_max)
             direct = l1out.squeeze(1)
 
         w = self.output.weight[buckets]          # (n, out_in)
@@ -227,15 +231,17 @@ class LayerStacks(nn.Module):
             a = self.act0
             w0 = torch.cat([v[:, :a] + self.l1_fact.weight.unsqueeze(0), v[:, a:]], dim=1)
             w0 = w0.reshape(self.count * self.fc0_out, self.in_dim)
-        m, o = MAX_HIDDEN_WEIGHT, MAX_OUTPUT_WEIGHT
-        q = {"w0": q_round(torch.clamp(w0, -m, m) * HIDDEN_WEIGHT_SCALE),
-             "b0": q_round(self.l1.bias * HIDDEN_ONE),
-             "w1": q_round(torch.clamp(self.l2.weight, -m, m) * HIDDEN_WEIGHT_SCALE),
-             "b1": q_round(self.l2.bias * HIDDEN_ONE),
-             "w2": q_round(torch.clamp(self.output.weight, -o, o) * OUTPUT_WEIGHT_SCALE),
-             "b2": q_round(self.output.bias * OUTPUT_ONE)}
+        s = self.s
+
+        def qw(w, scale):
+            m = s.max_weight(scale)
+            return q_round(torch.clamp(w, -m, m) * scale)
+
+        q = {"w0": qw(w0, s.w0), "b0": q_round(self.l1.bias * s.one0),
+             "w1": qw(self.l2.weight, s.w1), "b1": q_round(self.l2.bias * s.one1),
+             "w2": qw(self.output.weight, s.w2), "b2": q_round(self.output.bias * s.out2)}
         if self.l1_ctx is not None:
-            q["w0_ctx"] = q_round(torch.clamp(self.l1_ctx.weight, -m, m) * HIDDEN_WEIGHT_SCALE)
+            q["w0_ctx"] = qw(self.l1_ctx.weight, s.w0_ctx)
         return q
 
     def forward_qat(self, x: torch.Tensor, buckets: torch.Tensor, ctx=None,
@@ -259,38 +265,45 @@ class LayerStacks(nn.Module):
         return out
 
     def _forward_stack_qat(self, q: dict, l1_all: torch.Tensor, buckets: torch.Tensor):
+        s = self.s
         n = buckets.shape[0]
         idx = torch.arange(n, device=l1_all.device) * self.count + buckets
         l1 = l1_all[idx]
         if self.layers == 2:
-            a0 = _sqr_crelu_q(l1)
+            a0 = _sqr_crelu_q(l1, s.shift0)
             l2 = torch.nn.functional.linear(a0, q["w1"], q["b1"]).reshape(n * self.count, L3)[idx]
-            h = torch.cat([a0, _sqr_crelu_q(l2)], dim=1)
+            h = torch.cat([a0, _sqr_crelu_q(l2, s.shift1)], dim=1)
             direct = l1[:, L2_V2 - 2] - l1[:, L2_V2 - 1]
         else:
-            a0 = _sqr_crelu_q(l1[:, :L2])
+            a0 = _sqr_crelu_q(l1[:, :L2], s.shift0)
             l2 = torch.nn.functional.linear(a0, q["w1"], q["b1"]).reshape(n * self.count, L3)[idx]
-            h = torch.clamp(q_floor(l2 / 64.0), 0.0, 127.0)
+            h = torch.clamp(q_floor(l2 / float(1 << s.shift1)), 0.0, 127.0)
             direct = l1[:, L2]
         out = (h * q["w2"][buckets]).sum(dim=1) + q["b2"][buckets]
-        # the direct term: 1.0 is HIDDEN_ONE, scaled to OUTPUT_ONE (C++ division)
-        return (out + q_tdiv(wide(direct) * OUTPUT_ONE, HIDDEN_ONE).to(out.dtype)).unsqueeze(1)
+        if s.quant2:
+            # fc2 is in fc0 units: the sum is converted to OUTPUT_ONE (C++ division)
+            return q_tdiv(wide(out + direct) * OUTPUT_ONE, s.one0).to(out.dtype).unsqueeze(1)
+        # the direct term: 1.0 is one0, scaled to OUTPUT_ONE (C++ division)
+        return (out + q_tdiv(wide(direct) * OUTPUT_ONE, s.one0).to(out.dtype)).unsqueeze(1)
 
     def clip_weights(self):
+        s = self.s
+        m0, m1, m2 = s.max_weight(s.w0), s.max_weight(s.w1), s.max_weight(s.w2)
         with torch.no_grad():
             if self.l1_fact is None:
-                self.l1.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                self.l1.weight.clamp_(-m0, m0)
             else:
                 # Clip the coalesced weights (stack + shared part), as exported
                 w = self.l1.weight.view(self.count, self.fc0_out, self.in_dim)
                 f = self.l1_fact.weight.unsqueeze(0)
                 a = self.act0
-                w[:, :a] = torch.clamp(w[:, :a] + f, -MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT) - f
-                w[:, a:].clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-            self.l2.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
-            self.output.weight.clamp_(-MAX_OUTPUT_WEIGHT, MAX_OUTPUT_WEIGHT)
+                w[:, :a] = torch.clamp(w[:, :a] + f, -m0, m0) - f
+                w[:, a:].clamp_(-m0, m0)
+            self.l2.weight.clamp_(-m1, m1)
+            self.output.weight.clamp_(-m2, m2)
             if self.l1_ctx is not None:
-                self.l1_ctx.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                mc = s.max_weight(s.w0_ctx)
+                self.l1_ctx.weight.clamp_(-mc, mc)
 
 
 def context_from_features(stm_idx: torch.Tensor) -> torch.Tensor:
@@ -341,6 +354,7 @@ class NNUE(nn.Module):
                  kb_factor: bool = False):
         super().__init__()
         L1 = self.l1_size = F.L1
+        self.s = Q.scales()          # quantization of the architecture
         self.psqt_buckets = F.NUM_PSQT_BUCKETS if F.PSQT else 0
         width = L1 + self.psqt_buckets
         self.ft_buckets = F.NUM_FEATURES // F.PS_NB      # king (x attack) buckets
@@ -481,7 +495,7 @@ class NNUE(nn.Module):
         s = torch.clamp(stm[:, :L1], 0.0, 1.0)
         o = torch.clamp(nstm[:, :L1], 0.0, 1.0)
         h = L1 // 2
-        x = torch.cat([s[:, :h] * s[:, h:], o[:, :h] * o[:, h:]], dim=1) * (127.0 / 128.0)
+        x = torch.cat([s[:, :h] * s[:, h:], o[:, :h] * o[:, h:]], dim=1) * self.s.x_gain
 
         ctx = None
         if self.ctx_tower is not None:
@@ -506,9 +520,10 @@ class NNUE(nn.Module):
             if self.ft_kb is not None:
                 w = w + self.ft_kb.weight[rows // F.PS_NB]
         pad = w.new_zeros((1, w.shape[1]))
-        wq = torch.cat([q_round_ft(w[:, :L1], FT_SCALE), q_round(w[:, L1:] * OUTPUT_ONE)], dim=1)
+        sc = self.s
+        wq = torch.cat([q_round_ft(w[:, :L1], sc.ft), q_round(w[:, L1:] * OUTPUT_ONE)], dim=1)
         wq = torch.cat([wq, pad])              # PAD_INDEX row
-        bias = torch.cat([q_round(self.ft_bias[:L1] * FT_SCALE),
+        bias = torch.cat([q_round(self.ft_bias[:L1] * sc.ft),
                           self.ft_bias.new_zeros(self.psqt_buckets)])
         stm = torch.nn.functional.embedding_bag(stm_idx.long(), wq, mode="sum") + bias
         nstm = torch.nn.functional.embedding_bag(nstm_idx.long(), wq, mode="sum") + bias
@@ -516,7 +531,7 @@ class NNUE(nn.Module):
             if threats is None:
                 raise ValueError("this architecture needs the threat features")
             tw = self.ft_thr.weight
-            tq = torch.cat([q_round_ft(tw[:, :L1], FT_SCALE), q_round(tw[:, L1:] * OUTPUT_ONE)],
+            tq = torch.cat([q_round_ft(tw[:, :L1], sc.ft), q_round(tw[:, L1:] * OUTPUT_ONE)],
                            dim=1)
             idx, off = threats
             t = torch.nn.functional.embedding_bag(idx.long(), tq, off.long(), mode="sum")
@@ -530,21 +545,21 @@ class NNUE(nn.Module):
         else:
             psqt = stm.new_zeros((stm.shape[0], 1))
 
-        # FeatureTransformer::transform(): accumulators doubled, clamped to
-        # 0..254, the two halves multiplied, >> 9
+        # FeatureTransformer::transform(): accumulators doubled (quant=1),
+        # clamped to 0..254 (0..255), the two halves multiplied, >> 9
         h = L1 // 2
         parts = []
         for acc in (stm, nstm):
-            a = torch.clamp(2.0 * acc[:, :h], 0.0, 254.0)
-            c = torch.clamp(2.0 * acc[:, h:L1], 0.0, 254.0)
+            a = torch.clamp(sc.ft_mult * acc[:, :h], 0.0, float(sc.ft_clip))
+            c = torch.clamp(sc.ft_mult * acc[:, h:L1], 0.0, float(sc.ft_clip))
             parts.append(q_floor(a * c / 512.0))
         x = torch.cat(parts, dim=1)
 
         ctx = None
         if self.ctx_tower is not None:
-            m = MAX_HIDDEN_WEIGHT
-            cw = q_round(torch.clamp(self.ctx_tower.weight, -m, m) * HIDDEN_WEIGHT_SCALE)
-            cb = q_round(self.ctx_tower.bias * HIDDEN_ONE)
+            m = sc.max_weight(Q.CTX_W)
+            cw = q_round(torch.clamp(self.ctx_tower.weight, -m, m) * Q.CTX_W)
+            cb = q_round(self.ctx_tower.bias * Q.CTX_ONE)
             ci = context_from_features(stm_idx).to(x.dtype)
             ctx = torch.clamp(q_floor(torch.nn.functional.linear(ci, cw, cb) / 64.0), 0.0, 127.0)
         if F.BLEND and blend is None:
@@ -556,11 +571,12 @@ class NNUE(nn.Module):
         self.stacks.clip_weights()
         with torch.no_grad():
             if self.ctx_tower is not None:
-                self.ctx_tower.weight.clamp_(-MAX_HIDDEN_WEIGHT, MAX_HIDDEN_WEIGHT)
+                m = self.s.max_weight(Q.CTX_W)
+                self.ctx_tower.weight.clamp_(-m, m)
             # Keep the FT weights inside the int8 range of the file: the
             # coalesced weights (with the virtual features), as exported
             L1 = self.l1_size
-            lim = MAX_FT_WEIGHT
+            lim = self.s.max_ft_weight
             if self.ft_ps is None:
                 self.ft.weight[:, :L1].clamp_(-lim, lim)
             else:
@@ -573,7 +589,7 @@ class NNUE(nn.Module):
                     if self.ft_kb is not None:
                         f = f + self.ft_kb.weight[r // F.PS_NB, :L1]
                     w[i:i + chunk, :L1] = torch.clamp(w[i:i + chunk, :L1] + f, -lim, lim) - f
-            self.ft_bias[:L1].clamp_(-MAX_FT_BIAS, MAX_FT_BIAS)
+            self.ft_bias[:L1].clamp_(-self.s.max_ft_bias, self.s.max_ft_bias)
             if self.ft_thr is not None:
                 self.ft_thr.weight[:, :L1].clamp_(-lim, lim)
             self.ft.weight[F.PAD_INDEX].zero_()

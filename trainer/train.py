@@ -380,6 +380,8 @@ def main():
                     help="layer stacks: 1 (default) or 2 (make layers=2, architecture *-l2)")
     ap.add_argument("--ctx", action="store_true",
                     help="inventory context inputs of the layer stacks (make ctx=yes, *-ctx)")
+    ap.add_argument("--quant2", action="store_true",
+                    help="quantization of current Pikafish (make quant=2, architecture *-q2)")
     ap.add_argument("--no-psqt", action="store_true",
                     help="no PSQT buckets (make psqt=no, architecture *-nopsqt)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -453,7 +455,8 @@ def main():
             say(f"warning: data prepared with different material settings {kinds}", flush=True)
     say("loss on: " + ("evaluate() scaling of the network output" if eval_scale
                        else "raw network output"), flush=True)
-    F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt))
+    F.set_arch(F.model_arch(train.arch, layers=args.layers, ctx=args.ctx, psqt=not args.no_psqt,
+                            quant2=args.quant2))
     init_q, init_ft_only = None, False
     if args.init_net:
         # A network that converts into the trained architecture (adding -meta,
@@ -466,8 +469,10 @@ def main():
         init_q = S.read_nnue(args.init_net)
         ib, ifl = F.split_arch(init_arch)
         tb, tfl = F.split_arch(target)
-        if S.convertible(init_arch, target) is None:
-            init_q = S.convert(init_q, init_arch, target)
+        if S.convertible(init_arch, target, requantize=True) is None:
+            # (with another quantization, load_into_model() dequantizes it
+            # with its own scales and the weights are clipped into this one's)
+            init_q = S.convert(init_q, init_arch, target, requantize=True)
         elif ib == tb and not (ifl["meta"] and not tfl["meta"]):
             init_ft_only = True
             if tfl["meta"] and not ifl["meta"]:
@@ -497,6 +502,16 @@ def main():
                      kb_factor=args.factorize_kb)
         if init_q is not None:
             S.load_into_model(init_q, model, ft_only=init_ft_only)
+            if init_q.get("quant2", False) != F.QUANT2:
+                # another quantization: clip into this one's ranges now, and say
+                # how much of the feature transformer that changes
+                lim, L1 = model.s.max_ft_weight, F.L1
+                w = model.ft.weight[:F.NUM_FEATURES, :L1]
+                out = int((w.abs() > lim + 1e-6).sum())
+                model.clip_weights()
+                say(f"--init-net has the other quantization: requantized, {out} of {w.numel()} "
+                    f"feature transformer weights ({100 * out / w.numel():.3f}%) clipped to "
+                    f"+-{lim:.3f}", flush=True)
     say(f"factorized inputs: {model.factorized} (king bucket rows: {model.ft_kb is not None}), "
         f"shared fc0: {model.has_l1_fact}", flush=True)
     model.to(device)

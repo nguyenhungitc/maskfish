@@ -43,6 +43,7 @@ import time
 import numpy as np
 
 import jieqi_features as F
+import quant as Q
 import serialize as S
 from textio import open_text
 
@@ -79,6 +80,7 @@ def transformed(q: dict, fens: list[str]) -> np.ndarray:
     w = q["ft_weight"].astype(np.int32)
     tw = q["thr_weight"].astype(np.int32) if F.THREATS else None
     bias = q["ft_bias"].astype(np.int32)
+    sc = Q.scales()
     out = np.empty((2 * len(fens), h), dtype=np.uint8)
     for n, fen in enumerate(fens):
         stm_f, nstm_f, _, _ = F.fen_to_features(fen)
@@ -87,7 +89,7 @@ def transformed(q: dict, fens: list[str]) -> np.ndarray:
             acc = bias + w[feats].sum(axis=0) if feats else bias.copy()
             if tw is not None and tf:
                 acc = acc + tw[tf].sum(axis=0)
-            acc = np.clip(2 * acc[:L1], 0, 254)
+            acc = np.clip(sc.ft_mult * acc[:L1], 0, sc.ft_clip)
             out[2 * n + p] = (acc[:h] * acc[h:]) // 512
     return out
 

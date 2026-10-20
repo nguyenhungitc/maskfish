@@ -95,7 +95,7 @@ if [[ -z "${PYTHON:-}" ]]; then
 fi
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_EPOCH_EVERY:=5}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
 : "${MAKE_ARCH:=native}"; : "${NNUE_ARCH:=default}"; : "${LAYERS:=1}"
-: "${META:=0}"; : "${BLEND:=0}"; : "${CTX:=0}"; : "${PSQT:=1}"; : "${INIT_NET:=}"
+: "${META:=0}"; : "${BLEND:=0}"; : "${CTX:=0}"; : "${PSQT:=1}"; : "${QUANT:=1}"; : "${INIT_NET:=}"
 : "${GAMES:=50000}"; : "${VAL_GAMES:=1000}"; : "${NODES:=5000}"; : "${DEPTH:=0}"
 : "${GEN_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"; : "${ADJUDICATE:=3000}"; : "${GEN_OPTS:=}"
 : "${CHANCE_SCALING:=}"; : "${SEED_BASE:=}"
@@ -447,7 +447,8 @@ s_init() {
   fi
   if [[ -n "$INIT_NET" ]]; then
     # an existing net (e.g. of the default line) converted into this architecture
-    # (README section 7.9): -meta / -ctx keep its evaluation, -blend its layer stacks
+    # (README section 7.9): -meta / -ctx keep its evaluation, -blend its layer
+    # stacks, -q2 (from a quant=1 net) requantizes it (README 7.12)
     [[ -f "$INIT_NET" ]] || (( DRY_RUN )) || fail "INIT_NET $INIT_NET not found" || return 1
     run "$CUR_LOG" "$PYTHON" -u serialize.py --convert "$ARCH_FULL" "$INIT_NET" "$NET_CUR" \
       || fail "INIT_NET cannot be converted into $ARCH_FULL (README section 7.9)" || return 1
