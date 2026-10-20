@@ -7,10 +7,12 @@
 # build embeds in the binary.
 #
 # The ref is fetched from the remote origin, then from the repository of
-# Maskfish (when origin is a fork without the ref), at every run: the copy is
-# replaced when the network of the ref changed. This needs a git clone of the
-# source (`git clone` itself does not fetch this ref). When the ref cannot be
-# fetched (no connection), an existing copy is kept.
+# Maskfish (when origin is a fork without the ref, or cannot be fetched
+# without a prompt, e.g. over ssh with a key that is not in ssh-agent), at
+# every run: the copy is replaced when the network of the ref changed. This
+# needs a git clone of the source (`git clone` itself does not fetch this
+# ref). When the ref cannot be fetched (no connection), an existing copy is
+# kept.
 #
 # A failed fetch does not stop the build: the engine builds without a
 # network, but then needs one at run time (EvalFile option).
@@ -34,10 +36,23 @@ is_valid() {
   [ -s "$1" ] && [ "$(od -An -tx1 -N4 "$1" | tr -d ' \n')" = "28b52ffd" ]
 }
 
+# git fetch that never prompts: no password (HTTPS), and ssh in batch mode, so
+# that a key with a passphrase that is not in ssh-agent makes the fetch fail
+# instead of asking for it (a GIT_SSH program, e.g. plink, is left as it is)
+fetch_quiet() {
+  if [ -z "$GIT_SSH" ]; then
+    _ssh="${GIT_SSH_COMMAND:-$(git config core.sshCommand 2> /dev/null || echo ssh)}"
+    GIT_SSH_COMMAND="$_ssh -o BatchMode=yes" GIT_TERMINAL_PROMPT=0 \
+      git fetch --quiet --no-tags "$@" 2> /dev/null
+  else
+    GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags "$@" 2> /dev/null
+  fi
+}
+
 # Fetches the ref (into the local ref of the same name) from $1 and writes its
 # maskfish.nnue to $2
 fetch_ref() {
-  GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags "$1" "+$_ref:$_ref" 2> /dev/null &&
+  fetch_quiet "$1" "+$_ref:$_ref" &&
     git cat-file blob "$_ref:$_filename" > "$2" 2> /dev/null
 }
 
