@@ -221,6 +221,57 @@ static constexpr std::uint32_t Mask[4] = {1, 2, 4, 8};
 
 #endif
 
+// On x86 with SSSE3 or better (AVX-512 with BW), two rows of 8-bit feature
+// transformer weights are widened and summed into 16-bit lanes with one
+// unpack and one maddubs (against a vector of ones), instead of one sign
+// extension per row (Pikafish "Pair int8 weight rows in accumulator
+// updates"). The weights are permuted at load time to match (see
+// FeatureTransformer::WideningPairOrder): vec_widen_i8() and
+// vec_widen_pair_i8() turn sizeof(vec_t) weights into two consecutive
+// vectors of the accumulator.
+#if defined(USE_SSSE3) && (!defined(USE_AVX512) || defined(USE_AVX512BW))
+    #define USE_PAIRED_WIDENING_ADD
+
+    #if defined(USE_AVX512)
+        #define vec_loadu_8(a) _mm512_loadu_si512(reinterpret_cast<const void*>(a))
+        #define vec_set_8(a) _mm512_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm512_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm512_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm512_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm512_srai_epi16(a, b)
+    #elif defined(USE_AVX2)
+        #define vec_loadu_8(a) _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a))
+        #define vec_set_8(a) _mm256_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm256_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm256_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm256_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm256_srai_epi16(a, b)
+    #else
+        #define vec_loadu_8(a) _mm_loadu_si128(reinterpret_cast<const __m128i*>(a))
+        #define vec_set_8(a) _mm_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm_srai_epi16(a, b)
+    #endif
+
+// The sizeof(vec_t) weights at p, sign-extended to 16 bits: lo then hi
+inline void vec_widen_i8(const std::int8_t* p, vec_t& lo, vec_t& hi) {
+    const vec_t w = vec_loadu_8(p);
+    lo            = vec_srai_16(vec_unpacklo_8(vec_zero(), w), 8);
+    hi            = vec_srai_16(vec_unpackhi_8(vec_zero(), w), 8);
+}
+
+// The sums of the sizeof(vec_t) weights at p0 and at p1, in 16 bits
+inline void vec_widen_pair_i8(const std::int8_t* p0, const std::int8_t* p1, vec_t& lo, vec_t& hi) {
+    const vec_t ones = vec_set_8(1);
+    const vec_t w0   = vec_loadu_8(p0);
+    const vec_t w1   = vec_loadu_8(p1);
+    lo               = vec_maddubs_16(ones, vec_unpacklo_8(w0, w1));
+    hi               = vec_maddubs_16(ones, vec_unpackhi_8(w0, w1));
+}
+#endif
+
 #ifdef VECTOR
 // Loads sizeof(vec_t) / 2 feature transformer weights of 8 bits and
 // sign-extends them to 16-bit lanes

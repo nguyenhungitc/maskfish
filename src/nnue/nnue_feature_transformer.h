@@ -23,6 +23,7 @@
 #define NNUE_FEATURE_TRANSFORMER_H_INCLUDED
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <iosfwd>
@@ -121,6 +122,29 @@ class FeatureTransformer {
 
     static constexpr auto InversePackusEpi16Order = invert_permutation(PackusEpi16Order);
 
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+    // The threat weight rows are read a full vector (sizeof(vec_t) bytes) at a
+    // time by the threat accumulator updates: unpack{lo,hi}_epi8 interleave
+    // the bytes of two rows (or of a row and zero) and maddubs against a
+    // vector of ones sums each pair into a 16-bit lane (see
+    // vec_widen_pair_i8()). The unpacks work within 128-bit lanes, so the
+    // 16-bit results of a vector come out with its 8-byte blocks in the order
+    // {0, 2, 4, 6, ...} (lo) and {1, 3, 5, 7, ...} (hi). Storing the 8-byte
+    // blocks of every vector in this order at load time makes lo and hi two
+    // consecutive vectors of the accumulator, whose layout is unchanged. (The
+    // identity with 128-bit vectors.) The HalfKA rows are not permuted: an
+    // incremental update has mostly one row of each sign, which gain nothing.
+    static constexpr auto WideningPairOrder = []() {
+        constexpr std::size_t              NumBlocks = sizeof(SIMD::vec_t) / 8;
+        std::array<std::size_t, NumBlocks> order{};
+        for (std::size_t i = 0; i < NumBlocks; ++i)
+            order[i] = i % 2 == 0 ? i / 2 : NumBlocks / 2 + i / 2;
+        return order;
+    }();
+
+    static constexpr auto InverseWideningPairOrder = invert_permutation(WideningPairOrder);
+#endif
+
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
         // Networks without PSQT (make psqt=no) have a different layout
@@ -144,9 +168,17 @@ class FeatureTransformer {
 #ifdef JIEQI_NNUE_THREATS
         permute<8>(threatWeights, PackusEpi16Order);
 #endif
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, WideningPairOrder);
+#endif
     }
 
     void unpermute_weights() {
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, InverseWideningPairOrder);
+#endif
         permute<16>(biases, InversePackusEpi16Order);
         permute<8>(weights, InversePackusEpi16Order);
 #ifdef JIEQI_NNUE_THREATS

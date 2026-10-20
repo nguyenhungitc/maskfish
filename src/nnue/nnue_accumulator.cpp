@@ -19,6 +19,7 @@
 
 #include "nnue_accumulator.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <initializer_list>
@@ -125,23 +126,136 @@ void AccumulatorStack::evaluate(const Position&                       pos,
 #if defined(JIEQI_NNUE_THREATS) || defined(JIEQI_NNUE_META)
 namespace {
 
-// dst = src - sum of the `removed` rows + sum of the `added` rows of the given
-// weights (src == nullptr: zero; src == dst: in place), for the accumulator
-// and the PSQT values. The
-// accumulator is processed by tiles kept in registers, so that it is read and
-// written once whatever the number of features.
-template<IndexType Dimensions>
-void apply_rows(std::int16_t*       dst,
-                std::int32_t*       dstPsqt,
-                const std::int16_t* src,
-                const std::int32_t* srcPsqt,
-                const std::int8_t* __restrict weights,
-                const PSQTWeightType* __restrict psqtWeights,
-                const IndexType* removed,
-                int              nRemoved,
-                const IndexType* added,
-                int              nAdded) {
+    #if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+// Rows of 8-bit threat weights to add to or to subtract from an accumulator
+// (Pikafish "Pair int8 weight rows in accumulator updates"). They are applied
+// two at a time with vec_widen_pair_i8() (one shuffle per two rows instead of
+// one sign extension per row), the last one alone if their number is odd. The
+// 16-bit sums wrap around like the separate additions they replace, so the
+// accumulator is the same whatever the order. A threat update has many rows
+// of each sign, unlike an incremental HalfKA update (mostly one of each), for
+// which this is not done.
+template<int MaxRows>
+class WeightRows {
+   public:
+    void push(const std::int8_t* row) {
+        assert(count < MaxRows);
+        rows[count++] = row;
+    }
 
+    // acc[0 .. 2 * NumVecs): the 16-bit lanes of the NumVecs * sizeof(vec_t)
+    // weights at the offset j of every row
+    template<int Sign, int NumVecs>
+    void apply(IndexType j, vec_t* acc) const {
+        static_assert(Sign == 1 || Sign == -1);
+        auto update = [](vec_t& a, const vec_t& w) {
+            if constexpr (Sign > 0)
+                a = vec_add_16(a, w);
+            else
+                a = vec_sub_16(a, w);
+        };
+
+        int i = 0;
+        for (; i + 1 < count; i += 2)
+            for (int v = 0; v < NumVecs; ++v)
+            {
+                vec_t lo, hi;
+                vec_widen_pair_i8(rows[i] + j + v * sizeof(vec_t),
+                                  rows[i + 1] + j + v * sizeof(vec_t), lo, hi);
+                update(acc[2 * v], lo);
+                update(acc[2 * v + 1], hi);
+            }
+        if (i < count)
+            for (int v = 0; v < NumVecs; ++v)
+            {
+                vec_t lo, hi;
+                vec_widen_i8(rows[i] + j + v * sizeof(vec_t), lo, hi);
+                update(acc[2 * v], lo);
+                update(acc[2 * v + 1], hi);
+            }
+    }
+
+   private:
+    const std::int8_t* rows[MaxRows];
+    int                count = 0;
+};
+
+// dst = src - the removed rows + the added rows (src == nullptr: zero), over
+// the Dimensions 16-bit lanes of an accumulator, by tiles kept in registers
+template<IndexType Dimensions, int MaxRows>
+void apply_weight_rows(std::int16_t*              dst,
+                       const std::int16_t*        src,
+                       const WeightRows<MaxRows>& removed,
+                       const WeightRows<MaxRows>& added) {
+    // Accumulator registers of a tile: the widening needs 4 more registers
+    // (two rows, ones, zero), so at most 12 of the 16 vector registers below
+    // AVX-512 (16 of 32 with it), as in Pikafish
+    constexpr int NumRegs = []() {
+        constexpr int Ideal   = int(Dimensions * sizeof(std::int16_t) / sizeof(vec_t));
+        constexpr int MaxRegs = sizeof(vec_t) == 64 ? 16 : 12;
+        int           n       = std::min(Ideal, MaxRegs);
+        while (Ideal % n != 0 || n % 2 != 0)
+            --n;
+        return n;
+    }();
+    constexpr IndexType Height = NumRegs * sizeof(vec_t) / sizeof(std::int16_t);
+    static_assert(NumRegs >= 2 && Dimensions % Height == 0);
+
+    for (IndexType j = 0; j < Dimensions; j += Height)
+    {
+        vec_t acc[NumRegs];
+        for (int k = 0; k < NumRegs; ++k)
+            acc[k] = src ? vec_load(reinterpret_cast<const vec_t*>(src + j) + k) : vec_zero();
+
+        removed.template apply<-1, NumRegs / 2>(j, acc);
+        added.template apply<+1, NumRegs / 2>(j, acc);
+
+        for (int k = 0; k < NumRegs; ++k)
+            vec_store(reinterpret_cast<vec_t*>(dst + j) + k, acc[k]);
+    }
+}
+
+// The 16-bit part of apply_rows() for weights permuted for vec_widen_pair_i8()
+template<IndexType Dimensions>
+void apply_rows_paired(std::int16_t*       dst,
+                       const std::int16_t* src,
+                       const std::int8_t*  weights,
+                       const IndexType*    removed,
+                       int                 nRemoved,
+                       const IndexType*    added,
+                       int                 nAdded) {
+    constexpr int MaxRows = int(ThreatFeatureSet::MaxActiveDimensions);
+    assert(nRemoved <= MaxRows && nAdded <= MaxRows);
+    WeightRows<MaxRows> rowsRemoved, rowsAdded;
+    for (int k = 0; k < nRemoved; ++k)
+        rowsRemoved.push(weights + std::size_t(removed[k]) * Dimensions);
+    for (int k = 0; k < nAdded; ++k)
+        rowsAdded.push(weights + std::size_t(added[k]) * Dimensions);
+    apply_weight_rows<Dimensions>(dst, src, rowsRemoved, rowsAdded);
+}
+    #else
+// (no paired rows on this target: never instantiated)
+template<IndexType Dimensions>
+void apply_rows_paired(std::int16_t*,
+                       const std::int16_t*,
+                       const std::int8_t*,
+                       const IndexType*,
+                       int,
+                       const IndexType*,
+                       int) {
+    static_assert(Dimensions == 0, "paired weight rows need SSSE3");
+}
+    #endif
+
+// The 16-bit part of apply_rows(), weights in the order of the accumulator
+template<IndexType Dimensions>
+void apply_rows_16(std::int16_t*       dst,
+                   const std::int16_t* src,
+                   const std::int8_t* __restrict weights,
+                   const IndexType* removed,
+                   int              nRemoved,
+                   const IndexType* added,
+                   int              nAdded) {
 #if defined(__GNUC__)
     // GCC / clang vector extensions: 16 x int16 per vector (two registers on
     // 128-bit targets), sign extension of the 8-bit weights
@@ -199,6 +313,31 @@ void apply_rows(std::int16_t*       dst,
             dst[j] = std::int16_t(dst[j] + w[j]);
     }
 #endif
+}
+
+// dst = src - sum of the `removed` rows + sum of the `added` rows of the given
+// weights (src == nullptr: zero; src == dst: in place), for the accumulator
+// and the PSQT values. The
+// accumulator is processed by tiles kept in registers, so that it is read and
+// written once whatever the number of features. Paired: the rows are permuted
+// for vec_widen_pair_i8() (the threat weights with USE_PAIRED_WIDENING_ADD,
+// see FeatureTransformer::WideningPairOrder).
+template<IndexType Dimensions, bool Paired = false>
+void apply_rows(std::int16_t*       dst,
+                std::int32_t*       dstPsqt,
+                const std::int16_t* src,
+                const std::int32_t* srcPsqt,
+                const std::int8_t* __restrict weights,
+                const PSQTWeightType* __restrict psqtWeights,
+                const IndexType* removed,
+                int              nRemoved,
+                const IndexType* added,
+                int              nAdded) {
+
+    if constexpr (Paired)
+        apply_rows_paired<Dimensions>(dst, src, weights, removed, nRemoved, added, nAdded);
+    else
+        apply_rows_16<Dimensions>(dst, src, weights, removed, nRemoved, added, nAdded);
 
     if constexpr (!UsePSQT)
         return;
@@ -231,10 +370,17 @@ void apply_threats(std::int16_t* __restrict dst,
                    const IndexType*                      added,
                    int                                   nAdded) {
     static_assert(sizeof(ThreatWeightType) == 1);
-    apply_rows<Dimensions>(dst, dstPsqt, src, srcPsqt,
-                           reinterpret_cast<const std::int8_t*>(featureTransformer.threatWeights),
-                           featureTransformer.threatPsqtWeights, removed, nRemoved, added,
-                           nAdded);
+    // (with USE_PAIRED_WIDENING_ADD the threat weights are permuted for it)
+    constexpr bool Paired =
+    #if defined(USE_PAIRED_WIDENING_ADD)
+      true;
+    #else
+      false;
+    #endif
+    apply_rows<Dimensions, Paired>(
+      dst, dstPsqt, src, srcPsqt,
+      reinterpret_cast<const std::int8_t*>(featureTransformer.threatWeights),
+      featureTransformer.threatPsqtWeights, removed, nRemoved, added, nAdded);
 }
 
 // Feature indices of a list of threats (those that are features). Branchless:
@@ -329,7 +475,7 @@ void AccumulatorStack::evaluate_threats_side(
     {
         nAdded = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
         apply_threats(target.acc[Perspective], target.psqt[Perspective], nullptr, nullptr,
-                      featureTransformer, removedIdx, 0, addedIdx, nAdded);
+                      featureTransformer, nullptr, 0, addedIdx, nAdded);
     }
 
     target.computed[Perspective] = true;
@@ -343,7 +489,7 @@ void AccumulatorStack::evaluate_threats_side(
         auto      fresh = std::make_unique<ThreatAccumulator<Dimensions>>();
         const int n     = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
         apply_threats(fresh->acc[Perspective], fresh->psqt[Perspective], nullptr, nullptr,
-                      featureTransformer, removedIdx, 0, addedIdx, n);
+                      featureTransformer, nullptr, 0, addedIdx, n);
         assert(!std::memcmp(fresh->acc[Perspective], target.acc[Perspective],
                             sizeof(target.acc[Perspective])));
         assert(!std::memcmp(fresh->psqt[Perspective], target.psqt[Perspective],

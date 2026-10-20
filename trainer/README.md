@@ -787,6 +787,11 @@ network (2048 outputs) cannot be converted to `threats`.
 | `prepare_data.py` | about 15,000 lines/s per core | about 6,000 lines/s per core |
 | Checkpoint | about 190 MB | about 1.3 GB |
 
+(Measured before the threat updates were paired, Pikafish's "Pair int8 weight
+rows in accumulator updates": with SSSE3 or better, the threat accumulator is
+now updated two weight rows at a time, about +15 % nps for `threats=yes` on
+AVX2, measured with a random network, which narrows the gap.)
+
 Since the engine is about a third slower, compare with a regular network
 trained on the same data using `--movetime` (or at least check again with
 `--movetime` after winning with `--nodes`):
