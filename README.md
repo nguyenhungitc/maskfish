@@ -232,14 +232,20 @@ embed it). The build gets the current network automatically (see
 
 ### Publishing a network
 
-The current network is kept in the hidden git ref `refs/assets/net`
-(a commit holding only `maskfish.nnue`, apart from the history of the code).
-It does not show on GitHub (files, branches, tags) nor in `git branch -a`, and
-`git clone` does not fetch it (`git ls-remote` lists it). To publish a network:
+On GitHub, the network is only in the hidden git ref `refs/assets/net` (a
+commit holding only `maskfish.nnue`, apart from the history of the code): every
+build and every workflow takes it from there. The ref does not show on GitHub
+(files, branches, tags) nor in `git branch -a`, and `git clone` does not fetch
+it (`git ls-remote` lists it).
+
+To publish a network, put it at `net/maskfish.nnue` (a local directory at the
+root of the repository, ignored by git) and run:
 
 ```
-scripts/push_net.sh path/to/maskfish.nnue
+scripts/push_net.sh
 ```
+
+(`scripts/push_net.sh path/to/file.nnue` publishes another file.)
 
 A release is made by hand: Actions > Release > Run workflow (on the branch to
 release). The [Release workflow](.github/workflows/release.yml) builds the
@@ -272,22 +278,21 @@ make -j build
 
 Run `make help` for the list of targets and architectures.
 
-Every build target first runs `make net`, which, when `src/maskfish.nnue`
-does not exist, fetches it from the ref `refs/assets/net` (see
-[Publishing a network](#publishing-a-network)) of `origin`, then of this
-repository. This needs a git clone of the source. An existing
-`src/maskfish.nnue` is kept: to get a newer network, delete it and run
-`make net` again.
+Every build target first runs `make net`, which fetches the network of the
+ref `refs/assets/net` (see [Publishing a network](#publishing-a-network)) of
+`origin`, then of this repository, into `src/maskfish.nnue`: a local copy,
+replaced whenever the network of the ref changes. This needs a git clone of
+the source.
 
-`src/maskfish.nnue`, when it exists, is embedded in the binary
-(the build prints `embedded net: maskfish.nnue`), which then
-needs no network file. `make -j build embed=no` builds a binary without it,
-which needs the `EvalFile` option.
+The network is embedded in the binary (the build prints
+`embedded net: maskfish.nnue`), which then needs no network file.
+`make -j build embed=no` builds a binary without it, which needs the `EvalFile`
+option.
 
-If the fetch fails (no connection, not a git clone, no network published yet),
-the build goes on without a network (and the binary has no embedded network);
-put a Jieqi network at `src/maskfish.nnue` (e.g. the one of a release archive),
-or point the `EvalFile` option to one at run time.
+If the fetch fails (no connection), the build uses the existing copy; without
+one (not a git clone, no network published yet), it goes on without a network
+(and the binary has no embedded network): set the `EvalFile` option to a
+network at run time.
 
 `make profile-build` also runs a benchmark to collect profile data, which needs
 a compatible network. When the binary cannot run natively (cross compilation),

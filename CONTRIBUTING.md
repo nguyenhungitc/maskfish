@@ -115,8 +115,10 @@ cd src
 make -j build
 ```
 
-You also need a **Jieqi network** at `src/maskfish.nnue` (or set the `EvalFile`
-option). Pikafish xiangqi networks do not work.
+The build fetches the **Jieqi network** from the hidden ref `refs/assets/net`
+and embeds it in the binary (see [Publishing a
+network](./README.md#publishing-a-network)); otherwise set the `EvalFile`
+option. Pikafish xiangqi networks do not work.
 
 The published binaries are universal binaries (`make -j build
 ARCH=x86-64-universal`, see [Universal binary](./README.md#universal-binary)):

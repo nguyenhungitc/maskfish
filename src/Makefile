@@ -116,8 +116,9 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 # meta = yes/no       --- -DJIEQI_NNUE_META  --- meta=yes: meta input features (pool summaries,
 #                                                unidentified losses, visible targets;
 #                                                AB-JChess; needs a matching net)
-# embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed src/maskfish.nnue in the
-#                                                binary (as Stockfish), when it exists
+# embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed the network of the ref
+#                                                refs/assets/net (src/maskfish.nnue, fetched
+#                                                by `make net`) in the binary, as Stockfish
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -756,10 +757,11 @@ ifeq ($(meta),yes)
 endif
 
 ### 3.2.0.1 Embedded network
-# The default network src/maskfish.nnue (fetched by `make net`, which every
-# build target runs first, before the make that compiles) is embedded in the
-# binary by nnue/embedded_nnue.S; without it the binary has no embedded network
-# and needs the EvalFile option, as with embed=no.
+# The default network src/maskfish.nnue (the copy of the network of the ref
+# refs/assets/net that `make net` fetches: every build target runs it first,
+# before the make that compiles) is embedded in the binary by
+# nnue/embedded_nnue.S; without it the binary has no embedded network and needs
+# the EvalFile option, as with embed=no.
 ifeq ($(embed),yes)
 ifneq (,$(wildcard maskfish.nnue))
 	NNUE_EMBED_FLAGS = -DNNUE_EMBEDDING
@@ -1598,10 +1600,16 @@ $(UNIVERSAL_CONFIG): universal-config-check | $(TEMP_DIR)
 	@printf '%s\n' '$(subst ','\'',$(strip $(universal_config)))' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
-# Fetch the network once in src/ (the PGO bench of every build uses it).
-$(NET_SENTINEL): | $(TEMP_DIR)
+# Fetch the network of the ref refs/assets/net into src/ at every make
+# (scripts/net.sh). The sentinel holds a copy of it and changes only when the
+# network changes: the builds, which embed it, are then made again.
+$(NET_SENTINEL): FORCE | $(TEMP_DIR)
 	@cd $(CURDIR) && $(SHELL) ../scripts/net.sh
-	@touch $@
+	@if [ -f $(CURDIR)/maskfish.nnue ]; then \
+	    cmp -s $(CURDIR)/maskfish.nnue $@ || cp $(CURDIR)/maskfish.nnue $@; \
+	elif [ ! -e $@ ] || [ -s $@ ]; then \
+	    rm -f $@ && touch $@; \
+	fi
 
 # With PGO, check that there is a network before any build starts (an
 # order-only prerequisite of every build: it runs at each make, but does not
@@ -1627,9 +1635,9 @@ $(TEMP_DIR)/%/.setup: $(UNIVERSAL_CONFIG) | $(TEMP_DIR)
 .SECONDARY: $(patsubst %,$(TEMP_DIR)/%/.setup,$(UNIVERSAL_ARCHES))
 
 # (the sub-make starts with objclean: a change rebuilds the whole build)
-# (the builds embed the network: they depend on it too)
+# (and on the network, which they embed: NET_SENTINEL)
 $(TEMP_DIR)/%/maskfish.o: $(TEMP_DIR)/%/.setup $(NET_SENTINEL) $(UNIVERSAL_CONFIG) \
-                          $(SRCS) $(HEADERS) Makefile $(wildcard maskfish.nnue) | universal-net-check
+                          $(SRCS) $(HEADERS) Makefile | universal-net-check
 	+ENV_CXXFLAGS='$(ENV_CXXFLAGS) $(call arch-cxxflags,$*)' \
 	    $(MAKE) -C $(TEMP_DIR)/$* $(UOBJ_TGT) \
 		        ARCH=$* CXX=$(CXX) COMP=$(COMP) UNIVERSAL_SLICE=true

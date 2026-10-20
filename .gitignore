@@ -17,9 +17,12 @@ src/-lstdc++.res
 # Builds of a universal binary
 src/temp_builds/
 
-# Neural network for the NNUE evaluation
+# Neural network for the NNUE evaluation (on GitHub, the network is only in the
+# hidden ref refs/assets/net; net/ holds the local network that
+# scripts/push_net.sh publishes)
 **/*.nnue
 **/*.nnue.part
+/net/
 
 
 # Trainer outputs (see trainer/README.md)

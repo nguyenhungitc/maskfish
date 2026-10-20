@@ -1,20 +1,19 @@
 #!/bin/sh
 
-# Makes sure the default network is present in the current directory.
+# Gets the network of the build, src/maskfish.nnue (run from src/), from the
+# hidden git ref refs/assets/net: a commit that holds only maskfish.nnue,
+# published from net/maskfish.nnue by scripts/push_net.sh. The ref is the only
+# source of the network: src/maskfish.nnue is a local copy of it, which the
+# build embeds in the binary.
 #
-# Maskfish needs a Jieqi network (feature set HalfKAv2_hm with dark-piece and
-# pool features). If src/maskfish.nnue does not exist, it is fetched from the
-# hidden git ref refs/assets/net (a commit that holds only maskfish.nnue,
-# published by scripts/push_net.sh) of the remote origin, then of the
-# repository of Maskfish (when origin is a fork without the ref). This needs a
-# git clone of the source: `git clone` itself does not fetch this ref.
-#
-# An existing file is kept as it is: delete it and run `make net` again to get
-# the latest network.
+# The ref is fetched from the remote origin, then from the repository of
+# Maskfish (when origin is a fork without the ref), at every run: the copy is
+# replaced when the network of the ref changed. This needs a git clone of the
+# source (`git clone` itself does not fetch this ref). When the ref cannot be
+# fetched (no connection), an existing copy is kept.
 #
 # A failed fetch does not stop the build: the engine builds without a
-# network, but then needs one at run time (EvalFile option). A network can also
-# be trained with the trainer in the trainer/ directory (see trainer/README.md).
+# network, but then needs one at run time (EvalFile option).
 #
 # With --require (used by `make profile-build`, whose PGO bench runs the
 # engine), a missing or invalid network is an error: the script exits with
@@ -43,49 +42,44 @@ fetch_ref() {
 }
 
 note_missing() {
-  echo "Note: $_filename not found. The engine builds without it, but needs a"
-  echo "Jieqi network at run time (EvalFile option). Put a Jieqi network at"
-  echo "src/$_filename (e.g. the one of a release archive), or train one with the"
-  echo "trainer (see trainer/README.md)."
+  echo "Note: no network. The engine builds without it, but then needs a Jieqi"
+  echo "network at run time (EvalFile option). Publish one with"
+  echo "scripts/push_net.sh (from net/$_filename), or set EvalFile to a file."
 }
 
 fetch_network() {
-  if [ -f "$_filename" ]; then
-    if is_valid "$_filename"; then
-      echo "Exists $_filename"
-    else
-      echo "Warning: $_filename exists but is not a zstd-compressed network."
-    fi
-    return
-  fi
-
   if ! command -v git > /dev/null 2>&1 || ! git rev-parse --git-dir > /dev/null 2>&1; then
     echo "Note: the source is not a git clone, cannot fetch $_filename from $_ref."
-    note_missing
-    return
+  else
+    _tmp="$_filename.part"
+    for _remote in origin "$_repo"; do
+      rm -f "$_tmp"
+      if fetch_ref "$_remote" "$_tmp" && is_valid "$_tmp"; then
+        if cmp -s "$_tmp" "$_filename"; then
+          rm -f "$_tmp"
+          echo "Up to date $_filename ($_ref of $_remote)"
+        else
+          mv "$_tmp" "$_filename"
+          echo "Fetched $_filename ($_ref of $_remote)"
+        fi
+        return
+      fi
+    done
+    rm -f "$_tmp"
+    echo "Note: could not fetch $_filename from $_ref (origin, $_repo)."
   fi
 
-  _tmp="$_filename.part"
-  for _remote in origin "$_repo"; do
-    echo "Fetching $_filename from $_ref of $_remote ..."
-    rm -f "$_tmp"
-    if fetch_ref "$_remote" "$_tmp" && is_valid "$_tmp"; then
-      mv "$_tmp" "$_filename"
-      echo "Fetched $_filename ($_ref of $_remote)"
-      return
-    fi
-  done
-  rm -f "$_tmp"
-
-  echo "Note: could not fetch $_filename from $_ref."
-  note_missing
+  if is_valid "$_filename"; then
+    echo "Using the existing copy $_filename (it may be older than $_ref)."
+  else
+    note_missing
+  fi
 }
 
 fetch_network
 
 if [ "$1" = "--require" ] && ! is_valid "$_filename"; then
-  echo "Error: profile-guided optimization runs a benchmark, which needs a valid"
-  echo "Jieqi network at src/$_filename (see above). Put one there, or use"
-  echo "\`make build\` (no PGO)."
+  echo "Error: profile-guided optimization runs a benchmark, which needs the"
+  echo "network of $_ref (see above), or use \`make build\` (no PGO)."
   exit 1
 fi

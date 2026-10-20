@@ -236,8 +236,8 @@ void Network<Arch, Transformer>::verify(std::string                             
             if (embedded)
             {
                 if (gEmbeddedNNUESize == 0)
-                    msg2 = "This binary has no embedded network (it was built without src/"
-                         + evalfilePath + ", or with embed=no).";
+                    msg2 = "This binary has no embedded network (it was built without the "
+                           "network of the ref refs/assets/net, or with embed=no).";
                 else
                     msg2 = "The network embedded in this binary is not compatible with the "
                            "engine (built with other network architecture options).";
