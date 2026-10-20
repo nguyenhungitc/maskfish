@@ -212,12 +212,19 @@ centipawns. Both are used by the [trainer](trainer/).
 
 ## Network
 
-The network file is set with the `EvalFile` option (default `maskfish.nnue`).
-As in Stockfish, the default network is embedded in the binary when it is
-built (see [Compiling](#compiling)): with the default name, the engine uses the
-embedded network, and looks for `maskfish.nnue` next to the binary and in the
-working directory only if the binary has none (or an incompatible one). To use
-another network, give it another name and set `EvalFile` to it.
+The default network is embedded in the binary when it is built (see
+[Compiling](#compiling)), as in Stockfish. The engine loads its network as
+follows:
+
+1. `EvalFile` set to a file: this file only (as given, absolute or relative to
+   the working directory, then in the directory of the binary).
+2. `EvalFile` not set (default `maskfish.nnue`, or empty): the network embedded
+   in the binary, never a file.
+3. Otherwise (no embedded network, or a file that cannot be loaded): the engine
+   reports an error and exits at the first `go`.
+
+A file named like the default network is loaded with a path, e.g.
+`setoption name EvalFile value ./maskfish.nnue`.
 
 The network of a release is the `maskfish.nnue` of its archives (the binaries
 embed it). The build gets the current network automatically (see
@@ -275,7 +282,7 @@ repository. This needs a git clone of the source. An existing
 `src/maskfish.nnue`, when it exists, is embedded in the binary
 (the build prints `embedded net: maskfish.nnue`), which then
 needs no network file. `make -j build embed=no` builds a binary without it,
-which looks for the file at run time.
+which needs the `EvalFile` option.
 
 If the fetch fails (no connection, not a git clone, no network published yet),
 the build goes on without a network (and the binary has no embedded network);

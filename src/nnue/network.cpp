@@ -87,13 +87,21 @@ void Network<Arch, Transformer>::load(const std::filesystem::path& rootDirectory
     if (evalfilePath.empty())
         evalfilePath = evalFile.defaultName;
 
-    // The embedded network comes first, as in Stockfish: with the default name,
-    // a file next to the binary or in the working directory is used only if
-    // the binary has no (compatible) embedded network
-    if (std::string(evalFile.current) != evalfilePath
-        && evalfilePath == std::string(evalFile.defaultName))
-        load_internal();
+    if (std::string(evalFile.current) == evalfilePath)
+        return;
 
+    // EvalFile not set (empty or the default name): the network embedded in
+    // the binary only, never a file (verify() reports a binary without one).
+    // A file named like the default network is loaded with a path, e.g.
+    // ./maskfish.nnue.
+    if (evalfilePath == std::string(evalFile.defaultName))
+    {
+        load_internal();
+        return;
+    }
+
+    // EvalFile set: this file only, looked up as given (absolute, or relative
+    // to the working directory), then in the directory of the binary
     for (const auto& directory : dirs)
     {
         if (std::string(evalFile.current) != evalfilePath)
@@ -219,17 +227,29 @@ void Network<Arch, Transformer>::verify(std::string                             
     {
         if (f)
         {
+            const bool  embedded = evalfilePath == std::string(evalFile.defaultName);
             std::string msg1 =
               "Network evaluation parameters compatible with the engine must be available.";
             std::string msg2 = "The network file " + evalfilePath + " was not loaded successfully.";
             std::string msg3 = "The UCI option EvalFile might need to specify the full path, "
                                "including the directory name, to the network file.";
+            if (embedded)
+            {
+                if (gEmbeddedNNUESize == 0)
+                    msg2 = "This binary has no embedded network (it was built without src/"
+                         + evalfilePath + ", or with embed=no).";
+                else
+                    msg2 = "The network embedded in this binary is not compatible with the "
+                           "engine (built with other network architecture options).";
+                msg3 = "Set the UCI option EvalFile to a network file (with a path, e.g. ./"
+                     + evalfilePath + ", for a file with the default name).";
+            }
             std::string msg4 =
               "A Jieqi network (default name " + std::string(evalFile.defaultName)
               + ") can be trained with the trainer in the trainer/ directory of "
                   "https://github.com/nguyenhungitc/maskfish";
             std::string msg5 = "The engine will be terminated now.";
-            if (oldVersionFile)
+            if (oldVersionFile && !embedded)
                 msg3 = "The network file has an old format (16-bit weights): convert it with "
                        "trainer/serialize.py --upgrade.";
 
@@ -244,9 +264,12 @@ void Network<Arch, Transformer>::verify(std::string                             
 
     if (f)
     {
-        size_t size = sizeof(featureTransformer) + sizeof(Arch) * LayerStacks;
-        f("NNUE evaluation using " + evalfilePath + " (" + std::to_string(size / (1024 * 1024))
-          + "MiB, (" + std::to_string(featureTransformer.InputDimensions) + ", "
+        size_t            size   = sizeof(featureTransformer) + sizeof(Arch) * LayerStacks;
+        const std::string source = evalfilePath == std::string(evalFile.defaultName)
+                                   ? evalfilePath + " (embedded)"
+                                   : evalfilePath;
+        f("NNUE evaluation using " + source + " (" + std::to_string(size / (1024 * 1024)) + "MiB, ("
+          + std::to_string(featureTransformer.InputDimensions) + ", "
           + std::to_string(network[0].TransformedFeatureDimensions) + ", "
           + std::to_string(network[0].FC_0_OUTPUTS) + ", " + std::to_string(network[0].FC_1_OUTPUTS)
           + ", 1))");

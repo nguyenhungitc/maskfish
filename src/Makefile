@@ -70,7 +70,8 @@ PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
 
 ### Built-in benchmark for pgo-builds
-PGOBENCH = printf "speedtest\nbench\n" | $(RUN_PREFIX) ./$(EXE)
+### (a binary built with embed=no has no embedded network: it runs with the file)
+PGOBENCH = printf "$(if $(filter yes,$(embed)),,setoption name EvalFile value ./maskfish.nnue\n)speedtest\nbench\n" | $(RUN_PREFIX) ./$(EXE)
 
 ### Source and object files
 ### (universal/ holds the entry points of the universal binaries, temp_builds/
@@ -758,7 +759,7 @@ endif
 # The default network src/maskfish.nnue (fetched by `make net`, which every
 # build target runs first, before the make that compiles) is embedded in the
 # binary by nnue/embedded_nnue.S; without it the binary has no embedded network
-# and looks for the file at run time, as with embed=no.
+# and needs the EvalFile option, as with embed=no.
 ifeq ($(embed),yes)
 ifneq (,$(wildcard maskfish.nnue))
 	NNUE_EMBED_FLAGS = -DNNUE_EMBEDDING

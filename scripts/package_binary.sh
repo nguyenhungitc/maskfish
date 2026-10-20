@@ -9,7 +9,7 @@
 # scripts/get_native_properties.sh gives for the system, e.g.
 # maskfish-ubuntu-x86-64-universal.tar. It holds the binary (renamed
 # maskfish, or maskfish.exe for a Windows binary), src/maskfish.nnue when it
-# exists (the network the engine looks for next to the binary), README.md,
+# exists (the network the binary embeds, as a file for EvalFile), README.md,
 # Copying.txt and AUTHORS. Run it from the root of the repository.
 #
 
