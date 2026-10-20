@@ -166,10 +166,11 @@ struct NetworkArchitecture {
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS> fc_0;
     Layers::SqrClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                             ac_sqr_0;
     Layers::ClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                                ac_0;
-    Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS>                        fc_1;
+    // (fc_1 and fc_2 read the outputs of the paired activations, see propagate())
+    Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS, true>                  fc_1;
     Layers::SqrClippedReLU<FC_1_OUTPUTS>                                           ac_sqr_1;
     Layers::ClippedReLU<FC_1_OUTPUTS>                                              ac_1;
-    Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1>                fc_2;
+    Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1, true>          fc_2;
 
     // make ctx=yes: weights of the context inputs of fc_0 (scale 64; with
     // quant=2, 128*64*2 / 127: the context tower outputs 127 = 1.0)
@@ -244,16 +245,27 @@ struct NetworkArchitecture {
         fc_0.propagate(transformedFeatures, buffer.fc_0_out);
         if constexpr (UseContext)
             add_context(context, buffer.fc_0_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        // Both activations at once, written in place (in the lane order of
+        // the packs, which the weights of fc_1 and fc_2 are permuted to match)
+        ac_sqr_0.propagate_pair(buffer.fc_0_out, buffer.concat, buffer.concat + FC_0_OUTPUTS);
+    #else
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.concat);
         ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
         std::memcpy(buffer.concat + FC_0_OUTPUTS, buffer.ac_0_out,
                     FC_0_OUTPUTS * sizeof(typename decltype(ac_0)::OutputType));
+    #endif
 
         fc_1.propagate(buffer.concat, buffer.fc_1_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2,
+                                buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #else
         ac_sqr_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2);
         ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
         std::memcpy(buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS, buffer.ac_1_out,
                     FC_1_OUTPUTS * sizeof(typename decltype(ac_1)::OutputType));
+    #endif
 
         fc_2.propagate(buffer.concat, buffer.fc_2_out);
 

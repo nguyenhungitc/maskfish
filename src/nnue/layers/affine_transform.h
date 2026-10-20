@@ -125,7 +125,22 @@ static void affine_transform_non_ssse3(std::int32_t*       output,
 
 #endif  // !ENABLE_SEQ_OPT
 
-template<IndexType InDims, IndexType OutDims>
+#if defined(USE_PAIR_ACTIVATIONS)
+// Position of the 4-byte chunk c (0..7) of a block of 32 inputs in the output
+// of SqrClippedReLU::propagate_pair() (pack instructions within 128-bit lanes)
+constexpr IndexType pair_activation_chunk(IndexType c) {
+    #if defined(USE_AVX512BW)
+    return (c % 4) * 2 + c / 4;
+    #else
+    return (c % 2) * 4 + c / 2;
+    #endif
+}
+#endif
+
+// ScrambledInput: the inputs are outputs of SqrClippedReLU::propagate_pair()
+// (with USE_PAIR_ACTIVATIONS; otherwise in order), the weights are permuted at
+// load time to match
+template<IndexType InDims, IndexType OutDims, bool ScrambledInput = false>
 class AffineTransform {
    public:
     // Input/output type
@@ -153,8 +168,17 @@ class AffineTransform {
     }
 
     static constexpr IndexType get_weight_index_scrambled(IndexType i) {
-        return (i / 4) % (PaddedInputDimensions / 4) * OutputDimensions * 4
-             + i / PaddedInputDimensions * 4 + i % 4;
+        IndexType inputIndex = i % PaddedInputDimensions;
+#if defined(USE_PAIR_ACTIVATIONS)
+        if constexpr (ScrambledInput)
+        {
+            static_assert(PaddedInputDimensions % 32 == 0);
+            inputIndex = inputIndex / 32 * 32 + pair_activation_chunk(inputIndex % 32 / 4) * 4
+                       + inputIndex % 4;
+        }
+#endif
+        return inputIndex / 4 * OutputDimensions * 4 + i / PaddedInputDimensions * 4
+             + inputIndex % 4;
     }
 
     static constexpr IndexType get_weight_index(IndexType i) {

@@ -47,6 +47,16 @@
     #include <arm_neon.h>
 #endif
 
+// The squared and the plain clipped ReLU of the layer stacks computed together
+// with 256- or 512-bit vectors (SqrClippedReLU::propagate_pair(), Pikafish's
+// "paired activations"); used by the layer stacks of make layers=2, whose
+// activations have 32 inputs. Their outputs are in the lane order of the
+// pack instructions, which the weights of the next layers are permuted to
+// match at load time (AffineTransform with ScrambledInput).
+#if defined(USE_AVX2)
+    #define USE_PAIR_ACTIVATIONS
+#endif
+
 namespace Maskfish::Eval::NNUE {
 
 // The feature transformer weights (HalfKA and threat features) have 8 bits

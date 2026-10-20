@@ -839,7 +839,11 @@ stacks are trained from scratch. `--resume` needs the same architecture.
 A quick measurement on the development machine (small data, 166,000
 self-play positions, CPU, 15 epochs, so only indicative): validation loss
 0.00188 versus 0.00200 for the current layer stacks; the engine is about 12 %
-(`default`) and 8 % (`threats`) slower because `fc0` is twice as large.
+(`default`) and 8 % (`threats`) slower because `fc0` is twice as large. (Since
+then the two activations of each layer are computed together with AVX2 /
+AVX-512, Pikafish's "paired activations": about +3 % nps for `layers=2` on
+AVX2, measured with a random network, within the noise of the measure;
+Pikafish measured +2.5 %.)
 Compare with `--movetime`:
 
 ```
