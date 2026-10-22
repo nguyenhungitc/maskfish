@@ -25,9 +25,8 @@ JieqiMaterial option (prepare_data.py --jieqi-material). Optimism (a search
 term) is left out, as in the engine's `evalraw` command.
 
 That is the engine's default, EvalScaling Complexity. With the UCI option
-EvalScaling Alignment (Pikafish's "Replace nnueComplexity with simple_eval
-equivalent", which does not use the psqt / positional split and so suits the
-networks without PSQT), train.py --eval-scaling alignment:
+EvalScaling Alignment (which does not use the psqt / positional split and so
+suits the networks without PSQT), train.py --eval-scaling alignment:
 
     se          = simple_eval (material balance for the side to move)
     se_norm     = se * 1024 / (|se| + 1024)
@@ -42,8 +41,7 @@ does not apply). prepare_data.py stores se and the total material of every
 position for it ("se", "allmat").
 
 Networks without PSQT ("-nopsqt", make psqt=no) with EvalScaling Complexity:
-psqt is 0, and the material stands for it in the complexity term, as in
-Pikafish ("Replace nnueComplexity with simple_eval equivalent"):
+psqt is 0, and the material stands for it in the complexity term:
 
     complexity  = |2 * sed - nnue|
 

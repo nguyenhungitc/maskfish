@@ -1,6 +1,5 @@
 """Web interface: the list of tests, the form to submit a test, the page of a
-test, and the networks. Modeled on fishtest (Stockfish / Pikafish), for a
-single machine: there are no workers, users or approvals.
+test, and the networks. For a single machine: there are no workers, users or approvals.
 """
 
 from __future__ import annotations

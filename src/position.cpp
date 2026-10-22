@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -1019,7 +1019,7 @@ DirtyPiece Position::do_move(Move m, StateInfo& newSt, bool givesCheck, DirtyThr
 
     // Move the piece. Threats: a capture does not change the occupancy of
     // 'to', so the captured piece is replaced by the mover there without the
-    // discovered threats (as Pikafish), on the board after the move.
+    // discovered threats, on the board after the move.
     move_piece(from, to);
 
     if (dts)

@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -352,8 +352,8 @@ void ThreadPool::start_thinking(Position&          pos,
     main_thread()->start_searching();
 }
 
-// simpleVote (UCI option SimpleThreadVote, Pikafish "Simplify thread
-// selection"): the votes do not depend on the depth, and equal votes are
+// simpleVote (UCI option SimpleThreadVote): the votes do not depend on the
+// depth, and equal votes are
 // decided by the longer PV.
 Thread* ThreadPool::get_best_thread(bool simpleVote) const {
 

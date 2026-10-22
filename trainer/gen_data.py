@@ -3,7 +3,7 @@
     <fen> | <score> | <result>
 
 score: search score for the side to move, in the internal units of the engine
-that scored it (Maskfish with RawScore; AB-JChess prints internal units too).
+that scored it (Maskfish with RawScore; other engines print their own units).
 result: 1 / 0 / -1 = win / draw / loss for the side to move.
 
 Three roles, any of them may be the same engine process:
@@ -11,7 +11,7 @@ Three roles, any of them may be the same engine process:
   player   (--engine)   chooses the moves of both sides
   referee  (--referee)  board state: FEN, side in check, legal moves. Default:
                         the player. When the player is another engine
-                        (AB-JChess), Maskfish is the referee, so the FEN written
+                        (a reference engine), Maskfish is the referee, so the FEN written
                         is in Maskfish's format.
   teacher  (--teacher)  scores the positions written. Default: the player's own
                         search score. With a teacher, every position kept is
@@ -20,12 +20,12 @@ Three roles, any of them may be the same engine process:
 
 Typical uses (see scripts/pipeline.sh):
 
-  # gen0: AB-JChess self-play, Maskfish only as the referee
-  python gen_data.py --engine ../jieqi/abjchess --net ../jieqi/abjchess-20261010.nnue \\
+  # gen0: reference engine self-play, Maskfish only as the referee
+  python gen_data.py --engine ../jieqi/ref-engine --net ../jieqi/ref-engine.nnue \\
       --opt ChasingRule=github --referee ../src/maskfish --nodes 10000 ...
-  # distillation: Maskfish self-play, positions scored by AB-JChess
+  # distillation: Maskfish self-play, positions scored by the reference engine
   python gen_data.py --engine ../src/maskfish --net nets/gen1.nnue --nodes 5000 \\
-      --teacher ../jieqi/abjchess --teacher-net ... --teacher-nodes 20000 ...
+      --teacher ../jieqi/ref-engine --teacher-net ... --teacher-nodes 20000 ...
   # self: Maskfish self-play, own scores
   python gen_data.py --engine ../src/maskfish --net nets/gen5.nnue --nodes 10000 ...
 

@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -42,8 +42,8 @@ namespace Maskfish::Eval::NNUE {
 using FeatureSet = Features::HalfKAv2_hm;
 
 #ifdef JIEQI_NNUE_THREATS
-// Threat input features (make threats=yes), added to the HalfKA ones. As in
-// Pikafish, the feature transformer then has 1024 outputs instead of 2048.
+// Threat input features (make threats=yes), added to the HalfKA ones. The
+// feature transformer then has 1024 outputs instead of 2048.
 using ThreatFeatureSet = Features::JieqiThreats;
 
 // Number of input feature dimensions after conversion
@@ -61,15 +61,15 @@ constexpr int L3Big = 32;
 
 constexpr IndexType PSQTBuckets = 16;
 
-// make psqt=no: networks without the PSQT part of the feature transformer
-// (SFNNv17 of Pikafish). The material then goes through the layer stacks.
+// make psqt=no: networks without the PSQT part of the feature transformer.
+// The material then goes through the layer stacks.
 #ifdef JIEQI_NNUE_NO_PSQT
 constexpr bool UsePSQT = false;
 #else
 constexpr bool UsePSQT = true;
 #endif
-// make stacks=32: 32 layer stacks instead of 16 (Pikafish "32 LayerStack
-// buckets"), see HalfKAv2_hm::make_layer_stack_bucket(). The PSQT buckets stay
+// make stacks=32: 32 layer stacks instead of 16, see
+// HalfKAv2_hm::make_layer_stack_bucket(). The PSQT buckets stay
 // 16: layer stacks 2b and 2b + 1 use the PSQT bucket b (psqt_bucket()).
 #ifdef JIEQI_NNUE_STACKS32
 constexpr IndexType LayerStacks = 32;
@@ -84,7 +84,7 @@ constexpr int psqt_bucket(int stack) { return stack / int(LayerStacks / PSQTBuck
 // Xored into the hash of the layer stacks with make stacks=32
 constexpr std::uint32_t Stacks32ArchHash = 0x5A320000u;
 
-// make ctx=yes: the "inventory context" of AB-JChess. 16 values describing
+// make ctx=yes: the "inventory context". 16 values describing
 // the uncertainty of the position (pool counts, numbers of dark pieces and of
 // dark pieces captured without being identified, for both sides) go through
 // a small layer (ContextTower, 16 -> 16, clipped ReLU) shared by the layer
@@ -99,8 +99,8 @@ constexpr IndexType ContextOutputs = 16;
 // Xored into the hash of the layer stacks when they have context inputs
 constexpr std::uint32_t ContextArchHash = 0x0C7A0000u;
 
-// make lsblend=yes: layer stacks selected and interpolated as in AB-JChess
-// (see HalfKAv2_hm::make_layer_stack_selection()); xored into their hash
+// make lsblend=yes: layer stacks selected and interpolated (see
+// HalfKAv2_hm::make_layer_stack_selection()); xored into their hash
 #ifdef JIEQI_NNUE_BLEND
 constexpr bool UseLayerStackBlend = true;
 #else
@@ -168,8 +168,8 @@ static_assert(PSQTBuckets % 8 == 0,
 // fc_0 has L2 = 32 outputs, all of them activated, and the direct term is the
 // difference of its last two outputs; fc_1 gets a squared activation too, and
 // fc_2 is fed by all the activations (fc_0's and fc_1's, 128 inputs). The
-// quantization is the one of the default layer stacks, or Pikafish's with
-// make quant=2 (see nnue_common.h).
+// quantization is the one of the default layer stacks, or the alternative
+// one with make quant=2 (see nnue_common.h).
 template<IndexType L1, int L2, int L3>
 struct NetworkArchitecture {
     static constexpr IndexType TransformedFeatureDimensions = L1;
@@ -253,8 +253,8 @@ struct NetworkArchitecture {
             alignas(CacheLineSize) typename decltype(fc_2)::OutputBuffer fc_2_out;
         };
         // The activations fill concat completely (no padding to clear), each
-        // part starting on a multiple of 32 bytes (Pikafish "Remove
-        // unnecessary memset(), memcpy() from NetworkArchitecture::propagate()")
+        // part starting on a multiple of 32 bytes (no memset() or memcpy()
+        // needed in propagate())
         static_assert((FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2) % 32 == 0);
         static_assert(FC_0_OUTPUTS % 32 == 0 && FC_1_OUTPUTS % 32 == 0);
 

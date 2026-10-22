@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -28,7 +28,7 @@
 #include "simd.h"
 
 // Indices of the non-zero 32-bit chunks (4 bytes) of the output of the feature
-// transformer. As in Pikafish and Stockfish, they are recorded by the feature
+// transformer. They are recorded by the feature
 // transformer while it writes its output (FeatureTransformer::transform()),
 // instead of in a second pass over the output by the sparse input layer
 // (AffineTransformSparseInput::propagate()). Unlike upstream, they are always

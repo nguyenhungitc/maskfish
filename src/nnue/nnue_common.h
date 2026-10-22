@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -59,8 +59,8 @@
 #endif
 
 // The squared and the plain clipped ReLU of the layer stacks computed together
-// with 256- or 512-bit vectors (SqrClippedReLU::propagate_pair(), Pikafish's
-// "paired activations"); used by the layer stacks of make layers=2, whose
+// with 256- or 512-bit vectors (SqrClippedReLU::propagate_pair(), "paired
+// activations"); used by the layer stacks of make layers=2, whose
 // activations have 32 inputs. Their outputs are in the lane order of the
 // pack instructions, which the weights of the next layers are permuted to
 // match at load time (AffineTransform with ScrambledInput).
@@ -89,7 +89,7 @@ constexpr std::uint32_t OldVersion = 0x7AF32F20u;
 constexpr int OutputScale     = 16;
 constexpr int WeightScaleBits = 6;
 
-// Quantization (make quant=2: that of current Pikafish).
+// Quantization (make quant=2: the alternative quantization).
 //               quant=1 (default)                quant=2
 // FT weights    scale 127, accumulators doubled  scale 255, not doubled
 //               and clipped to 0..254            clipped to 0..FtMaxVal = 255
@@ -247,8 +247,8 @@ inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) 
     }
 
     // Without the magic string, the block holds the values as plain
-    // little-endian integers (Pikafish "Remove leb128": the whole file is
-    // compressed with zstd anyway; trainer: serialize.py --no-leb128). The
+    // little-endian integers (no LEB128: the whole file is compressed with
+    // zstd anyway; trainer: serialize.py --no-leb128). The
     // bytes already read are the start of the first values.
     if (strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
     {

@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -62,7 +62,7 @@ int total_material(const Position& pos) {
 
 // Material of the side to move minus that of the opponent (kings excluded), a
 // dark piece counting at the average value of its side's pool
-// (Position::dark_value()). As Pikafish's simple_eval(), it stands for the
+// (Position::dark_value()). Like simple_eval(), it stands for the
 // PSQT part of the network in networks without one (make psqt=no) in
 // EvalScaling Complexity, and is used by EvalScaling Correlation.
 int simple_eval_dark(const Position& pos) {
@@ -112,8 +112,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
 
     if (scaling == EvalScaling::Alignment)
     {
-        // EvalScaling Alignment, Pikafish's "Replace nnueComplexity with
-        // simple_eval equivalent" (it does not use the psqt / positional split,
+        // EvalScaling Alignment (it does not use the psqt / positional split,
         // so it also suits networks without PSQT, make psqt=no). Normalize the
         // raw evaluations to [-1024, 1024] to measure their correlation: when
         // NNUE and material agree (positive alignment) the position is
@@ -151,8 +150,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     {
         // EvalScaling Complexity (default): blend optimism and eval with nnue
         // complexity. Without PSQT (make psqt=no) psqt is 0 and |psqt -
-        // positional| would be |nnue|: as in Pikafish ("Replace nnueComplexity
-        // with simple_eval equivalent"), the material stands for the PSQT part
+        // positional| would be |nnue|: the material stands for the PSQT part
         // then, |psqt - (nnue - psqt)| with psqt = simple_eval_dark().
         int nnueComplexity;
         if constexpr (Eval::NNUE::UsePSQT)
@@ -162,8 +160,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         optimism += optimism * std::int64_t(nnueComplexity) / 488;
         nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
 
-        // UCI option OptimismSimple (Pikafish "Simplify optimism scaling
-        // formula"): the weight of optimism does not depend on the material; the
+        // UCI option OptimismSimple: the weight of optimism does not depend on
+        // the material; the
         // constant is its value at the average major material of self-play games
         // (4990).
         const int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();

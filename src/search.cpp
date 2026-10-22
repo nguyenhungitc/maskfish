@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -86,8 +86,8 @@ constexpr int SEARCHEDLIST_CAPACITY = 32;
 constexpr int MainHistoryDefault    = 51;
 
 // History divisor of the lmrDepth adjustment by depth (UCI option
-// LMRHistoryDivisor): Pikafish's formula (which replaced its tuned table of
-// 16 values), scaled from its constant 3484 to this engine's 3626
+// LMRHistoryDivisor): a formula instead of a tuned table of 16 values,
+// scaled from the constant 3484 to this engine's 3626
 constexpr int lmr_divisor(int depth) {
     const int d = std::min(depth, 16);
     return (3000 + 7 * (d - 8) * (d - 8)) * 3626 / 3484;
@@ -246,8 +246,7 @@ void Search::Worker::start_searching() {
     accumulatorStack.reset();
 
     // UCI option CorrHistReset: forget the correction histories of earlier
-    // searches. Each thread resets its part of the shared ones. (Idea from
-    // AB-JChess.)
+    // searches. Each thread resets its part of the shared ones.
     if (bool(options["CorrHistReset"]))
         reset_correction_histories();
 
@@ -305,7 +304,7 @@ void Search::Worker::start_searching() {
 
     Worker* bestThread = this;
 
-    // With VoteSinglePVOnly, as AB-JChess, the threads vote for the best move
+    // With VoteSinglePVOnly, the threads vote for the best move
     // only when MultiPV is 1
     if (!limits.depth && rootMoves[0].pv[0] != Move::none()
         && (!bool(options["VoteSinglePVOnly"]) || int(options["MultiPV"]) == 1))
@@ -400,7 +399,7 @@ bool Search::Worker::iterative_deepening() {
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
-    pikaFutility       = bool(options["PikaFutility"]);
+    altFutility        = bool(options["AltFutility"]);
     simpleThreadVote   = bool(options["SimpleThreadVote"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1144,8 +1143,8 @@ Value Search::Worker::search(
             }
         }
         // Case B: no cutoff, but the entry is deep enough, so its bound points
-        // the wrong way: make it easier to replace. (Idea from AB-JChess, UCI
-        // option TTPenalize.) Unlike upstream, the bound can also be BOUND_NONE
+        // the wrong way: make it easier to replace (UCI option TTPenalize).
+        // The bound can also be BOUND_NONE
         // here (the estimate of a chance node, see search()), which is left alone.
         else if (ttPenalize && depth > 5 && ttData.bound != BOUND_NONE)
         {
@@ -1185,7 +1184,7 @@ Value Search::Worker::search(
     // Step 6. Razoring
     // If eval is really low, skip search entirely and return the qsearch value.
     // For PvNodes, we must have a guard against mates being returned.
-    // (With Simplifications, the margin is linear in depth, as in Pikafish.)
+    // (With Simplifications, the margin is linear in depth.)
     if ((pruningTweaks ? allNode : !PvNode)
         && eval < alpha
                     - (simplifications ? (pruningTweaks ? 511 : 720) * depth
@@ -1205,11 +1204,11 @@ Value Search::Worker::search(
                  + std::abs(correctionValue) / 115091;
         };
 
-        // UCI option PikaFutility: the futility pruning of Pikafish (Aug-Oct
-        // 2026: "Simplify futility multiplier", "Improve mate finding", the
-        // depth limit 15, the margin without the parent's statScore, the
-        // returned value blended 70/30 between beta and eval).
-        if (pikaFutility)
+        // UCI option AltFutility: an alternative futility pruning (a simpler
+        // futility multiplier, the depth limit 15, the margin without the
+        // parent's statScore, the returned value blended 70/30 between beta
+        // and eval).
+        if (altFutility)
         {
             if (!ss->ttPv && depth < (seekMate ? 6 : 15) && eval >= beta
                 && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
@@ -1324,8 +1323,8 @@ Value Search::Worker::search(
             ss->capturedDark = pos.is_dark(move.to_sq());
 
             // Captures of dark pieces are less predictable: optionally ask for a
-            // larger margin and search them shallower. (Idea from AB-JChess,
-            // UCI option ProbCutDarkCapture.)
+            // larger margin and search them shallower (UCI option
+            // ProbCutDarkCapture).
             const bool  darkCut  = probCutDarkCapture && ss->capturedDark;
             const Value moveBeta = darkCut ? std::min(probCutBeta + 64, VALUE_INFINITE - 1) : probCutBeta;
             const Depth moveDepth = darkCut ? std::max(depth - 6, 0) : probCutDepth;
@@ -2217,7 +2216,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
         // With RevealQsearchEvasions, a quiet move of a dark piece that evades
         // a check gets the safe reveal bonus here too, as in search() (in
-        // check, the quiescence search tries quiet moves). (From AB-JChess.)
+        // check, the quiescence search tries quiet moves).
         const int revealBonus =
           revealQsearchEvasions && ss->inCheck ? Reveal::move_bonus(pos, move, revealQuiet) : 0;
 
@@ -2305,7 +2304,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 // of the win rates is added (from the point of view of the side to move here,
 // i.e. subtracted for the side whose move caused the chance event): positive
 // values make that side avoid uncertain reveals/captures, negative values
-// make it seek them. (Risk-sensitive aggregation idea from AB-JChess.) The
+// make it seek them (risk-sensitive aggregation). The
 // average always lies between the smallest and the largest outcome.
 //
 // With kind == Lower (resp. Upper), 'values' are lower (resp. upper) bounds of
@@ -2376,8 +2375,8 @@ Value Search::Worker::aggregate_chance(
 namespace {
 
 // Rounds x (a bound of the aggregate, or the aggregate itself) according to kind:
-// a lower bound down, an upper bound up, an exact value towards zero (as the
-// integer divisions of AB-JChess). floor <= trunc <= ceil, so the bounds stay
+// a lower bound down, an upper bound up, an exact value towards zero (as
+// integer divisions). floor <= trunc <= ceil, so the bounds stay
 // bounds of the exact value.
 double round_chance(double x, int kindSign) {
     return kindSign < 0 ? std::floor(x) : kindSign > 0 ? std::ceil(x) : std::trunc(x);
@@ -2385,12 +2384,10 @@ double round_chance(double x, int kindSign) {
 
 }  // namespace
 
-// ChanceModel Linear: the average of the outcomes clamped to +-2000 (the
-// AggressiveLevel 10 of AB-JChess), plus ChanceRiskAversion times their
-// standard deviation (at most 2000, the bound used for Lower / Upper).
-// AB-JChess's level 10 subtracts 4/128 of sqrt(sum of the squared deviations)
-// for the side causing the chance event, i.e. about 3% of the standard
-// deviation times sqrt(number of outcomes).
+// ChanceModel Linear: the average of the outcomes clamped to +-2000, plus
+// ChanceRiskAversion times their standard deviation (at most 2000, the bound
+// used for Lower / Upper). ChanceRiskAversion 3 subtracts about 3% of the
+// standard deviation for the side causing the chance event.
 Value Search::Worker::aggregate_linear(
   const Value* values, const int* counts, int n, int total, ChanceBound kind) const {
 
@@ -2422,7 +2419,7 @@ Value Search::Worker::aggregate_linear(
     return Value(round_chance(mean + std::max(chanceRisk, 0.0) * Bound, 1));
 }
 
-// ChanceModel Tables, as AB-JChess: from the point of view of the side whose
+// ChanceModel Tables: from the point of view of the side whose
 // move caused the chance event (the parent node), the outcomes are converted
 // to "masses" with the table score -> mass, averaged, and converted back with
 // the table mass -> score. Outcomes all beyond the range of the tables on the
@@ -2599,7 +2596,7 @@ Value Search::Worker::search_child(
 // The aggregate of a chance node does not depend on the order, but the TT and
 // the histories filled by the first, most representative outcome help the
 // following ones, and the first outcomes are the ones most likely to decide
-// the node on their own (see chance_node()). (Idea from AB-JChess.)
+// the node on their own (see chance_node()).
 static int sort_outcomes(Position::RestPieceList&                      restPieces,
                          int                                           restCount,
                          std::array<int, Position::MaxRestPieceTypes>& counts) {
@@ -2621,7 +2618,7 @@ static int sort_outcomes(Position::RestPieceList&                      restPiece
 // dark pieces captured by the opponent stay unknown (they remain in the pool,
 // which is already the correct probability model). Each possible identity is
 // searched with that piece removed from its owner's pool, and the results are
-// aggregated by chance_node(). (Idea from AB-JChess.)
+// aggregated by chance_node().
 template<NodeType nodeType>
 Value Search::Worker::hidden_capture_search(
   Position& pos, Stack* ss, Value alpha, Value beta, bool isQsearch, Depth depth, bool cutNode) {
@@ -2965,8 +2962,8 @@ void SearchManager::check_time(Search::Worker& worker) {
         return;
 
     // When using nodes, ensure checking rate is not lower than 0.1% of nodes.
-    // With FrequentTimeCheck, every 64 calls instead of 512, as AB-JChess
-    // does (chance nodes and the quiescence search of captures of dark pieces
+    // With FrequentTimeCheck, every 64 calls instead of 512 (chance nodes
+    // and the quiescence search of captures of dark pieces
     // can take many nodes between two checks).
     const int interval = worker.frequentTimeCheck ? 64 : 512;
     callsCnt = worker.limits.nodes ? std::min(interval, int(worker.limits.nodes / 1024)) : interval;

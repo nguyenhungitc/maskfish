@@ -187,8 +187,8 @@ def leb128_decode(data: bytes, count: int, dtype=np.int64) -> np.ndarray:
 
 
 def _write_leb(f, values: np.ndarray, raw_dtype=None):
-    """A LEB128 block, or with raw_dtype the plain little-endian values (as
-    Pikafish since "Remove leb128": the file is compressed with zstd anyway).
+    """A LEB128 block, or with raw_dtype the plain little-endian values (the
+    file is compressed with zstd anyway).
     The engine reads both."""
     if raw_dtype is not None:
         f.write(values.ravel().astype(np.dtype(raw_dtype).newbyteorder("<")).tobytes())
@@ -637,7 +637,7 @@ def main():
                          "-s32 (same evaluation) or -blend (layer stacks kept)")
     ap.add_argument("--no-leb128", action="store_true",
                     help="write the biases and PSQT weights as plain integers instead of LEB128 "
-                         "(as Pikafish; the file is compressed with zstd anyway). Engines from "
+                         "(the file is compressed with zstd anyway). Engines from "
                          "this version on read both. With a .nnue source: just rewrite it")
     args = ap.parse_args()
     leb128 = not args.no_leb128

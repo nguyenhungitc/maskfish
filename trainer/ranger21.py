@@ -4,7 +4,7 @@
 # abjchess-nnue-pytorch/ranger21.py), a local copy of the public Ranger21
 # implementation by Less Wright and Nestor Demeure
 # (https://github.com/lessw2020/Ranger21, Apache-2.0) keeping the AdamW /
-# positive-negative momentum path used by Stockfish's nnue-pytorch, without
+# positive-negative momentum path used by nnue-pytorch, without
 # the optional plotting and Chebyshev dependencies. Change: the settings are
 # printed only with logging_active.
 #

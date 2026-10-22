@@ -2,17 +2,17 @@
 # =============================================================================
 #  Maskfish — automatic training loop, in stages, until the Elo stops rising
 #
-#  Stage 1 · ab       gen0: AB-JChess plays both sides and scores the
+#  Stage 1 · ref      gen0: the reference engine plays both sides and scores the
 #                     positions; Maskfish learns from it → gen1.
-#  Stage 2 · distill  the current Maskfish net plays, AB-JChess scores every
+#  Stage 2 · distill  the current Maskfish net plays, the reference engine scores every
 #                     position; train → SPRT against the current net →
-#                     promote. Every new net is measured against AB-JChess.
-#                     Ends when the net is close to AB-JChess (Elo ≥
-#                     NEAR_AB_ELO) or after DISTILL_PATIENCE failed attempts
-#                     in a row (AB-JChess has nothing more to teach).
+#                     promote. Every new net is measured against the reference engine.
+#                     Ends when the net is close to the reference engine (Elo ≥
+#                     NEAR_REF_ELO) or after DISTILL_PATIENCE failed attempts
+#                     in a row (the reference engine has nothing more to teach).
 #  Stage 3 · self     the net plays and scores its own games (deeper search,
 #                     SELF_NODES); same train → SPRT → promote loop.
-#  Stage 4 · options  once the net is strong enough (Elo vs AB-JChess ≥
+#  Stage 4 · options  once the net is strong enough (Elo vs the reference engine ≥
 #                     OPT_START_ELO, or stage 3), every engine option is tested
 #                     by SPRT; again every OPT_EVERY new nets and before
 #                     stopping. Decisions:
@@ -47,7 +47,7 @@
 #     scripts/autotune.sh --dry-run       # print what the next round would run
 #
 #  Configuration: scripts/pipeline.env (Telegram, hardware, data, training,
-#  AB-JChess paths) and scripts/autotune.env (stages, options; see
+#  the reference engine paths) and scripts/autotune.env (stages, options; see
 #  scripts/autotune.env.example).
 # =============================================================================
 set -uo pipefail
@@ -103,18 +103,18 @@ fi
 : "${CHANCE_SCALING:=}"; : "${MATCH_NODES:=20000}"
 [[ -n "${MATCH_WORKERS:-}" ]] || MATCH_WORKERS=$(( NCPU > 1 ? NCPU - 1 : 1 ))
 
-# --- AB-JChess (same defaults as pipeline.sh) ---
+# --- reference engine (same defaults as pipeline.sh) ---
 : "${JIEQI_DIR:=$ROOT_DIR/jieqi}"
-: "${AB_ENGINE:=$JIEQI_DIR/abjchess}"
-: "${AB_NET:=$(ls "$JIEQI_DIR"/abjchess*.nnue 2>/dev/null | sort | tail -1)}"
-: "${AB_OPTS=ChasingRule=github}"
+: "${REF_ENGINE:=$JIEQI_DIR/ref-engine}"
+: "${REF_NET:=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"
+: "${REF_OPTS=ChasingRule=github}"
 
 # --- stages (autotune.env) ---
-: "${GEN0_GAMES:=$GAMES}"            # AB-JChess games for gen0
+: "${GEN0_GAMES:=$GAMES}"            # reference engine games for gen0
 : "${GEN0_EPOCHS:=$EPOCHS}"
 : "${DISTILL_NODES:=$NODES}"         # Maskfish nodes per move in the distillation games
 : "${SELF_NODES:=$(( NODES * 2 ))}"  # Maskfish nodes per move when it scores its own games
-: "${NEAR_AB_ELO:=-30}"              # distill → self once the net is this close to AB-JChess
+: "${NEAR_REF_ELO:=-30}"              # distill → self once the net is this close to the reference engine
 : "${DISTILL_PATIENCE:=3}"           # … or after this many failed attempts in a row
 : "${PATIENCE:=3}"                   # stage self: failed attempts in a row before scaling up
 : "${LEVEL_CAP:=4}"                  # scale-up levels: games ×(1+level/2), nodes ×(1+level/4)
@@ -122,14 +122,14 @@ fi
 : "${MAX_HOURS:=0}"                  # 0 = no time limit
 : "${RETRY_MAX:=5}"                  # retries of a failed pipeline step before stopping
 
-# --- measuring against AB-JChess ---
+# --- measuring against the reference engine ---
 : "${EXT_MOVETIME:=200}"             # ms per move (the same for both engines)
 : "${EXT_PAIRS:=400}"                # game pairs per measurement (about ±25 Elo)
 : "${EXT_HASH:=64}"
 : "${EXT_SEED:=20261017}"            # fixed: every net plays the same openings
 
 # --- engine option tests ---
-: "${OPT_START_ELO:=$NEAR_AB_ELO}"    # start once Elo vs AB-JChess ≥ this (or in stage self)
+: "${OPT_START_ELO:=$NEAR_REF_ELO}"    # start once Elo vs the reference engine ≥ this (or in stage self)
 : "${OPT_EVERY:=3}"                  # a new option cycle every N new nets
 : "${OPT_NODES:=$MATCH_NODES}"
 : "${OPT_SPRT:=0 3}"
@@ -302,28 +302,28 @@ run_match() {   # run_match NAME match.py-args...   (a finished result is reused
   match_parse "$f" || { log "match not finished ($name)"; return 1; }
 }
 
-# Elo of a net against AB-JChess → X_ELO, X_ERR, X_LINE
-ab_gauntlet() {   # ab_gauntlet NAME NET "OPTS" PAIRS
+# Elo of a net against the reference engine → X_ELO, X_ERR, X_LINE
+ref_gauntlet() {   # ref_gauntlet NAME NET "OPTS" PAIRS
   local name="$1" net="$2" opts="$3" pairs="$4"
-  local args=(--engine-a "$ENGINE" --net-a "$net" --engine-b "$AB_ENGINE" --net-b "$AB_NET"
+  local args=(--engine-a "$ENGINE" --net-a "$net" --engine-b "$REF_ENGINE" --net-b "$REF_NET"
               --movetime "$EXT_MOVETIME" --pairs "$pairs" --workers "$MATCH_WORKERS"
               --hash "$EXT_HASH" --seed "$EXT_SEED")
   local oa; read -r -a oa <<< "$opts"; (( ${#oa[@]} )) && args+=(--opt-a "${oa[@]}")
-  local ob; read -r -a ob <<< "$AB_OPTS"; (( ${#ob[@]} )) && args+=(--opt-b "${ob[@]}")
+  local ob; read -r -a ob <<< "$REF_OPTS"; (( ${#ob[@]} )) && args+=(--opt-b "${ob[@]}")
   run_match "$name" "${args[@]}" || return 1
   X_ELO=$M_ELO; X_ERR=$M_ERR; X_LINE=$M_LINE
 }
 
-evaluate_net() {   # $1 = gen: strength of a promoted net against AB-JChess
+evaluate_net() {   # $1 = gen: strength of a promoted net against the reference engine
   local g="$1" net; net=$(net_of "$g")
   [[ -n "$(st "ext_g$g")" ]] && return 0
-  say "🎯 Measuring <b>gen$g</b> against AB-JChess (${EXT_PAIRS} pairs, ${EXT_MOVETIME} ms/move)…"
-  ab_gauntlet "ext-g${g}-$(opts_hash "$(match_opts)")" "$net" "$(match_opts)" "$EXT_PAIRS" || return 1
+  say "🎯 Measuring <b>gen$g</b> against the reference engine (${EXT_PAIRS} pairs, ${EXT_MOVETIME} ms/move)…"
+  ref_gauntlet "ext-g${g}-$(opts_hash "$(match_opts)")" "$net" "$(match_opts)" "$EXT_PAIRS" || return 1
   (( DRY_RUN )) && return 0
   ST[ext_g$g]=$X_ELO; ST[exterr_g$g]=$X_ERR
   if [[ -z "$(st best_ext)" ]] || gt "$X_ELO" "$(st best_ext)"; then ST[best_ext]=$X_ELO; ST[best_ext_gen]=$g; fi
   state_save
-  tg_send "$TAG · 📊 <b>gen$g</b> vs AB-JChess: <b>$(printf '%+.1f' "$X_ELO")</b> ± ${X_ERR} Elo
+  tg_send "$TAG · 📊 <b>gen$g</b> vs the reference engine: <b>$(printf '%+.1f' "$X_ELO")</b> ± ${X_ERR} Elo
 <code>$(html "$X_LINE")</code>
 Stage: $(st stage) · best so far: gen$(st best_ext_gen) ($(st best_ext) Elo)"
 }
@@ -338,7 +338,7 @@ write_run_env() {   # $1 = source → pipeline config for this call, on top of p
   local att; att=$(st "attempt_g$g" 1)
   local games=$(( GAMES + GAMES * lvl / 2 )) nodes=$NODES epochs=$EPOCHS lr=$LR init=1 lambda=$LAMBDA
   case "$source" in
-    ab)      games=$GEN0_GAMES; epochs=$GEN0_EPOCHS ;;
+    ref)      games=$GEN0_GAMES; epochs=$GEN0_EPOCHS ;;
     distill) nodes=$(( DISTILL_NODES + DISTILL_NODES * lvl / 4 )) ;;
     self)    nodes=$(( SELF_NODES + SELF_NODES * lvl / 4 )) ;;
   esac
@@ -362,13 +362,13 @@ write_run_env() {   # $1 = source → pipeline config for this call, on top of p
     printf 'GAMES=%q\nNODES=%q\nEPOCHS=%q\nLR=%q\nLAMBDA=%q\nINIT_FROM_CURRENT=%q\nTRAIN_FROM=%q\n' \
       "$games" "$nodes" "$epochs" "$lr" "$lambda" "$init" "$from"
     printf 'GEN_OPTS=%q\nMATCH_OPTS=%q\nCHANCE_SCALING=\n' "$gen_opts" "$(pipeline_match_opts)"
-    printf 'AB_ENGINE=%q\nAB_NET=%q\nAB_OPTS=%q\n' "$AB_ENGINE" "$AB_NET" "$AB_OPTS"
+    printf 'REF_ENGINE=%q\nREF_NET=%q\nREF_OPTS=%q\n' "$REF_ENGINE" "$REF_NET" "$REF_OPTS"
     local me="$epochs" k; for k in 4 8; do (( epochs - k > 0 )) && me+=" $(( epochs - k ))"; done
     printf 'MATCH_EPOCHS=%q\nAUTO_PROMOTE=1\nENGINE=%q\nSOURCE=%q\n' "$me" "$ENGINE" "$source"
   } > "$f"
   RUN_INFO="${games} games, $(case $source in
-      ab) echo "AB-JChess plays and scores";;
-      distill) echo "Maskfish plays ${nodes} nodes, AB-JChess scores";;
+      ref) echo "the reference engine plays and scores";;
+      distill) echo "Maskfish plays ${nodes} nodes, the reference engine scores";;
       self) echo "Maskfish plays and scores, ${nodes} nodes";; esac) · train ${epochs} epochs on gen${from}..${g}, lr ${lr}, λ ${lambda}, $( ((init)) && echo 'from the current net' || echo 'from scratch')"
 }
 
@@ -625,8 +625,8 @@ option_cycle_due() {   # 0 if an option cycle should run now
 # ----------------------------------------------------------------------------- one round
 round() {
   local g; g=$(cur_gen); (( g < 0 )) && g=0
-  local stage; stage=$(st stage ab)
-  if [[ "$stage" == ab ]] && (( g >= 1 )); then stage=distill; st_set stage distill; fi
+  local stage; stage=$(st stage ref)
+  if [[ "$stage" == ref ]] && (( g >= 1 )); then stage=distill; st_set stage distill; fi
   # a net that was promoted but not measured yet (stopped in between)
   (( g >= 1 )) && { evaluate_net "$g" || return 1; }
 
@@ -657,16 +657,16 @@ round() {
     ST[promos]=$(( $(st promos 0) + 1 )); ST[fails]=0; state_save
     say "🏆 <b>gen$next</b> won the SPRT against gen$g (stage $stage)"
     evaluate_net "$next" || return 1
-    if [[ "$(st stage)" == distill ]] && ge "$(st "ext_g$next")" "$NEAR_AB_ELO"; then
+    if [[ "$(st stage)" == distill ]] && ge "$(st "ext_g$next")" "$NEAR_REF_ELO"; then
       st_set stage self
-      say "🔁 gen$next is close to AB-JChess ($(st "ext_g$next") ≥ ${NEAR_AB_ELO} Elo) → stage <b>self</b>: the net plays and scores its own games (${SELF_NODES} nodes)"
+      say "🔁 gen$next is close to the reference engine ($(st "ext_g$next") ≥ ${NEAR_REF_ELO} Elo) → stage <b>self</b>: the net plays and scores its own games (${SELF_NODES} nodes)"
     fi
   else
     ST[attempt_g$g]=$(( att + 1 )); ST[fails]=$(( $(st fails 0) + 1 )); state_save
     say "↩ gen$g · attempt $att: no epoch won the SPRT ($(st fails) failure(s) in a row)"
     if [[ "$stage" == distill ]] && (( $(st fails) >= DISTILL_PATIENCE )); then
       ST[stage]=self; ST[fails]=0; state_save
-      say "🔁 ${DISTILL_PATIENCE} failures in a row with AB-JChess scores → stage <b>self</b> (the net scores its own games)"
+      say "🔁 ${DISTILL_PATIENCE} failures in a row with the reference engine's scores → stage <b>self</b> (the net scores its own games)"
     elif [[ "$stage" == self ]] && (( $(st fails) >= PATIENCE && $(st level 0) < LEVEL_CAP )); then
       ST[level]=$(( $(st level 0) + 1 )); ST[fails]=0; state_save
       say "⛰ ${PATIENCE} failures in a row → scaling up to level $(st level): more games, deeper search"
@@ -685,7 +685,7 @@ check_stop() {   # returns 0 if finished
     fi
     local rep; rep=$(write_report)
     say "🏁 <b>FINISHED</b>: no new net after ${PATIENCE} attempts at the highest level, and no option gain: the Elo is at its maximum for this setup.
-Final net: <b>gen$(cur_gen)</b> (<code>nets/${LP}gen$(cur_gen).nnue</code>) · vs AB-JChess: $(st "ext_g$(cur_gen)" '?') Elo · best measured: gen$(st best_ext_gen) ($(st best_ext) Elo)
+Final net: <b>gen$(cur_gen)</b> (<code>nets/${LP}gen$(cur_gen).nnue</code>) · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best measured: gen$(st best_ext_gen) ($(st best_ext) Elo)
 Options: <code>$(html "$(best_opts)")</code> · total time $(fmt_dur $(( $(date +%s) - $(st start_ts "$(date +%s)") )))"
     tg_doc "$rep" "Final report"
     [[ -s "$PATCH_DIR/all-options.patch" ]] && tg_doc "$PATCH_DIR/all-options.patch" "Final combined patch"
@@ -703,12 +703,12 @@ write_report() {
   {
     echo "# Maskfish autotune — report ($(date '+%F %T'))"
     echo
-    echo "- Stage: **$(st stage ab)** · level $(st level 0)/${LEVEL_CAP} · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
-    echo "- Current net: **gen$(cur_gen)** · vs AB-JChess: $(st "ext_g$(cur_gen)" '?') Elo · best measured: gen$(st best_ext_gen '?') ($(st best_ext '?') Elo)"
+    echo "- Stage: **$(st stage ref)** · level $(st level 0)/${LEVEL_CAP} · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
+    echo "- Current net: **gen$(cur_gen)** · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best measured: gen$(st best_ext_gen '?') ($(st best_ext '?') Elo)"
     echo "- Engine options in use: \`$(best_opts)\`"
     echo "- Option cycles: $(st opt_cycles 0)"
     echo
-    echo "## Elo against AB-JChess (${EXT_PAIRS} pairs, ${EXT_MOVETIME} ms/move)"
+    echo "## Elo against the reference engine (${EXT_PAIRS} pairs, ${EXT_MOVETIME} ms/move)"
     echo
     for (( g = 1; g <= $(cur_gen); g++ )); do
       [[ -n "$(st "ext_g$g")" ]] && echo "- gen$g: $(st "ext_g$g") ± $(st "exterr_g$g")"
@@ -734,13 +734,13 @@ write_report() {
 
 preflight() {
   local err=()
-  [[ -f "$AB_ENGINE" && ! -x "$AB_ENGINE" ]] && chmod +x "$AB_ENGINE" 2>/dev/null
+  [[ -f "$REF_ENGINE" && ! -x "$REF_ENGINE" ]] && chmod +x "$REF_ENGINE" 2>/dev/null
   [[ -x "$PIPELINE" ]] || err+=("$PIPELINE not found")
   [[ -f "$OPTPATCH" ]] || err+=("$OPTPATCH not found")
   command -v "$PYTHON" >/dev/null || err+=("python not found: $PYTHON")
   command -v git >/dev/null || err+=("git is needed to make the patches")
-  [[ -x "$AB_ENGINE" ]] || err+=("AB-JChess not found: $AB_ENGINE (put it in jieqi/ or set AB_ENGINE)")
-  [[ -n "$AB_NET" && -f "$AB_NET" ]] || err+=("AB-JChess network not found (jieqi/abjchess*.nnue or AB_NET)")
+  [[ -x "$REF_ENGINE" ]] || err+=("Reference engine not found: $REF_ENGINE (put it in jieqi/ or set REF_ENGINE)")
+  [[ -n "$REF_NET" && -f "$REF_NET" ]] || err+=("Reference engine network not found (jieqi/ref-engine*.nnue or REF_NET)")
   if (( ${#err[@]} )); then
     local e; for e in "${err[@]}"; do log "ERROR: $e"; done
     tg_send "$TAG · ❌ Cannot start:
@@ -752,8 +752,8 @@ $(html "$(printf '• %s\n' "${err[@]}")")"
     run_logged "$AT_DIR/logs/build.log" make -C "$SRC_DIR" -j"$NCPU" build ARCH="$MAKE_ARCH" \
       "${MAKE_FLAGS[@]}" || return 1
   fi
-  printf 'uci\nisready\nquit\n' | timeout 60 "$AB_ENGINE" 2>/dev/null | grep -q readyok \
-    || { say "❌ AB-JChess ($AB_ENGINE) does not answer uci/isready"; return 1; }
+  printf 'uci\nisready\nquit\n' | timeout 60 "$REF_ENGINE" 2>/dev/null | grep -q readyok \
+    || { say "❌ The reference engine ($REF_ENGINE) does not answer uci/isready"; return 1; }
   return 0
 }
 
@@ -789,8 +789,8 @@ mkdir -p "$AT_DIR" "$PATCH_DIR" "$RES_DIR" "$AT_DIR/logs" nets data runs
 case "$ACTION" in
   status)
     state_load
-    echo "Stage: $(st stage ab) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
-    echo "Current net: gen$(cur_gen) · vs AB-JChess: $(st "ext_g$(cur_gen)" '?') Elo · best: gen$(st best_ext_gen '?') ($(st best_ext '?'))"
+    echo "Stage: $(st stage ref) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
+    echo "Current net: gen$(cur_gen) · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best: gen$(st best_ext_gen '?') ($(st best_ext '?'))"
     echo "Option cycles: $(st opt_cycles 0)$( [[ "$(st opt_running)" == 1 ]] && echo ' (one running)') · options in use: $(best_opts)"
     [[ -f "$AT_DIR/.pid" ]] && kill -0 "$(cat "$AT_DIR/.pid")" 2>/dev/null && echo "Running (pid $(cat "$AT_DIR/.pid"))" || echo "Not running"
     [[ -f "$DEC_FILE" ]] && { echo; column -t -s $'\t' "$DEC_FILE" 2>/dev/null || cat "$DEC_FILE"; }
@@ -828,7 +828,7 @@ rm -f "$AT_DIR/.stop"
 state_load
 [[ "$(st finished)" == 1 ]] && { echo "Already finished (remove ST[finished] from $STATE_FILE to continue)."; write_report; exit 0; }
 [[ -n "$(st start_ts)" ]] || st_set start_ts "$(date +%s)"
-[[ -n "$(st stage)" ]] || st_set stage ab
+case "$(st stage)" in ref|distill|self) ;; *) st_set stage ref ;; esac
 
 STOPPING=0
 on_signal() {
@@ -843,7 +843,7 @@ trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap on_exit EXIT
 
 preflight || exit 5
 RESUMED=""; (( $(cur_gen) >= 1 )) && RESUMED=" (resuming)"
-say "🚀 Started${RESUMED}: stage <b>$(st stage)</b>, current net gen$(cur_gen). Plan: AB-JChess games (gen0) → AB-JChess scores Maskfish games until ≥ ${NEAR_AB_ELO} Elo vs AB-JChess → self-play → engine options from ${OPT_START_ELO} Elo → loop until no gain at level ${LEVEL_CAP}."
+say "🚀 Started${RESUMED}: stage <b>$(st stage)</b>, current net gen$(cur_gen). Plan: reference engine games (gen0) → the reference engine scores Maskfish games until ≥ ${NEAR_REF_ELO} Elo vs the reference engine → self-play → engine options from ${OPT_START_ELO} Elo → loop until no gain at level ${LEVEL_CAP}."
 
 while :; do
   check_stop && exit 0

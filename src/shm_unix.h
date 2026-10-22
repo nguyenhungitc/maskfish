@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -49,7 +49,7 @@
 #include <unistd.h>
 #include <limits.h>
 
-#define SF_MAX_SEM_NAME_LEN NAME_MAX
+#define MF_MAX_SEM_NAME_LEN NAME_MAX
 
 #include "memory.h"
 #include "misc.h"
@@ -229,7 +229,7 @@ class SharedMemory {
         char buf[32];
         // Using std::to_string here causes non-deterministic PGO builds.
         // snprintf, being part of libc, is insensitive to the formatted values.
-        std::snprintf(buf, sizeof(buf), "sfshm_%016" PRIu64, hash_string(name));
+        std::snprintf(buf, sizeof(buf), "mfshm_%016" PRIu64, hash_string(name));
         return buf;
     }
 

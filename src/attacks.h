@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -275,7 +275,7 @@ inline constexpr PseudoAttackTables PseudoAttacks = [] {
 // Returns the pseudo attacks of the given piece type
 // assuming an empty board. Pawns (PAWN, PAWN_TO) need the color. A cannon
 // attacks nothing on an empty board: use the version with the occupancy.
-sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Color c = COLOR_NB) {
+mf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Color c = COLOR_NB) {
 
     assert(is_ok(s));
     if (pt == PAWN || pt == PAWN_TO)
@@ -291,7 +291,7 @@ sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Color c = COLOR_NB)
 // Returns the attacks by the given piece
 // assuming the board is occupied according to the passed Bitboard.
 // Sliding piece attacks do not continue passed an occupied square.
-sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Bitboard occupied) {
+mf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Bitboard occupied) {
 
     assert(pt != PAWN && pt != PAWN_TO && is_ok(s));
 
@@ -311,7 +311,7 @@ sf_always_inline Bitboard attacks_bb(PieceType pt, Square s, Bitboard occupied) 
 
 // Steps of a king or an advisor ignoring the palace. (Advisors are not
 // confined to the palace in Jieqi, so they are their usual attacks.)
-sf_always_inline Bitboard unconstrained_attacks_bb(PieceType pt, Square s) {
+mf_always_inline Bitboard unconstrained_attacks_bb(PieceType pt, Square s) {
 
     assert((pt == KING || pt == ADVISOR) && is_ok(s));
     return pt == KING ? PseudoAttacks.unconstrainedKing[s] : PseudoAttacks.byType[ADVISOR][s];

@@ -2,11 +2,11 @@
 
 The engine averages the outcomes of a chance node (a reveal, or a capture of a
 dark piece whose identity the capturer learns) in "mass" space when
-ChanceModel is Tables, as AB-JChess does: from the point of view of the side
+ChanceModel is Tables: from the point of view of the side
 whose move caused the chance event, every outcome score is converted to a mass
 with the table score -> mass, the masses are averaged (weighted by the number
 of pieces of each kind), and the average is converted back with the table
-mass -> score. The tables use AB-JChess's format:
+mass -> score. The tables are stored as:
 
     probability_score_to_mass.i32le   4001 little-endian int32, scores -2000..2000
     probability_mass_to_score.i32le   1901 little-endian int32, masses -950..950
@@ -22,16 +22,16 @@ for the side to move, clamped to -950..950.
     # tables equivalent to the default win-rate averaging (a reference)
     python chance_tables.py logistic --scale 360.8 --out tables/logistic
 
-    # copy the tables of an AB-JChess network (ABJCHESSV11 / ABJCHESSV82)
-    python chance_tables.py extract abjchess.nnue --out tables/abj [--monotone]
+    # copy the tables embedded in a reference engine's network package
+    python chance_tables.py extract reference.nnue --out tables/extracted [--monotone]
 
 Then:
 
     setoption name ChanceTables value <the --out directory>
     setoption name ChanceModel value Tables
 
-AB-JChess's tables are in the score units of its networks: they fit Maskfish's
-networks only roughly. Fitting tables to Maskfish's own data is preferable.
+Extracted tables are in the score units of the other engine's networks: they
+fit Maskfish's networks only roughly. Fitting tables to Maskfish's own data is preferable.
 """
 
 from __future__ import annotations
@@ -208,15 +208,19 @@ def cmd_fit(args):
                   "prior_scale": args.prior_scale})
 
 
+# Headers (16-byte magic, version) of the network packages that hold the tables
+PACKAGE_FORMATS = {(b"ABJCHESSV11" + b"\0" * 5, 110), (b"ABJCHESSV82" + b"\0" * 5, 82)}
+
+
 def cmd_extract(args):
-    """Copies the tables of an AB-JChess package (port of AB-JChess's
-    scripts/extract_v11_probability_tables.py, without the SHA-256 pin)."""
+    """Copies the tables of a network package (port of
+    scripts/extract_v11_probability_tables.py of AB-JChess, GPL-3.0, without
+    the SHA-256 pin)."""
     with open(args.source, "rb") as f:
         data = f.read()
     version, length = struct.unpack_from("<II", data, 16)
-    valid = {(b"ABJCHESSV11" + b"\0" * 5, 110), (b"ABJCHESSV82" + b"\0" * 5, 82)}
-    if (data[:16], version) not in valid:
-        raise SystemExit("not an ABJCHESSV11 / ABJCHESSV82 package")
+    if (data[:16], version) not in PACKAGE_FORMATS:
+        raise SystemExit("not a supported network package (unknown header)")
     text = data[24:24 + length].decode("utf-8")
     metadata, end = json.JSONDecoder().raw_decode(text)
     if text[end:].strip() not in ("", "\\n"):
@@ -239,7 +243,7 @@ def cmd_extract(args):
     if args.monotone:
         s2m, m2s = monotone(s2m), monotone(m2s)
     write_tables(args.out, s2m, m2s,
-                 {"source": "AB-JChess package", "package": os.path.abspath(args.source),
+                 {"source": "network package", "package": os.path.abspath(args.source),
                   "package_sha256": hashlib.sha256(data).hexdigest(), "monotone": args.monotone})
 
 
@@ -265,7 +269,7 @@ def main():
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_logistic)
 
-    p = sub.add_parser("extract", help="copy the tables of an AB-JChess network")
+    p = sub.add_parser("extract", help="copy the tables of a network package")
     p.add_argument("source")
     p.add_argument("--out", required=True)
     p.add_argument("--monotone", action="store_true",

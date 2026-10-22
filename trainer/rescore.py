@@ -1,7 +1,7 @@
-"""Re-scores positions with another engine ("teacher"), e.g. AB-JChess.
+"""Re-scores positions with another engine ("teacher").
 
     python rescore.py data/gen3.txt --out data/gen3_ab.txt \
-        --engine AB-JChess/src/AB-JChess --net abjchess-20260911.nnue \
+        --engine ../jieqi/ref-engine --net ../jieqi/ref-engine.nnue \
         --opt ChasingRule=github --nodes 20000 --workers 15
 
 Input and output are the text format of gen_data.py (fen | score | result);

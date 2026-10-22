@@ -1,4 +1,4 @@
-# Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+# Maskfish, a UCI jieqi engine
 # Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
 # Copyright (C) 2004-2023 The Pikafish developers (see AUTHORS file)
 #
@@ -106,27 +106,27 @@ VPATH = $(shell find -L . \( -path './universal' -o -path './temp_builds' \) -pr
 #                                                squared fc1 activations, fc2 fed by all
 #                                                activations; needs a matching net)
 # psqt = yes/no       --- -DJIEQI_NNUE_NO_PSQT --- psqt=no: network without the PSQT part of
-#                                                the feature transformer (SFNNv17 of
-#                                                Pikafish; needs a matching net)
+#                                                the feature transformer (needs a matching
+#                                                net)
 # ctx = yes/no        --- -DJIEQI_NNUE_CTX   --- ctx=yes: inventory context inputs of the
-#                                                layer stacks (AB-JChess; needs a matching net)
+#                                                layer stacks (needs a matching net)
 # lsblend = yes/no    --- -DJIEQI_NNUE_BLEND --- lsblend=yes: layer stacks selected by the
-#                                                uncertainty phase and interpolated (AB-JChess;
-#                                                needs a matching net)
+#                                                uncertainty phase and interpolated (needs a
+#                                                matching net)
 # meta = yes/no       --- -DJIEQI_NNUE_META  --- meta=yes: meta input features (pool summaries,
 #                                                unidentified losses, visible targets;
-#                                                AB-JChess; needs a matching net)
-# quant = 1/2         --- -DJIEQI_NNUE_QUANT2 --- quant=2: quantization of current Pikafish
+#                                                needs a matching net)
+# quant = 1/2         --- -DJIEQI_NNUE_QUANT2 --- quant=2: alternative quantization
 #                                                (feature transformer at scale 255, fc_0 at
 #                                                scale 128 and >> 7, fc_2 in fc_0 units;
 #                                                needs a matching net)
 # stacks = 16/32      --- -DJIEQI_NNUE_STACKS32 --- stacks=32: 32 layer stacks, each piece count
 #                                                bucket split by the share of dark pieces
-#                                                (Pikafish 32 LayerStack buckets; not with
+#                                                (not with
 #                                                lsblend=yes; needs a matching net)
 # embed = yes/no      --- -DNNUE_EMBEDDING   --- embed=yes: embed the network of the ref
 #                                                refs/assets/net (src/maskfish.nnue, fetched
-#                                                by `make net`) in the binary, as Stockfish
+#                                                by `make net`) in the binary
 # arch = (name)       --- (-arch)            --- Target architecture
 # bits = 64/32        --- -DIS_64BIT         --- 64-/32-bit operating system
 # prefetch = yes/no   --- -DUSE_PREFETCH     --- Use prefetch asm-instruction
@@ -1497,7 +1497,7 @@ endif
 # the baseline build only, and every build uses it.
 #
 # On Linux the C++ runtime is linked statically (libstdc++, or libc++ with
-# UNIVERSAL_LIBCXX=yes and COMP=clang, as Pikafish's release builds).
+# UNIVERSAL_LIBCXX=yes and COMP=clang).
 
 TEMP_DIR             := $(CURDIR)/temp_builds
 UNIVERSAL_EXE        := $(CURDIR)/$(EXE)

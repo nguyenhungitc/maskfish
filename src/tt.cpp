@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -81,7 +81,7 @@ struct TTEntry {
 
     // The table is shared by the search threads, which read and write entries
     // without locks: relaxed atomics make these races well defined (plain
-    // loads and stores on the usual targets), as in Stockfish and Pikafish.
+    // loads and stores on the usual targets).
     RelaxedAtomic<uint16_t> key16;
     RelaxedAtomic<uint8_t>  depth8;
     RelaxedAtomic<uint8_t>  genBound8;

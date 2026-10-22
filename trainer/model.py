@@ -9,7 +9,7 @@
         fc0: L1 -> 32 -> [sqr_crelu, crelu] -> fc1: 64 -> 32 -> [sqr_crelu, crelu]
         fc2: all 128 activations -> 1, plus fc0[30] - fc0[31]
 
-The "*-ctx" architectures (make ctx=yes, AB-JChess's inventory context) also
+The "*-ctx" architectures (make ctx=yes, the inventory context) also
 have a small layer, ctx_tower: 16 counts describing the uncertainty of the
 position (see jieqi_features.context_inputs(), recovered here from the
 features of the side to move) -> 16 -> clipped ReLU, whose outputs are 16
@@ -26,14 +26,14 @@ The float model works in "network units": 1.0 == 600 internal units. The
 quantization that serialize.py applies is the one the engine expects (see
 the comments there); clip_weights() keeps every weight in its int8 range.
 
-Training-only factorization (ideas from nnue-pytorch, also used by AB-JChess);
+Training-only factorization (ideas from nnue-pytorch);
 none of it exists in the engine, coalesced() folds it into the real weights:
 
 * virtual input features: every active feature (king bucket b, piece-square
   p) also activates a row shared by all king buckets for p (ft_ps). What is
   learnt about a piece on a square in one king bucket then helps all the
   others, which matters while data is scarce, and more with the "att"
-  architecture (24 buckets). Optionally (kb_factor, used by AB-JChess) also
+  architecture (24 buckets). Optionally (kb_factor) also
   a row per king bucket (ft_kb); it is added once per active feature, so it
   learns very fast, and it made results worse in a small test: off by default.
 * l1_fact: a fc0 component shared by all the layer stacks, so that rarely
@@ -167,8 +167,8 @@ class LayerStacks(nn.Module):
 
     def add_l1_fact(self):
         """Shared fc0 component, zeroed. Layer stacks 1: outputs 0..14 only
-        (output 15 is the direct term added to the result, kept per stack like
-        in AB-JChess); layer stacks 2: all the outputs."""
+        (output 15 is the direct term added to the result, kept per stack);
+        layer stacks 2: all the outputs."""
         self.l1_fact = nn.Linear(self.in_dim, self.act0, bias=False)
         with torch.no_grad():
             self.l1_fact.weight.zero_()

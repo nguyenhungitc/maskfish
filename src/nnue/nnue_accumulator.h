@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -178,7 +178,7 @@ class AccumulatorStack {
 
 #ifdef JIEQI_NNUE_THREATS
     // UCI option ThreatsIncremental: the threat accumulator is updated from
-    // the threats recorded by do_move() and do_flip() (as Pikafish), instead
+    // the threats recorded by do_move() and do_flip(), instead
     // of the difference between the lists of threats of the two positions
     static inline bool incrementalThreats = false;
 

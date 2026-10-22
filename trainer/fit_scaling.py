@@ -18,8 +18,8 @@ RawScore (gen_data.py does that).
 
 also fits one scale per range of total material (sum of the piece values of
 both sides but the kings, eval_scale.total_material(): the field allmat of the
-prepared data), with as many positions in each of the 8 ranges, like the win
-rate model of Stockfish depends on the material. The table (the median
+prepared data), with as many positions in each of the 8 ranges, as a win
+rate model that depends on the material. The table (the median
 material of each range and its scale) is for train.py --scaling-table, which
 interpolates between its points. The engine's ChanceScaling stays one
 constant: use the global scale for it.

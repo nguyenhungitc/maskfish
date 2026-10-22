@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -113,8 +113,8 @@ void TimeManagement::init(Search::LimitsType& limits,
     if (scaledTime < 1000 && limits.movestogo == 0)
         centiMTG = scaledTime * 6.000;
 
-    // UCI option SimpleMtg ("Simplify mtg in time management", Stockfish then
-    // Pikafish): the horizon is a whole number of moves, at most 50, reduced
+    // UCI option SimpleMtg: the horizon is a whole number of moves, at most 50,
+    // reduced
     // as 0.05 * time when less than one second is left in sudden death.
     if (bool(options["SimpleMtg"]))
     {

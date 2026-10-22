@@ -8,7 +8,7 @@ Each data argument is a prefix written by prepare_data.py (all its shards are
 used); several prefixes can be given, e.g. the data of several generations.
 The data gives the input features (architecture); --layers 2 trains the
 layer stacks of `make layers=2` on them (architecture "<arch>-l2"), and
---ctx the inventory context inputs of AB-JChess (`make ctx=yes`, "<arch>-ctx")
+--ctx the inventory context inputs (`make ctx=yes`, "<arch>-ctx")
 and --no-psqt a network without PSQT buckets (`make psqt=no`, "<arch>-nopsqt");
 each can start from the feature transformer of a network without them
 (--init-net).
@@ -31,14 +31,14 @@ target mixes the search score and the game result with --lambda:
     target = lambda * sigmoid(score / score_scaling) + (1 - lambda) * (result + 1) / 2
     loss   = mean(|sigmoid(s / scaling) - target| ^ power)
 score_scaling is --score-scaling (default: --scaling), power --loss-power
-(2.5). AB-JChess uses 410 for the data scores, 361 for the network and the
-power 2 (with which mixing the targets is the same as mixing the two losses).
+(2.5). With the power 2, mixing the targets is the same as mixing the two
+losses.
 With --lambda-end, lambda goes linearly from --lambda (first epoch) to
---lambda-end (last epoch), as AB-JChess's lambda schedule (1.0 -> 0.8): the
+--lambda-end (last epoch), e.g. 1.0 -> 0.8: the
 game results count more and more.
 With --scaling-table (fit_scaling.py --by-material), scaling depends on the
-total material of the position (like the win rate model of Stockfish, which
-depends on the material) instead of being one constant: the table gives it at
+total material of the position (a win rate model that depends on the
+material) instead of being one constant: the table gives it at
 a few material values, linearly interpolated (score_scaling is then scaled by
 the same factor). It needs the field allmat of the prepared data.
 
@@ -50,13 +50,13 @@ scores it was trained on, and the scale of the evaluation does not shrink
 from one generation to the next. --no-eval-scale compares the raw network
 output instead (the behaviour of older versions of the trainer).
 
-Training-only techniques (ideas from nnue-pytorch / AB-JChess, none of them
+Training-only techniques (ideas from nnue-pytorch, none of them
 changes the exported network format):
 * virtual input features and a shared fc0 part (see model.py), on by
   default (--no-factorize, --no-l1-fact to disable; --factorize-kb adds the
-  king bucket rows that AB-JChess also uses);
+  king bucket rows);
 * the output layer learns at --output-lr-scale (0.1) times the base rate;
-* --optimizer ranger21: the optimizer of AB-JChess and nnue-pytorch
+* --optimizer ranger21: the optimizer of nnue-pytorch
   (ranger21.py), instead of Adam;
 * --stack-balance CAP weights each sample by the inverse frequency of its
   layer stack (capped at CAP, weights normalized to an average of 1 per
@@ -414,7 +414,7 @@ def loss_fn(model, batch, scaling: float, lam: float, stack_weights=None, eval_s
 
 def stack_balance_weights(data: "Data", cap: float) -> tuple[np.ndarray, np.ndarray]:
     """Capped inverse-frequency weight of each layer stack, normalized to sum
-    to the number of stacks (AB-JChess's head balancing), and the number of
+    to the number of stacks (head balancing), and the number of
     positions of each layer stack."""
     counts = np.zeros(F.NUM_LAYER_STACKS, dtype=np.float64)
     for _, meta in data.shards:
@@ -438,16 +438,16 @@ def main():
     ap.add_argument("--lambda", dest="lam", type=float, default=1.0)
     ap.add_argument("--lambda-end", type=float, default=None,
                     help="lambda of the last epoch: lambda goes linearly from --lambda to it "
-                         "(AB-JChess: 1.0 -> 0.8); default: constant --lambda")
+                         "(e.g. 1.0 -> 0.8); default: constant --lambda")
     ap.add_argument("--scaling", type=float, default=361.0)
     ap.add_argument("--score-scaling", type=float, default=None,
                     help="scale of the sigmoid of the data scores (default: --scaling; "
-                         "AB-JChess: 410 with --scaling 361)")
+                         "e.g. 410 with --scaling 361)")
     ap.add_argument("--scaling-table", metavar="FILE",
                     help="scaling as a function of the total material, from fit_scaling.py "
                          "--by-material (instead of the constant --scaling)")
     ap.add_argument("--loss-power", type=float, default=2.5,
-                    help="exponent of the loss (AB-JChess: 2)")
+                    help="exponent of the loss")
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
     ap.add_argument("--init-ft-only", action="store_true",
@@ -458,7 +458,7 @@ def main():
     ap.add_argument("--ctx", action="store_true",
                     help="inventory context inputs of the layer stacks (make ctx=yes, *-ctx)")
     ap.add_argument("--quant2", action="store_true",
-                    help="quantization of current Pikafish (make quant=2, architecture *-q2)")
+                    help="alternative quantization (make quant=2, architecture *-q2)")
     ap.add_argument("--no-psqt", action="store_true",
                     help="no PSQT buckets (make psqt=no, architecture *-nopsqt)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -467,11 +467,11 @@ def main():
     ap.add_argument("--no-factorize", action="store_true",
                     help="train without virtual input features")
     ap.add_argument("--factorize-kb", action="store_true",
-                    help="also a virtual row per king bucket (AB-JChess); off by default")
+                    help="also a virtual row per king bucket; off by default")
     ap.add_argument("--no-l1-fact", action="store_true",
                     help="train without the fc0 part shared by the layer stacks")
     ap.add_argument("--optimizer", choices=("adam", "ranger21"), default="adam",
-                    help="adam (default) or ranger21 (AB-JChess, nnue-pytorch: AdamW with "
+                    help="adam (default) or ranger21 (nnue-pytorch: AdamW with "
                          "lookahead)")
     ap.add_argument("--output-lr-scale", type=float, default=0.1,
                     help="learning rate of the output layer relative to --lr")
@@ -612,7 +612,7 @@ def main():
               {"params": output_params, "lr": args.lr * args.output_lr_scale}]
     steps = max(1, args.epoch_size // args.batch_size)
     if args.optimizer == "ranger21":
-        # The settings of AB-JChess (and of nnue-pytorch): the AdamW core with
+        # The settings of nnue-pytorch: the AdamW core with
         # lookahead, without warmup / warmdown (the learning rate follows
         # --lr and --gamma), gradient centralization, clipping or decay
         from ranger21 import Ranger21

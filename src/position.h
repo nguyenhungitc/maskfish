@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -131,13 +131,13 @@ class Position {
     Bitboard checkers_to(Color c, Square s, Bitboard occupied) const;
     template<PieceType Pt>
     Bitboard attacks_by(Color c) const;
-    // Squares attacked by the pieces of type pt of the side not to move (as
-    // Pikafish), with the king of the side to move removed from the occupancy
+    // Squares attacked by the pieces of type pt of the side not to move,
+    // with the king of the side to move removed from the occupancy
     // (x-ray), cached in the StateInfo. threats_by(ALL_PIECES) & s is the same
     // as checkers_to(~side_to_move(), s, pieces() ^ king square | s) for a
     // square s next to the king.
     Bitboard threats_by(PieceType pt) const;
-    // Pikafish's legality test and generation of king moves with
+    // Legality test and generation of king moves with
     // threats_by(ALL_PIECES) (UCI option ThreatCache): no functional change
     static inline bool useThreatCache = false;
     // The threats by lesser pieces of the move ordering from threats_by()

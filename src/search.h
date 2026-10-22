@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -100,7 +100,6 @@ struct Stack {
 // outcome would see the parent's LMR reduction and the others would see 0.
 // restore() puts the parent's value back before every outcome; the destructor
 // leaves the field cleared, as a single call to search() would.
-// (Idea from AB-JChess.)
 class ChanceBranchReduction {
    public:
     explicit ChanceBranchReduction(int& r) :
@@ -204,13 +203,12 @@ class Worker;
 // How the outcomes of a chance node are averaged (UCI option ChanceModel)
 enum class ChanceModel : u8 {
     Winrate,  // in win-rate space, sigmoid(score / ChanceScaling) (default)
-    Tables,   // in "mass" space, with the lookup tables of ChanceTables (AB-JChess)
-    Linear    // linear average of the scores clamped to +-2000 (AB-JChess,
-              // AggressiveLevel 10 with ChanceRiskAversion)
+    Tables,   // in "mass" space, with the lookup tables of ChanceTables
+    Linear    // linear average of the scores clamped to +-2000
 };
 
-// Score <-> mass lookup tables for ChanceModel Tables, in the format of
-// AB-JChess's networks (probability_score_to_mass.i32le with 4001 entries
+// Score <-> mass lookup tables for ChanceModel Tables
+// (probability_score_to_mass.i32le with 4001 entries
 // for the scores -2000..2000, probability_mass_to_score.i32le with 1901
 // entries for the masses -950..950, little-endian int32). Both tables must
 // be non-decreasing: the bounds computed by the chance nodes rely on it.
@@ -364,7 +362,7 @@ class Worker {
 
     TTMoveHistory ttMoveHistory;
 
-    // Experimental search options ported from Pikafish (see engine.cpp), off by
+    // Experimental search options (see engine.cpp), off by
     // default. Public because the free history update functions read them.
     bool contCorr4Ply    = false;
     bool multiCutHistory = false;
@@ -475,7 +473,7 @@ class Worker {
     // captured by the opponent. With hiddenCaptureModel, a capture of a dark
     // piece by the observer is a chance node over the captured identity.
     // TT keys are salted with the observer because the same position is then
-    // searched differently depending on who is observing. (From AB-JChess.)
+    // searched differently depending on who is observing.
     Color                   rootObserver = WHITE;
     bool                    hiddenCaptureModel = false;
 
@@ -506,7 +504,7 @@ class Worker {
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
-    bool   pikaFutility       = false;
+    bool   altFutility        = false;
     bool   simpleThreadVote   = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

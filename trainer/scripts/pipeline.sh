@@ -6,14 +6,14 @@
 #  → fit scaling → prepare → train → verify exported net → SPRT → promote
 #
 #  Where the data comes from (--source):
-#     ab       AB-JChess plays both sides and scores the positions (Maskfish is
+#     ref      the reference engine plays both sides and scores the positions (Maskfish is
 #              only the referee for the board state). Used for gen0.
-#     distill  Maskfish (current net) plays, AB-JChess scores every position
-#              kept ("AB re-scores the Maskfish net's games").
+#     distill  Maskfish (current net) plays, the reference engine scores every position
+#              kept (the reference engine re-scores the Maskfish net's games).
 #     self     Maskfish (current net) plays and scores its own positions.
-#  AB-JChess scores are converted to Maskfish units: the score → win
-#  probability scale of AB-JChess is fitted once on its own games (gen0 data,
-#  saved in data/ab.scale) and every AB-scored file is prepared with
+#  Scores of the reference engine are converted to Maskfish units: the score → win
+#  probability scale of the reference engine is fitted once on its own games (gen0 data,
+#  saved in data/ref.scale) and every file it scored is prepared with
 #  --score-scale SCALING / that scale (stored next to the file in FILE.src).
 #
 #  Sends a Telegram ✅ after every step; on error sends ❌ at once with the
@@ -25,8 +25,8 @@
 #            train on data 0..N  →  runs/gen(N+1)/  →  nets/gen(N+1).nnue
 #
 #  Examples:
-#     scripts/pipeline.sh -g 0 --source ab        # AB-JChess games → train gen1
-#     scripts/pipeline.sh -g 1 --source distill   # gen1 plays, AB-JChess scores → gen2
+#     scripts/pipeline.sh -g 0 --source ref        # the reference engine games → train gen1
+#     scripts/pipeline.sh -g 1 --source distill   # gen1 plays, the reference engine scores → gen2
 #     scripts/pipeline.sh -g 7 --source self      # gen7 plays and scores → gen8
 #     scripts/pipeline.sh -g 1 --gen-only   # only generate data (+prepare) with nets/gen1.nnue
 #     scripts/pipeline.sh -g 1 --train-only # only train/verify/SPRT on existing data
@@ -52,7 +52,7 @@ SRC_DIR="$(cd "$TRAINER_DIR/../src" && pwd)"
 usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
 Options:
   -g, --gen N          Generation number of the current net (required, except --test-telegram)
-      --source S       ab | distill | self (default: $SOURCE, else ab for -g 0, distill otherwise)
+      --source S       ref | distill | self (default: $SOURCE, else ref for -g 0, distill otherwise)
       --gen-only       Only: build, init gen0 net (if N=0), generate train+val data, prepare
       --train-only     Only: checks, prepare what is missing, train, verify, SPRT, promote
       --no-prepare     (with --gen-only) do not prepare — for helper machines that only write text
@@ -113,16 +113,16 @@ fi
 : "${META:=0}"; : "${BLEND:=0}"; : "${CTX:=0}"; : "${PSQT:=1}"; : "${QUANT:=1}"; : "${INIT_NET:=}"
 : "${STACKS:=16}"
 : "${GAMES:=50000}"; : "${VAL_GAMES:=1000}"; : "${NODES:=5000}"; : "${DEPTH:=0}"
-# AB-JChess (gen0 games, scores of the distillation data, reference opponent)
+# Reference engine (gen0 games, scores of the distillation data, reference opponent)
 : "${JIEQI_DIR:=$TRAINER_DIR/../jieqi}"
-: "${AB_ENGINE:=$JIEQI_DIR/abjchess}"
-: "${AB_NET:=$(ls "$JIEQI_DIR"/abjchess*.nnue 2>/dev/null | sort | tail -1)}"
-: "${AB_OPTS=ChasingRule=github}"
-: "${AB_GEN_NODES:=10000}"      # AB-JChess nodes per move when it plays the games (--source ab)
-: "${AB_LABEL_NODES:=20000}"    # AB-JChess nodes per scored position (--source distill)
-: "${AB_HASH:=16}"
-: "${AB_ADJUDICATE:=1500}"     # AB-JChess scores are on a ~2× smaller scale than Maskfish's
-: "${AB_SCALE_FILE:=data/ab.scale}"
+: "${REF_ENGINE:=$JIEQI_DIR/ref-engine}"
+: "${REF_NET:=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"
+: "${REF_OPTS=ChasingRule=github}"
+: "${REF_GEN_NODES:=10000}"      # the reference engine nodes per move when it plays the games (--source ref)
+: "${REF_LABEL_NODES:=20000}"    # the reference engine nodes per scored position (--source distill)
+: "${REF_HASH:=16}"
+: "${REF_ADJUDICATE:=1500}"     # its scores are on a ~2× smaller scale than Maskfish's
+: "${REF_SCALE_FILE:=data/ref.scale}"
 : "${GEN_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"; : "${ADJUDICATE:=3000}"; : "${GEN_OPTS:=}"
 : "${CHANCE_SCALING:=}"; : "${SEED_BASE:=}"
 : "${SHARD_SIZE:=2000000}"; : "${MAX_SCORE:=10000}"; : "${SCORE_SCALE:=1.0}"; : "${PREP_WORKERS:=}"
@@ -180,8 +180,8 @@ fi
 
 [[ "$GEN" =~ ^[0-9]+$ ]] || { echo "Missing or invalid -g/--gen N" >&2; usage >&2; exit 2; }
 NEXT=$(( GEN + 1 ))
-[[ -n "$SOURCE" ]] || { (( GEN == 0 )) && SOURCE=ab || SOURCE=distill; }
-case "$SOURCE" in ab|distill|self) ;; *) echo "Invalid --source: $SOURCE (ab|distill|self)" >&2; exit 2 ;; esac
+[[ -n "$SOURCE" ]] || { (( GEN == 0 )) && SOURCE=ref || SOURCE=distill; }
+case "$SOURCE" in ref|distill|self) ;; *) echo "Invalid --source: $SOURCE (ref|distill|self)" >&2; exit 2 ;; esac
 
 # ----------------------------------------------------------------------------- file names / architecture
 # ARCH_FULL, FEATURE_ARCH, BIN_BASE, MAKE_FLAGS, TRAIN_ARCH, LP, PREP_DIR (see arch.sh)
@@ -311,14 +311,14 @@ for m in '$mods'.split():
     importlib.import_module(m)
 print('python', sys.version.split()[0], 'OK:', '$mods')
 " || fail "Missing Python packages — run: $PYTHON -m pip install -r requirements.txt" || return 1
-  if [[ "$MODE" != train ]] && (( GEN > 0 )) && [[ "$SOURCE" != ab ]] && [[ ! -f "$NET_CUR" ]]; then
+  if [[ "$MODE" != train ]] && (( GEN > 0 )) && [[ "$SOURCE" != ref ]] && [[ ! -f "$NET_CUR" ]]; then
     fail "Current net $NET_CUR not found (copy it into nets/ before generating data)" || return 1
   fi
   if [[ "$MODE" != train && "$SOURCE" != self ]]; then
-    [[ -f "$AB_ENGINE" && ! -x "$AB_ENGINE" ]] && chmod +x "$AB_ENGINE" 2>/dev/null
-    [[ -x "$AB_ENGINE" ]] || fail "AB-JChess not found: $AB_ENGINE (set AB_ENGINE / JIEQI_DIR)" || return 1
-    [[ -n "$AB_NET" && -f "$AB_NET" ]] || fail "AB-JChess network not found: '${AB_NET}' (set AB_NET)" || return 1
-    info "AB-JChess: $(html_escape "$AB_ENGINE") · net $(html_escape "$(basename "$AB_NET")")$( [[ -n "$AB_OPTS" ]] && printf ' · %s' "$(html_escape "$AB_OPTS")")"
+    [[ -f "$REF_ENGINE" && ! -x "$REF_ENGINE" ]] && chmod +x "$REF_ENGINE" 2>/dev/null
+    [[ -x "$REF_ENGINE" ]] || fail "Reference engine not found: $REF_ENGINE (set REF_ENGINE / JIEQI_DIR)" || return 1
+    [[ -n "$REF_NET" && -f "$REF_NET" ]] || fail "Reference engine network not found: '${REF_NET}' (set REF_NET)" || return 1
+    info "Reference engine: $(html_escape "$REF_ENGINE") · net $(html_escape "$(basename "$REF_NET")")$( [[ -n "$REF_OPTS" ]] && printf ' · %s' "$(html_escape "$REF_OPTS")")"
   fi
   autotune
 }
@@ -509,10 +509,10 @@ s_init() {
   info "Created material-only net: $(html_escape "$NET_CUR")"
 }
 
-# Score scale of AB-JChess → SCORE_SCALE for the files it scored (see the header)
-ab_score_scale() {   # prints SCALING / s_AB, or nothing if data/ab.scale does not exist
-  [[ -s "$AB_SCALE_FILE" ]] || return 0
-  awk -v sc="$SCALING" -v f="$(cat "$AB_SCALE_FILE")" 'BEGIN{ if (f > 0) printf "%.4f", sc / f }'
+# Score scale of the reference engine → SCORE_SCALE for the files it scored (see the header)
+ref_score_scale() {   # prints SCALING / s_ref, or nothing if data/ref.scale does not exist
+  [[ -s "$REF_SCALE_FILE" ]] || return 0
+  awk -v sc="$SCALING" -v f="$(cat "$REF_SCALE_FILE")" 'BEGIN{ if (f > 0) printf "%.4f", sc / f }'
 }
 
 gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
@@ -526,32 +526,32 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
   [[ -e "$out.workers" ]] && info "Resuming the interrupted generation of $(html_escape "$out")"
   local mopts; words mopts "$GEN_OPTS"
   [[ -n "$CHANCE_SCALING" ]] && mopts+=("ChanceScaling=$CHANCE_SCALING")
-  local abopts; words abopts "$AB_OPTS"
+  local refopts; words refopts "$REF_OPTS"
   local cmd=("$PYTHON" -u gen_data.py --games "$games" --workers "$GEN_WORKERS"
              --adjudicate "$ADJUDICATE" --seed "$seed" --out "$out")
   mopts+=("${EVAL_OPT[@]}")
   case "$SOURCE" in
-    ab)
-      cmd+=(--engine "$AB_ENGINE" --net "$AB_NET" --nodes "$AB_GEN_NODES" --hash "$AB_HASH"
-            --referee "$ENGINE" --adjudicate "$AB_ADJUDICATE")
-      (( ${#abopts[@]} )) && cmd+=(--opt "${abopts[@]}") ;;
+    ref)
+      cmd+=(--engine "$REF_ENGINE" --net "$REF_NET" --nodes "$REF_GEN_NODES" --hash "$REF_HASH"
+            --referee "$ENGINE" --adjudicate "$REF_ADJUDICATE")
+      (( ${#refopts[@]} )) && cmd+=(--opt "${refopts[@]}") ;;
     distill|self)
       [[ -f "$NET_CUR" ]] || (( DRY_RUN )) || fail "Current net $NET_CUR not found" || return 1
       cmd+=(--engine "$ENGINE" --net "$NET_CUR" --nodes "$NODES")
       (( DEPTH > 0 )) && cmd+=(--depth "$DEPTH")
       (( ${#mopts[@]} )) && cmd+=(--opt "${mopts[@]}")
       if [[ "$SOURCE" == distill ]]; then
-        cmd+=(--teacher "$AB_ENGINE" --teacher-net "$AB_NET" --teacher-nodes "$AB_LABEL_NODES"
-              --teacher-hash "$AB_HASH")
-        (( ${#abopts[@]} )) && cmd+=(--teacher-opt "${abopts[@]}")
+        cmd+=(--teacher "$REF_ENGINE" --teacher-net "$REF_NET" --teacher-nodes "$REF_LABEL_NODES"
+              --teacher-hash "$REF_HASH")
+        (( ${#refopts[@]} )) && cmd+=(--teacher-opt "${refopts[@]}")
       fi ;;
   esac
   run "$CUR_LOG" "${cmd[@]}" || return 1
   (( DRY_RUN )) && return 0
   local n; n=$(count_lines "$out")
   (( n > 0 )) || fail "gen_data finished but $out is empty" || return 1
-  # who scored the file: prepare_one converts AB-JChess scores with the scale in FILE.src
-  local scorer=maskfish; [[ "$SOURCE" != self ]] && scorer=abjchess
+  # who scored the file: prepare_one converts the reference engine's scores with the scale in FILE.src
+  local scorer=maskfish; [[ "$SOURCE" != self ]] && scorer=ref
   printf 'source=%s\nscorer=%s\n' "$SOURCE" "$scorer" > "$out.src"
   info "$(fmt_num "$n") positions from $(fmt_num "$games") games ($(html_escape "$SOURCE")) → $(html_escape "$out") ($(du -h "$out" | cut -f1))"
 }
@@ -559,21 +559,21 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
 s_gendata() { gen_common "$GEN_TXT" "$GAMES" "$SEED_TRAIN"; }
 s_genval()  { gen_common "$VAL_TXT" "$VAL_GAMES" "$SEED_VAL"; }
 
-s_fit() {   # informational, except for AB-JChess games: their fit is the AB score scale
+s_fit() {   # informational, except for reference engine games: their fit is its score scale
   [[ -s "$GEN_TXT" ]] || (( DRY_RUN )) || { info "No $GEN_TXT to fit"; return 0; }
   if run "$CUR_LOG" "$PYTHON" -u fit_scaling.py "$GEN_TXT"; then
     local line; line=$(grep -h 'fitted scale' "$CUR_LOG" | tail -1)
     [[ -n "$line" ]] && info "$(html_escape "$line")"
     local fitted; fitted=$(sed -n 's/.*fitted scale: \([0-9.]*\).*/\1/p' <<< "$line")
-    if [[ "$SOURCE" == ab && -n "$fitted" ]] && (( ! DRY_RUN )); then
-      if [[ ! -s "$AB_SCALE_FILE" || $FORCE == 1 ]]; then
-        echo "$fitted" > "$AB_SCALE_FILE"
-        info "AB-JChess score scale ${fitted} saved to $(html_escape "$AB_SCALE_FILE") → its scores × $(ab_score_scale) in Maskfish units"
+    if [[ "$SOURCE" == ref && -n "$fitted" ]] && (( ! DRY_RUN )); then
+      if [[ ! -s "$REF_SCALE_FILE" || $FORCE == 1 ]]; then
+        echo "$fitted" > "$REF_SCALE_FILE"
+        info "Reference engine score scale ${fitted} saved to $(html_escape "$REF_SCALE_FILE") → its scores × $(ref_score_scale) in Maskfish units"
       else
-        info "AB-JChess score scale kept from $(html_escape "$AB_SCALE_FILE"): $(cat "$AB_SCALE_FILE") (this data: ${fitted})"
+        info "Reference engine score scale kept from $(html_escape "$REF_SCALE_FILE"): $(cat "$REF_SCALE_FILE") (this data: ${fitted})"
       fi
     fi
-    [[ "$SOURCE" == distill && ! -s "$AB_SCALE_FILE" ]] &&       info "⚠ $(html_escape "$AB_SCALE_FILE") missing (no gen0 AB-JChess games): AB scores are converted with the scale fitted on this data"
+    [[ "$SOURCE" == distill && ! -s "$REF_SCALE_FILE" ]] &&       info "⚠ $(html_escape "$REF_SCALE_FILE") missing (no gen0 reference engine games): its scores are converted with the scale fitted on this data"
     info "Using SCALING=${SCALING}${CHANCE_SCALING:+, ChanceScaling=$CHANCE_SCALING} (change it in scripts/pipeline.env if needed)"
   else
     info "⚠ fit_scaling failed (ignored, training is not affected)"
@@ -581,12 +581,12 @@ s_fit() {   # informational, except for AB-JChess games: their fit is the AB sco
   return 0
 }
 
-# score scale for one text file: AB-JChess scores → Maskfish units (see the header)
+# score scale for one text file: reference engine scores → Maskfish units (see the header)
 file_score_scale() {   # $1 = text file → prints the --score-scale value
   local txt="$1" scorer=""
   [[ -f "$txt.src" ]] && scorer=$(sed -n 's/^scorer=//p' "$txt.src")
-  if [[ "$scorer" != abjchess ]]; then echo "$SCORE_SCALE"; return 0; fi
-  local sc; sc=$(ab_score_scale)
+  if [[ -z "$scorer" || "$scorer" == maskfish ]]; then echo "$SCORE_SCALE"; return 0; fi
+  local sc; sc=$(ref_score_scale)
   if [[ -z "$sc" ]]; then      # no gen0 fit: fit on this file (its results come from Maskfish games)
     local f; f=$("$PYTHON" fit_scaling.py "$txt" 2>/dev/null | sed -n 's/.*fitted scale: \([0-9.]*\).*/\1/p')
     sc=$(awk -v a="$SCALING" -v f="${f:-0}" 'BEGIN{ if (f > 0) printf "%.4f", a / f; else print 1.0 }')
@@ -853,7 +853,7 @@ case "$MODE" in
   train) MODE_TXT="TRAINING ONLY" ;;
 esac
 tg_send "🚀 ${NAME_TAG} · Pipeline started: <b>${MODE_TXT}</b>
-net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata (%s): %s games + %s val, %s, seed %s' "$SOURCE" "$GAMES" "$VAL_GAMES" "$(case $SOURCE in ab) echo "AB-JChess plays ${AB_GEN_NODES} nodes";; distill) echo "Maskfish plays ${NODES} nodes, AB-JChess scores ${AB_LABEL_NODES} nodes";; self) echo "Maskfish plays and scores, ${NODES} nodes";; esac)" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
+net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata (%s): %s games + %s val, %s, seed %s' "$SOURCE" "$GAMES" "$VAL_GAMES" "$(case $SOURCE in ref) echo "the reference engine plays ${REF_GEN_NODES} nodes";; distill) echo "Maskfish plays ${NODES} nodes, the reference engine scores ${REF_LABEL_NODES} nodes";; self) echo "Maskfish plays and scores, ${NODES} nodes";; esac)" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
 
 step "Environment check" s_preflight
 step "Build engine" s_build

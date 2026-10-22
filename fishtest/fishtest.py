@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Local fishtest for Maskfish: a web page to queue engine tests and a runner
-that plays them on this machine with an SPRT, like the fishtest of Stockfish
-and Pikafish but without distributed workers.
+that plays them on this machine with an SPRT, without distributed workers.
 
     python fishtest.py                      # http://127.0.0.1:6543
     python fishtest.py --concurrency 14 --port 8000

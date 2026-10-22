@@ -32,7 +32,7 @@ across shards.
 Lines that do not parse are skipped, counted and reported (the first ones
 are printed); any other error stops the script.
 
-Data scored by another engine (AB-JChess, see rescore.py) uses that engine's
+Data scored by another engine (see rescore.py) uses that engine's
 score scale: convert it with --score-scale 361/s, where s is the scale that
 fit_scaling.py finds on that data.
 

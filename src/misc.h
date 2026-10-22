@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -625,21 +625,21 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
 #endif
 
 #if defined(__GNUC__)
-    #define sf_always_inline inline __attribute__((always_inline))
+    #define mf_always_inline inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
-    #define sf_always_inline __forceinline
+    #define mf_always_inline __forceinline
 #else
     // plain inline for other compilers
-    #define sf_always_inline inline
+    #define mf_always_inline inline
 #endif
 
 #if defined(__clang__)
-    #define sf_assume(cond) __builtin_assume(cond)
+    #define mf_assume(cond) __builtin_assume(cond)
 #elif defined(__GNUC__)
     #if __GNUC__ >= 13
-        #define sf_assume(cond) __attribute__((assume(cond)))
+        #define mf_assume(cond) __attribute__((assume(cond)))
     #else
-        #define sf_assume(cond) \
+        #define mf_assume(cond) \
             do \
             { \
                 if (!(cond)) \
@@ -647,18 +647,18 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
             } while (0)
     #endif
 #elif defined(_MSC_VER)
-    #define sf_assume(cond) __assume(cond)
+    #define mf_assume(cond) __assume(cond)
 #else
     // do nothing for other compilers
-    #define sf_assume(cond)
+    #define mf_assume(cond)
 #endif
 
 #ifdef __GNUC__
-    #define sf_unreachable() __builtin_unreachable()
+    #define mf_unreachable() __builtin_unreachable()
 #elif defined(_MSC_VER)
-    #define sf_unreachable() __assume(0)
+    #define mf_unreachable() __assume(0)
 #else
-    #define sf_unreachable()
+    #define mf_unreachable()
 #endif
 
 #ifdef __GNUC__

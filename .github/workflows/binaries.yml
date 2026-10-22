@@ -98,7 +98,7 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   # The Windows binary is checked on Windows itself (under Wine, the NUMA
-  # detection of the engine, as Pikafish's, fails at startup)
+  # detection of the engine fails at startup)
   windows-check:
     name: Windows x86-64-universal (check, publish)
     needs: windows

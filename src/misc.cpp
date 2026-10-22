@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -609,7 +609,7 @@ bool is_whitespace(std::string_view s) {
 }
 
 
-// Return the directory where our Stockfish binary sits. This is useful,
+// Return the directory where our binary sits. This is useful,
 // because when the NNUE network is not embedded in the binary, this directory
 // is one of the locations where we look for the NNUE file.
 fs::path CommandLine::get_binary_directory(fs::path argv0) {

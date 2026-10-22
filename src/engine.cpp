@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -122,15 +122,15 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // side the engine searches for (see Search::Worker::hiddenCaptureModel).
     options.add("HiddenCaptureModel", Option(true));
 
-    // Jieqi: bonus for safe reveals (quiet moves of dark pieces). The defaults
-    // are the values used by AB-JChess; set them all to 0 to disable.
+    // Jieqi: bonus for safe reveals (quiet moves of dark pieces). Set them all
+    // to 0 to disable.
     options.add("RevealQuietBase", Option(-12, -96, 96));
     options.add("RevealQuietPhase", Option(0, -96, 96));
     options.add("RevealQuietSafety", Option(24, -192, 192));
     options.add("RevealQuietHighValue", Option(-12, -96, 96));
     options.add("RevealQuietDiversity", Option(0, -96, 96));
 
-    // Experimental (ideas from AB-JChess), off by default: test with SPRT.
+    // Experimental, off by default: test with SPRT.
     // ProbCut asks a larger margin (+64) and one ply less for dark captures.
     options.add("ProbCutDarkCapture", Option(false));
     // Lower the depth of TT entries that are deep enough but cannot cut.
@@ -149,7 +149,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // evade a check in the quiescence search.
     options.add("RevealQsearchEvasions", Option(false));
 
-    // Experimental search ideas ported from Pikafish, off by default: test
+    // Experimental search ideas, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).
     // Continuation correction history also from the move 4 plies back.
     options.add("ContCorr4Ply", Option(false));
@@ -190,7 +190,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pruning at shallow depth: divide the history of quiet moves by a
     // depth dependent value (instead of a constant) when reducing lmrDepth.
     options.add("LMRHistoryDivisor", Option(false));
-    // Simplifications of Pikafish's search (Aug-Oct 2026): razoring margin
+    // Simplifications of the search: razoring margin
     // linear in depth, LMR not depending on the window but smaller at PV nodes,
     // no continuation history update 5 plies back, bonus of a quiet TT move
     // linear in depth, a futility margin that does not depend on the best move,
@@ -233,8 +233,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // always has the size for 10), with stronger updates
     options.add("BigPawnHistory", Option(false));
     // Share the continuation, pawn and correction histories (not the
-    // continuation correction history) between the threads of a NUMA node, as
-    // Pikafish does; the pawn and correction histories then grow with the
+    // continuation correction history) between the threads of a NUMA node;
+    // the pawn and correction histories then grow with the
     // number of threads (only matters with Threads > 1). Changing it recreates
     // the threads.
     options.add("SharedHistory", Option(false, [this](const Option&) {
@@ -245,27 +245,26 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
     // Scaling of the network output in the evaluation: Complexity (default,
-    // |psqt - positional| and the major material), Alignment (Pikafish's
-    // since September 2026: agreement of the network with the material
+    // |psqt - positional| and the major material), Alignment (agreement of
+    // the network with the material
     // balance, and the total material; suits networks without PSQT) or
-    // Correlation (Pikafish's "Replace nnueComplexity with simple_eval
-    // equivalent" with dark pieces at the average value of their pool, and
+    // Correlation (the same agreement, with dark pieces at the average value
+    // of their pool, and
     // the major material). The trainer must use the same (train.py
     // --eval-scaling); it does not model Correlation.
     options.add("EvalScaling", Option("Complexity var Complexity var Alignment var Correlation",
                                       "Complexity"));
-    // Pikafish "Simplify mtg in time management": the move horizon in whole
+    // Time management: the move horizon in whole
     // moves, at most 50 (instead of centi-moves, at most 60).
     options.add("SimpleMtg", Option(false));
-    // Pikafish "Simplify optimism scaling formula": the weight of optimism in
+    // Simpler optimism scaling: the weight of optimism in
     // the evaluation does not depend on the material (EvalScaling Complexity).
     options.add("OptimismSimple", Option(false));
-    // Pikafish's futility pruning (margin, depth limit, returned value).
-    options.add("PikaFutility", Option(false));
-    // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
+    // Alternative futility pruning (margin, depth limit, returned value).
+    options.add("AltFutility", Option(false));
+    // Simpler thread selection: votes by score only (Threads > 1).
     options.add("SimpleThreadVote", Option(false));
-    // Pikafish "Only generate legal moves in movegen" (the part not ported
-    // yet): the squares attacked by the opponent are cached in the StateInfo
+    // The squares attacked by the opponent are cached in the StateInfo
     // and used to generate and test king moves. No functional change (bench
     // identical): compare the speed with and without.
     options.add("ThreatCache", Option(false, [](const Option& o) {
@@ -273,14 +272,14 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     return std::nullopt;
                 }));
     // Threats by lesser pieces of the quiet move ordering from the cached
-    // threats, as Pikafish (x-raying our king): changes the move ordering.
+    // threats (x-raying our king): changes the move ordering.
     options.add("ThreatCacheMovePick", Option(false, [](const Option& o) {
                     Position::useThreatCacheMovePick = bool(o);
                     return std::nullopt;
                 }));
 #ifdef JIEQI_NNUE_THREATS
-    // Pikafish's incremental threat features ("Full threats" DirtyThreats,
-    // "Update NNUE perspectives together"): the moves record the threats
+    // Incremental threat features (DirtyThreats, both perspectives
+    // together): the moves record the threats
     // they add and remove, and the threat accumulator is updated from them
     // instead of from the difference of the lists of threats of the two
     // positions. No functional change (bench identical): compare the speed.
@@ -296,9 +295,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // standard deviation of the outcomes' win rates: > 0 avoids uncertain
     // reveals and captures, < 0 seeks them.
     options.add("ChanceRiskAversion", Option(0, -100, 100));
-    // How the outcomes of a chance node are averaged (from AB-JChess): Winrate
+    // How the outcomes of a chance node are averaged: Winrate
     // (default), Tables (score <-> mass tables of ChanceTables) or Linear
-    // (average of the scores, AggressiveLevel 10 of AB-JChess). Tables
+    // (average of the scores clamped to +-2000). Tables
     // without loaded tables falls back to Winrate.
     options.add("ChanceModel", Option("Winrate var Winrate var Tables var Linear", "Winrate"));
     // Directory of the tables of ChanceModel Tables (made by

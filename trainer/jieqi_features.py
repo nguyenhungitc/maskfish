@@ -18,28 +18,27 @@ Four architectures exist (select with set_arch() before building a model):
   also bucketed by the visible attacking material of the perspective's side
   (4 attack buckets: has a rook? has a knight or a cannon?) and, when both
   kings are on the middle file, the board is mirrored according to its
-  left/right balance ("mid mirror"). Both ideas come from Pikafish.
+  left/right balance ("mid mirror").
 * "threats" / "att-threats": the engine built with `make threats=yes`
   (optionally with `nnue=att`). Threat features are added to the inputs above
   and the feature transformer has 1024 outputs instead of 2048 (see the
-  "Threat features" section below). Idea and design from Pikafish/Stockfish
-  ("full threats"), adapted to dark pieces.
+  "Threat features" section below), adapted to dark pieces.
 
 Each of them also exists with options of the engine build, as name suffixes
 in this order (e.g. "threats-l2-nopsqt"):
 
-* "-meta": the meta features of AB-JChess (`make meta=yes`, see
+* "-meta": the meta features (`make meta=yes`, see
   meta_offsets()), 88 more rows per feature transformer bucket;
-* "-blend": the layer stack selection of AB-JChess (`make lsblend=yes`, see
+* "-blend": the blended layer stack selection (`make lsblend=yes`, see
   layer_stack_selection()), which changes the prepared data (layer stack and
   interpolation weight of each position);
 * "-s32": 32 layer stacks (`make stacks=32`, see layer_stack_bucket()), which
   changes the prepared data (layer stack of each position); not with "-blend";
 * "-l2": the layer stacks of `make layers=2` (see model.py);
 * "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
-  from AB-JChess, see context_inputs());
+  see context_inputs());
 * "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`);
-* "-q2": the quantization of current Pikafish (`make quant=2`, see quant.py).
+* "-q2": the alternative quantization (`make quant=2`, see quant.py).
 
 The last four only change the model: the input features, and so the prepared
 data, are those of the name without them (feature_arch()).
@@ -294,7 +293,7 @@ def king_bucket(ksq: int, oksq: int) -> tuple[int, bool]:
     return bucket, mirror
 
 
-# ---- "att" architecture: mid mirror (Pikafish) and attack buckets
+# ---- "att" architecture: mid mirror and attack buckets
 
 MASK64 = (1 << 64) - 1
 BALANCE_ENCODING = 0xA4A92A74E989D3A7
@@ -492,7 +491,7 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
 
 # ---------------------------------------------------------------- meta features
 #
-# Architectures "-meta" (make meta=yes, from AB-JChess; engine:
+# Architectures "-meta" (make meta=yes; engine:
 # HalfKAv2_hm::make_meta_indices()): 9 features per perspective, one in each
 # group, at PS_META + offset in the bucket of the perspective ("us"):
 #    0 + min(7, rooks, cannons and knights in our pool)
@@ -567,8 +566,8 @@ def psqt_bucket(stack):
     return stack // (NUM_LAYER_STACKS // NUM_PSQT_BUCKETS)
 
 
-# Layer stack selection of the "-blend" architectures (make lsblend=yes, from
-# AB-JChess; engine: HalfKAv2_hm::make_layer_stack_selection()). The bucket of
+# Layer stack selection of the "-blend" architectures (make lsblend=yes;
+# engine: HalfKAv2_hm::make_layer_stack_selection()). The bucket of
 # the piece count is raised by an "uncertainty phase" (numbers of dark pieces
 # and of rooks, cannons and knights in the pools), and the evaluation is
 # interpolated between the layer stacks floor and floor + 1 with the weight
@@ -615,7 +614,7 @@ def layer_stack_selection(pos: JieqiPosition) -> tuple[int, int]:
 
 # ---------------------------------------------------------------- inventory context
 #
-# Architectures "-ctx" (make ctx=yes, from AB-JChess): 16 inputs of a small
+# Architectures "-ctx" (make ctx=yes): 16 inputs of a small
 # layer (ContextTower in maskfish/src/nnue/nnue_architecture.h) whose outputs
 # are additional inputs of fc0. From the point of view of the side to move:
 # its pool counts by piece type, the opponent's, the numbers of dark pieces of

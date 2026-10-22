@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -31,7 +31,7 @@
 namespace Maskfish::Eval::NNUE::Layers {
 
 // Squared clipped ReLU: min(127, input^2 >> (2 * WeightScaleBitsLocal + 7)).
-// make quant=2 uses WeightScaleBits + 1 after fc_0 (as Pikafish).
+// make quant=2 uses WeightScaleBits + 1 after fc_0.
 template<IndexType InDims, int WeightScaleBitsLocal = WeightScaleBits>
 class SqrClippedReLU {
    public:

@@ -34,7 +34,7 @@ trainer/nets/
 trainer/AB-JChess/
 trainer/autotune/
 trainer/archive-*/
-# reference engines (AB-JChess binary and network)
+# reference engines (binary and network)
 jieqi/
 
 # pipeline.sh config (holds the Telegram token) and logs

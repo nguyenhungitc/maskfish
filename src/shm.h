@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -533,18 +533,18 @@ struct SystemWideSharedConstant {
         usize executable_hash = hash_string(getExecutablePathHash());
 
         char buf[1024];
-        std::snprintf(buf, sizeof(buf), "Local\\sf_%zu$%zu$%zu", content_hash, executable_hash,
+        std::snprintf(buf, sizeof(buf), "Local\\mf_%zu$%zu$%zu", content_hash, executable_hash,
                       discriminator);
         std::string shm_name = buf;
 
 #if defined(USE_UNIX_SHM)
         // POSIX shared memory names must start with a slash
-        shm_name = "/sf_" + createHashString(shm_name);
+        shm_name = "/mf_" + createHashString(shm_name);
 
-        // hash name and make sure it is not longer than SF_MAX_SEM_NAME_LEN
-        if (shm_name.size() > SF_MAX_SEM_NAME_LEN)
+        // hash name and make sure it is not longer than MF_MAX_SEM_NAME_LEN
+        if (shm_name.size() > MF_MAX_SEM_NAME_LEN)
         {
-            shm_name = shm_name.substr(0, SF_MAX_SEM_NAME_LEN - 1);
+            shm_name = shm_name.substr(0, MF_MAX_SEM_NAME_LEN - 1);
         }
 #endif
 

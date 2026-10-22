@@ -3,9 +3,8 @@
 *luck is a skill too*
 
 Welcome to the Maskfish project! Maskfish is a free UCI engine for **Jieqi**
-(揭棋, "hidden xiangqi"), built on Pikafish and Stockfish. Our goal is simple:
-**make the strongest open Jieqi engine there is, together with the community**,
-the way Stockfish and Pikafish grew into what they are today.
+(揭棋, "hidden xiangqi"). Our goal is simple: **make the strongest open Jieqi
+engine there is, together with the community**.
 
 ## About this project (please read)
 
@@ -88,8 +87,8 @@ will come from. You can help with:
 Concrete tasks where help is welcome. Open an issue before starting a large
 one so that we don't duplicate work.
 
-1. **Tune the reveal bonus.** The `RevealQuiet*` defaults come from AB-JChess
-   and have **not been re-tuned for Maskfish's networks**.
+1. **Tune the reveal bonus.** The `RevealQuiet*` defaults have **not been
+   tuned for Maskfish's networks**.
 2. **Validate the experimental options** (`ChanceBranchDepth`,
    `HiddenCaptureModel`, `ChanceRiskAversion`, `JieqiMaterial`, ...). Each one
    should be proven by an SPRT test or removed. Options that fail should be
@@ -118,7 +117,7 @@ make -j build
 The build fetches the **Jieqi network** from the hidden ref `refs/assets/net`
 and embeds it in the binary (see [Publishing a
 network](./README.md#publishing-a-network)); otherwise set the `EvalFile`
-option. Pikafish xiangqi networks do not work.
+option. Xiangqi networks do not work.
 
 The published binaries are universal binaries (`make -j build
 ARCH=x86-64-universal`, see [Universal binary](./README.md#universal-binary)):

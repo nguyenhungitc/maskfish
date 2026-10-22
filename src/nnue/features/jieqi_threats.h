@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -20,8 +20,7 @@
 // Threat input features of the Jieqi NNUE (engine built with `make threats=yes`).
 //
 // One feature per (attacker, from, to, attacked): the piece on `to` is attacked
-// (or defended) by the piece on `from`. Idea from the "full threats" inputs of
-// Stockfish and Pikafish, adapted to dark pieces:
+// (or defended) by the piece on `from`, adapted to dark pieces:
 //
 // * pieces are grouped in 16 classes: the piece code for a revealed piece and
 //   color * 8 for a dark piece;
@@ -31,7 +30,7 @@
 //   the HalfKA features) and the colors of the classes are swapped for black;
 // * threats between two pieces that always attack each other are counted once;
 // * threats of a king, of an advisor to its own king, and checks of rooks,
-//   cannons and knights are not features (Pikafish does the same).
+//   cannons and knights are not features.
 //
 // trainer/jieqi_features.py implements exactly the same features ("Threat
 // features" section); trainer/verify.py checks that both agree.

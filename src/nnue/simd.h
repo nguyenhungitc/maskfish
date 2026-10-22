@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -336,8 +336,8 @@ inline int lsx_vec_nnz(__m128i a) {
 // On x86 with SSSE3 or better (AVX-512 with BW), two rows of 8-bit feature
 // transformer weights are widened and summed into 16-bit lanes with one
 // unpack and one maddubs (against a vector of ones), instead of one sign
-// extension per row (Pikafish "Pair int8 weight rows in accumulator
-// updates"). The weights are permuted at load time to match (see
+// extension per row (paired int8 weight rows). The weights are permuted at
+// load time to match (see
 // FeatureTransformer::WideningPairOrder): vec_widen_i8() and
 // vec_widen_pair_i8() turn sizeof(vec_t) weights into two consecutive
 // vectors of the accumulator.

@@ -180,7 +180,7 @@ default and described next to their definition in `src/engine.cpp`:
 `Simplifications`, `ContHistOffset`, `CorrHistAsym`, `HindsightFirst`, `FollowPV`,
 `CutoffCntTweak`, `NMPFailHighCount`, `MateTTExtension`, `StopEarly`,
 `RootScoreEMA`, `StandPatNoTT`, `DecisiveTTAging`, `BigPawnHistory`,
-`SharedHistory`, `PikaFutility` and `SimpleThreadVote`; for the evaluation
+`SharedHistory`, `AltFutility` and `SimpleThreadVote`; for the evaluation
 `OptimismSimple` and the value `Correlation` of `EvalScaling` (the trainer
 does not model it: do not generate training data with it); for the time
 management `SimpleMtg` (test it with a time control, `trainer/match.py --tc`).

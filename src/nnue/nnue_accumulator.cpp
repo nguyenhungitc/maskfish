@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -128,7 +128,7 @@ namespace {
 
     #if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
 // Rows of 8-bit threat weights to add to or to subtract from an accumulator
-// (Pikafish "Pair int8 weight rows in accumulator updates"). They are applied
+// (paired int8 weight rows). They are applied
 // two at a time with vec_widen_pair_i8() (one shuffle per two rows instead of
 // one sign extension per row), the last one alone if their number is odd. The
 // 16-bit sums wrap around like the separate additions they replace, so the
@@ -189,7 +189,7 @@ void apply_weight_rows(std::int16_t*              dst,
                        const WeightRows<MaxRows>& added) {
     // Accumulator registers of a tile: the widening needs 4 more registers
     // (two rows, ones, zero), so at most 12 of the 16 vector registers below
-    // AVX-512 (16 of 32 with it), as in Pikafish
+    // AVX-512 (16 of 32 with it)
     constexpr int NumRegs = []() {
         constexpr int Ideal   = int(Dimensions * sizeof(std::int16_t) / sizeof(vec_t));
         constexpr int MaxRegs = sizeof(vec_t) == 64 ? 16 : 12;
@@ -474,8 +474,8 @@ std::size_t AccumulatorStack::incremental_threats_source(bool mirror) const noex
 }
 
 // Updates the threat accumulators of the latest state that are not computed
-// from an earlier state by the threats recorded since then (Pikafish's
-// DirtyThreats), both perspectives together when they start from the same
+// from an earlier state by the threats recorded since then
+// (DirtyThreats), both perspectives together when they start from the same
 // state. Returns whether both perspectives are computed; a perspective that
 // cannot be updated this way (no source, too many changes) is left to
 // evaluate_threats_side().
@@ -968,8 +968,8 @@ void double_inc_update(const FeatureTransformer<TransformedFeatureDimensions>& f
     // Workaround compiler warning for uninitialized variables, replicated on
     // profile builds on windows with gcc 14.2.0.
     // TODO remove once unneeded
-    sf_assume(added.size() == 1);
-    sf_assume(removed.size() == 2 || removed.size() == 3 || removed.size() == 4
+    mf_assume(added.size() == 1);
+    mf_assume(removed.size() == 2 || removed.size() == 3 || removed.size() == 4
               || removed.size() == 5);
 
     auto updateContext =
@@ -1033,8 +1033,8 @@ void update_accumulator_incremental(
     // Workaround compiler warning for uninitialized variables, replicated on
     // profile builds on windows with gcc 14.2.0.
     // TODO remove once unneeded
-    sf_assume(added.size() >= 1 && added.size() <= 4);
-    sf_assume(removed.size() >= 1 && removed.size() <= 4);
+    mf_assume(added.size() >= 1 && added.size() <= 4);
+    mf_assume(removed.size() >= 1 && removed.size() <= 4);
 
     auto updateContext =
       make_accumulator_update_context<Perspective>(featureTransformer, computed, target_state);

@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -209,7 +209,7 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     {
         if (Position::useThreatCacheMovePick)
         {
-            // UCI option ThreatCacheMovePick: Pikafish's threats by lesser
+            // UCI option ThreatCacheMovePick: threats by lesser
             // pieces, from the threats cached in the StateInfo (x-raying our
             // king, except the cannons)
             threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.threats_by(PAWN);

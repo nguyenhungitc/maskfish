@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -529,7 +529,7 @@ using NumaAutoPolicy = std::variant<SystemNumaPolicy, L3DomainsPolicy, BundledL3
 //
 // We use startup affinities so as not to modify its own behaviour in time.
 //
-// Since Stockfish doesn't support exceptions all places where an exception
+// Since the engine doesn't support exceptions all places where an exception
 // should be thrown are replaced by std::exit.
 class NumaConfig {
    public:
@@ -610,7 +610,6 @@ class NumaConfig {
         // While Windows allows this to work now, such assignments have bad interaction
         // with the scheduler - in particular it still prefers scheduling on the thread's
         // "primary" node, even if it means scheduling SMT processors first.
-        // See https://github.com/official-stockfish/Stockfish/issues/5551
         // See https://learn.microsoft.com/en-us/windows/win32/procthread/processor-groups
         //
         //     Each process is assigned a primary group at creation, and by default all

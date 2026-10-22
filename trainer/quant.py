@@ -21,8 +21,8 @@ schemes the engine can be built with.
     scale 64 (quant=1) or 16384 / 127 (quant=2), so that they add fc0 units.
 
 In both, the PSQT weights are at scale 600 * 16 and the float network unit is
-600 internal units. quant=2 is the scheme of Pikafish since its "Update
-nnue-architecture" (fc0 and the final layer at twice the resolution, the
+600 internal units. quant=2 is the alternative scheme (fc0 and the final
+layer at twice the resolution, the
 feature transformer at twice the resolution but half the range).
 """
 

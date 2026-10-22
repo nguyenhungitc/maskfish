@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
 
   Maskfish is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 /*
   The default network (maskfish.nnue, zstd-compressed as distributed) embedded
-  in the binary, as Stockfish does with incbin. The Makefile defines
+  in the binary. The Makefile defines
   NNUE_EMBEDDING when src/maskfish.nnue (the copy of the network of the hidden
   ref refs/assets/net that `make net` fetches) exists and embed=yes (the
   default); otherwise the embedded network is empty (gEmbeddedNNUESize == 0)

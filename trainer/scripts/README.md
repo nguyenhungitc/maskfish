@@ -33,18 +33,18 @@ themselves, so any working directory works).
 - Python with `numpy`, `zstandard`, `torch` (`pip install -r requirements.txt`);
   a CUDA build of torch to train on the GPU. A `trainer/.venv` is used
   automatically if it exists.
-- AB-JChess (https://github.com/lxsgx23/AB-JChess) for `--source ab|distill`
+- AB-JChess (https://github.com/lxsgx23/AB-JChess) for `--source ref|distill`
   and for `autotune.sh`. Default layout (next to `src/` and `trainer/`):
 
   ```
   maskfish/
     jieqi/
-      abjchess                    AB-JChess binary (Linux build)
-      abjchess-20261010.nnue      AB-JChess network (the newest abjchess*.nnue is used)
+      ref-engine                  AB-JChess binary (Linux build)
+      ref-engine.nnue             AB-JChess network (the newest ref-engine*.nnue is used)
     src/  trainer/ ...
   ```
 
-  Other locations are set with `AB_ENGINE`, `AB_NET` (or `JIEQI_DIR`) in
+  Other locations are set with `REF_ENGINE`, `REF_NET` (or `JIEQI_DIR`) in
   `pipeline.env`.
 
 ## 2. Configuration
@@ -179,14 +179,14 @@ scripts/autotune.sh --test-telegram
 ```
 
 Nothing has to exist before the first run except AB-JChess
-(`jieqi/abjchess` and `jieqi/abjchess*.nnue`, see section 1).
+(`jieqi/ref-engine` and `jieqi/ref-engine*.nnue`, see section 1).
 
 ### 4.2. Stages
 
 | Stage | Data (`pipeline.sh --source`) | Leaves the stage when |
 | --- | --- | --- |
-| **1 · ab** | AB-JChess plays both sides (`AB_GEN_NODES`) and scores the positions; Maskfish is only the referee for the board. `GEN0_GAMES` games, then train from scratch → SPRT against the material-only `gen0` | a net wins (→ gen1) |
-| **2 · distill** | The current Maskfish net plays (`DISTILL_NODES`), AB-JChess scores every position kept (`AB_LABEL_NODES`) | a new net measures ≥ `NEAR_AB_ELO` against AB-JChess, or `DISTILL_PATIENCE` failed attempts in a row |
+| **1 · ref** | AB-JChess plays both sides (`REF_GEN_NODES`) and scores the positions; Maskfish is only the referee for the board. `GEN0_GAMES` games, then train from scratch → SPRT against the material-only `gen0` | a net wins (→ gen1) |
+| **2 · distill** | The current Maskfish net plays (`DISTILL_NODES`), AB-JChess scores every position kept (`REF_LABEL_NODES`) | a new net measures ≥ `NEAR_REF_ELO` against AB-JChess, or `DISTILL_PATIENCE` failed attempts in a row |
 | **3 · self** | The net plays and scores its own games (`SELF_NODES`) | — (runs until the end) |
 | **4 · options** | Option cycles (4.4), interleaved with stages 2–3 | — |
 
@@ -194,8 +194,8 @@ Every new net is measured against AB-JChess (`EXT_PAIRS` pairs at
 `EXT_MOVETIME` ms per move, same openings every time).
 
 AB-JChess prints its scores on a win-probability scale of its own. Its scale
-is fitted once on its own games (gen0, saved in `data/ab.scale`) and every
-file it scored is prepared with `--score-scale SCALING / ab.scale`, so all
+is fitted once on its own games (gen0, saved in `data/ref.scale`) and every
+file it scored is prepared with `--score-scale SCALING / ref.scale`, so all
 the data is in Maskfish units. Each text file says who scored it in
 `FILE.src`; the scale used for each prepared prefix is in `PREFIX.scale`.
 
@@ -280,16 +280,16 @@ settings come from `pipeline.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AB_ENGINE`, `AB_NET`, `AB_OPTS` | `../jieqi/abjchess`, newest `abjchess*.nnue`, `ChasingRule=github` | AB-JChess (also in `pipeline.env`) |
-| `AB_GEN_NODES` / `AB_LABEL_NODES` / `AB_ADJUDICATE` (pipeline.env) | 10000 / 20000 / 1500 | AB-JChess nodes when it plays / when it scores; adjudication threshold in AB-JChess units |
-| `GEN0_GAMES` / `GEN0_EPOCHS` | `GAMES` / `EPOCHS` | Stage ab |
+| `REF_ENGINE`, `REF_NET`, `REF_OPTS` | `../jieqi/ref-engine`, newest `ref-engine*.nnue`, `ChasingRule=github` | AB-JChess (also in `pipeline.env`) |
+| `REF_GEN_NODES` / `REF_LABEL_NODES` / `REF_ADJUDICATE` (pipeline.env) | 10000 / 20000 / 1500 | AB-JChess nodes when it plays / when it scores; adjudication threshold in AB-JChess units |
+| `GEN0_GAMES` / `GEN0_EPOCHS` | `GAMES` / `EPOCHS` | Stage ref |
 | `DISTILL_NODES` | `NODES` | Maskfish nodes per move in stage distill |
-| `NEAR_AB_ELO` / `DISTILL_PATIENCE` | -30 / 3 | End of stage distill |
+| `NEAR_REF_ELO` / `DISTILL_PATIENCE` | -30 / 3 | End of stage distill |
 | `SELF_NODES` | 2 × `NODES` | Maskfish nodes per move in stage self |
 | `PATIENCE` / `LEVEL_CAP` | 3 / 4 | Failures before a scale-up / highest level |
 | `TRAIN_WINDOW` | 4 | Train on the data of the last N generations (0 = all) |
 | `EXT_MOVETIME` / `EXT_PAIRS` / `EXT_SEED` | 200 / 400 / 20261017 | Measurement against AB-JChess |
-| `OPT_START_ELO` / `OPT_EVERY` | `NEAR_AB_ELO` / 3 | When option cycles run |
+| `OPT_START_ELO` / `OPT_EVERY` | `NEAR_REF_ELO` / 3 | When option cycles run |
 | `OPT_NODES` / `OPT_SPRT` / `OPT_MAX_PAIRS` | `MATCH_NODES` / `0 3` / 12000 | Option SPRT |
 | `OPT_RETRY` / `OPT_GROUP` | 2 / 1 | Undecided options: retests, group test |
 | `OPT_EXCLUDE`, `OPT_INT_TESTS`, `OPT_INT_REMOVABLE`, `OPT_GROUP_TESTS`, `OPT_ONLY` | see the example | What is tested |
@@ -330,7 +330,7 @@ All in `trainer/`:
 | Path | Content |
 | --- | --- |
 | `nets/genN.nnue` | Promoted networks (`gen0` = material only); the highest N is the current net |
-| `data/ab.scale` | Score scale of AB-JChess (fitted on its gen0 games) |
+| `data/ref.scale` | Score scale of AB-JChess (fitted on its gen0 games) |
 | `data/genN*.txt`, `data/valN*.txt`, `data/prep-<arch>/` | Text and prepared data; `FILE.src` = who played / scored it |
 | `runs/gen(N+1)/` | Training output of the current attempt (`runs/gen(N+1).tryK` = earlier attempts) |
 | `logs/genN/` | `pipeline.sh` logs, one file per step |
@@ -364,14 +364,14 @@ Rebuild the engine afterwards and check with `bench` (or `verify.py`).
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `Cannot start: AB-JChess not found` | Set `AB_ENGINE` / `AB_NET`, or put the binary and its network in `jieqi/`. They must be Linux builds (not `.exe`); a missing executable bit is fixed automatically |
-| `engine ... does not answer UCI` | Wrong binary or missing library: try `printf 'uci\nisready\nquit\n' \| jieqi/abjchess` |
+| `Cannot start: Reference engine not found` | Set `REF_ENGINE` / `REF_NET`, or put the binary and its network in `jieqi/`. They must be Linux builds (not `.exe`); a missing executable bit is fixed automatically |
+| `engine ... does not answer UCI` | Wrong binary or missing library: try `printf 'uci\nisready\nquit\n' \| jieqi/ref-engine` |
 | `No CUDA` in the environment check | Install a CUDA build of torch, or set `DEVICE=cpu` / `REQUIRE_GPU=0` in `pipeline.env` (very slow) |
 | `Engine and trainer are NOT bit-exact` | The engine and the trainer disagree: use the same commit for both, rebuild; see `trainer/README.md` section 11 |
 | An option says "edit by hand" | Its patch did not reproduce the `bench` node count; see `autotune/logs/patch.log`. The option is still used in the runs |
 | `uncommitted changes` warning | `src/` or `trainer/*.py` differ from `HEAD`: patches are made on `HEAD`, the `bench` check may then fail. Commit first |
 | `autotune is already running` | Another run holds `autotune/.lock`; `--status` shows its pid |
 | Telegram messages missing | `scripts/pipeline.sh --test-telegram`; check `TG_BOT_TOKEN` / `TG_CHAT_ID` and that `curl` is installed |
-| `no UCI option X` | An option in `AB_OPTS`, `GEN_OPTS`, `MATCH_OPTS` or `--opt` does not exist in that engine (misspelt, or a binary older than the option: rebuild). Options are no longer ignored silently |
-| Stuck in stage ab | gen1 must beat the material-only gen0: every failed attempt adds `GEN0_GAMES` more AB-JChess games; check the SPRT lines in `logs/gen0/` |
+| `no UCI option X` | An option in `REF_OPTS`, `GEN_OPTS`, `MATCH_OPTS` or `--opt` does not exist in that engine (misspelt, or a binary older than the option: rebuild). Options are no longer ignored silently |
+| Stuck in stage ref | gen1 must beat the material-only gen0: every failed attempt adds `GEN0_GAMES` more AB-JChess games; check the SPRT lines in `logs/gen0/` |
 | The run never finishes | It ends at level `LEVEL_CAP` after `PATIENCE` failures and an option cycle without gain: check `--status`; lower `LEVEL_CAP` / `PATIENCE` or set `MAX_HOURS` |

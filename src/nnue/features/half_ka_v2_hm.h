@@ -1,5 +1,5 @@
 /*
-  Maskfish, a UCI jieqi engine derived from Pikafish and Stockfish
+  Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
   Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
@@ -99,7 +99,6 @@ class HalfKAv2_hm {
     // also bucketed by the visible attacking material of the perspective's
     // side (has a rook? has a knight or a cannon?), and the board is mirrored
     // by its left/right balance when both kings are on the middle file.
-    // Both ideas come from Pikafish (xiangqi), also used by AB-JChess.
     static constexpr std::uint32_t BaseHashValue  = 0x7a17b104;
     static constexpr IndexType     AttackBucketNB = 4;
 #else
@@ -107,7 +106,7 @@ class HalfKAv2_hm {
     static constexpr IndexType     AttackBucketNB = 1;
 #endif
 
-    // make meta=yes: the meta features of AB-JChess, 9 per perspective, one in
+    // make meta=yes: the meta features, 9 per perspective, one in
     // each group (offsets from PS_META, "us" is the perspective):
     //   0 + min(7, rooks, cannons and knights in our pool)
     //   8 + min(7, the same in the opponent's pool)
@@ -170,14 +169,14 @@ class HalfKAv2_hm {
 
 #ifdef JIEQI_NNUE_ATT
     // Mirror decision when both kings are on the middle file and midMirror
-    // says the position is "right-heavy" (as in Pikafish)
+    // says the position is "right-heavy"
     static constexpr bool king_mirror(Square ksq, Square oksq, bool midMirror) {
         const bool kingMid  = (KingBuckets[ksq][oksq].first & 1);
         const bool okingMid = (KingBuckets[oksq][ksq].first & 1);
         return KingBuckets[ksq][oksq].second || (kingMid && okingMid && midMirror);
     }
 
-    // Left/right balance encoding of the pieces of one side (Pikafish):
+    // Left/right balance encoding of the pieces of one side:
     // symmetric material adds up to BalanceEncoding, a king off the middle
     // file sets bit 63. Dark pieces count as the kind of their square.
     static constexpr auto MidMirrorEncoding = [] {
@@ -260,7 +259,7 @@ class HalfKAv2_hm {
     // the kings are dark (make lsblend=yes: the floor of the selection below)
     static IndexType make_layer_stack_bucket(const Position& pos);
 
-    // make lsblend=yes: the layer stack selection of AB-JChess. The bucket
+    // make lsblend=yes: the blended layer stack selection. The bucket
     // (floor) is the one of the piece count, raised by an "uncertainty phase"
     // (numbers of dark pieces and of rooks, cannons and knights in the pools),
     // and the evaluation is interpolated between the layer stacks floor and
