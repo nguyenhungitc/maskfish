@@ -1,8 +1,10 @@
 # Builds the engine and runs the tests that need no network: perft
-# (regression values of the move generator) and invalid inputs. The sanitizer
+# (regression values of the move generator) and invalid inputs. The release
+# job builds the published binary, x86-64-universal, and also runs perft with
+# its baseline builds (forced with MASKFISH_UNIVERSAL_ARCH). The sanitizer
 # job also checks gives_check() for every move of a dark piece (debug build).
 # Runs only for the pro branch (pushes to it and pull requests into it), and
-# only when the change touches src/ or trainer/.
+# only when the change touches src/, trainer/, tests/ or this file.
 # The runner image is pinned (not ubuntu-latest), so that a new compiler or
 # sanitizer runtime only comes with a deliberate change of this file.
 name: CI
@@ -13,24 +15,42 @@ on:
     paths:
       - "src/**"
       - "trainer/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [pro]
     paths:
       - "src/**"
       - "trainer/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
   release:
-    name: Release build, perft, invalid input
+    name: Release binary (x86-64-universal), perft, invalid input
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      # The binary that is published (see binaries.yml): every x86-64 build,
+      # the best one selected at startup
       - name: Build
         working-directory: src
-        run: make -j"$(nproc)" build ARCH=x86-64-avx2
-      - name: Perft
+        run: make -j"$(nproc)" build ARCH=x86-64-universal COMP=gcc
+      - name: Builds of the binary, selected build
+        working-directory: src
+        run: |
+          MASKFISH_UNIVERSAL_ARCH=list ./maskfish
+          printf "compiler\nquit\n" | ./maskfish
+      - name: Perft (selected build)
         working-directory: src
         run: ../tests/perft.sh
+      - name: Perft (baseline builds, forced)
+        working-directory: src
+        run: |
+          for arch in x86-64 x86-64-sse41-popcnt x86-64-avx2; do
+            echo "== $arch"
+            MASKFISH_UNIVERSAL_ARCH=$arch PERFT_QUICK=1 ../tests/perft.sh
+          done
       - name: Invalid input
         working-directory: src
         run: ../tests/invalid_input.sh

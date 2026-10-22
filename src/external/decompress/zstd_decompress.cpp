@@ -57,6 +57,7 @@
 *********************************************************/
 #include "../common/zstd_deps.h"   /* ZSTD_memcpy, ZSTD_memmove, ZSTD_memset */
 #include "../common/allocations.h" /* ZSTD_customMalloc, ZSTD_customCalloc, ZSTD_customFree */
+#include "../common/bmi2.h"
 #include "../common/error_private.h"
 #include "../common/zstd_internal.h" /* blockProperties_t */
 #include "../common/mem.h"           /* low level memory routines */
@@ -118,8 +119,7 @@ static size_t ZSTD_DDictHashSet_emplaceDDict(ZSTD_DDictHashSet* hashSet, const Z
             hashSet->ddictPtrTable[idx] = ddict;
             return 0;
         }
-        idx &= idxRangeMask;
-        idx++;
+        idx = (idx + 1) & idxRangeMask;
     }
     DEBUGLOG(4, "Final idx after probing for dictID %u is: %zu", dictID, idx);
     hashSet->ddictPtrTable[idx] = ddict;
@@ -174,8 +174,7 @@ static const ZSTD_DDict* ZSTD_DDictHashSet_getDDict(ZSTD_DDictHashSet* hashSet, 
         }
         else
         {
-            idx &= idxRangeMask; /* Goes to start of table when we reach the end */
-            idx++;
+            idx = (idx + 1) & idxRangeMask; /* Goes to start of table when we reach the end */
         }
     }
     DEBUGLOG(4, "Final idx after probing for dictID %u is: %zu", dictID, idx);
@@ -287,7 +286,7 @@ static void ZSTD_initDCtx_internal(ZSTD_DCtx* dctx) {
     dctx->oversizedDuration    = 0;
     dctx->isFrameDecompression = 1;
 #if DYNAMIC_BMI2
-    dctx->bmi2 = ZSTD_cpuSupportsBmi2();
+    ZSTD_SET_BMI2(dctx->bmi2, ZSTD_cpuSupportsBmi2());
 #endif
     dctx->ddictSet = NULL;
     ZSTD_DCtx_resetParameters(dctx);
@@ -1416,7 +1415,7 @@ size_t ZSTD_decompressContinue(
                 ZSTD_memcpy(dctx->headerBuffer, src, srcSize);
                 dctx->expected = ZSTD_SKIPPABLEHEADERSIZE
                                - srcSize; /* remaining to load to get full skippable frame header */
-                dctx->stage = ZSTDds_decodeSkippableHeader;
+                dctx->stage    = ZSTDds_decodeSkippableHeader;
                 return 0;
             }
         }
@@ -1591,7 +1590,7 @@ static size_t ZSTD_refDictContent(ZSTD_DCtx* dctx, const void* dict, size_t dict
     dctx->dictEnd      = dctx->previousDstEnd;
     dctx->virtualStart = (const char*) dict
                        - ((const char*) (dctx->previousDstEnd) - (const char*) (dctx->prefixStart));
-    dctx->prefixStart    = dict;
+    dctx->prefixStart  = dict;
     dctx->previousDstEnd = (const char*) dict + dictSize;
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     dctx->dictContentBeginForFuzzing = dctx->prefixStart;
@@ -2387,10 +2386,10 @@ size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inB
                         return decompressedSize;
                     DEBUGLOG(4, "shortcut to single-pass ZSTD_decompress_usingDDict()");
                     assert(istart != NULL);
-                    ip               = istart + cSize;
-                    op               = op ? op + decompressedSize
-                                          : op; /* can occur if frameContentSize = 0 (empty frame) */
-                    zds->expected    = 0;
+                    ip            = istart + cSize;
+                    op            = op ? op + decompressedSize
+                                       : op; /* can occur if frameContentSize = 0 (empty frame) */
+                    zds->expected = 0;
                     zds->streamStage = zdss_init;
                     someMoreWork     = 0;
                     break;

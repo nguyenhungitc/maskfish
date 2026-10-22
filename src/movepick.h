@@ -28,9 +28,9 @@ namespace Maskfish {
 
 class Position;
 
-// The MovePicker class is used to pick one pseudo-legal move at a time from the
+// The MovePicker class is used to pick one legal move at a time from the
 // current position. The most important method is next_move(), which emits one
-// new pseudo-legal move on every call, until there are no moves left, when
+// new legal move on every call, until there are no moves left, when
 // Move::none() is returned. In order to improve the efficiency of the alpha-beta
 // algorithm, MovePicker attempts to return the moves which are most likely to get
 // a cut-off first.
@@ -46,9 +46,8 @@ class MovePicker {
                const LowPlyHistory*,
                const CapturePieceToHistory*,
                const PieceToHistory**,
-               const PawnHistory*,
-               int,
-               int pawnIndex);
+               const PawnHistoryEntry*,
+               int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
     Move next_move();
     void skip_quiet_moves();
@@ -66,8 +65,7 @@ class MovePicker {
     const LowPlyHistory*         lowPlyHistory;
     const CapturePieceToHistory* captureHistory;
     const PieceToHistory**       continuationHistory;
-    const PawnHistory*           pawnHistory;
-    int                          pawnIndex;
+    const PawnHistoryEntry*      pawnHistory;
     Move                         ttMove;
     ExtMove *                    cur, *endCur, *endBadCaptures, *endBadQuiets;
     int                          stage;

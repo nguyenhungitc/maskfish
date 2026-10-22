@@ -30,8 +30,9 @@
 
 namespace Maskfish::Eval::NNUE::Layers {
 
-// Clipped ReLU
-template<IndexType InDims>
+// Clipped ReLU: clamp(input >> WeightScaleBitsLocal, 0, 127). make quant=2
+// uses WeightScaleBits + 1 after fc_0 (as Pikafish).
+template<IndexType InDims, int WeightScaleBitsLocal = WeightScaleBits>
 class ClippedReLU {
    public:
     // Input/output type
@@ -83,18 +84,18 @@ class ClippedReLU {
     #if defined(USE_SSE41)
             const __m128i words0 = _mm_srli_epi16(
               _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
-              WeightScaleBits);
+              WeightScaleBitsLocal);
             const __m128i words1 = _mm_srli_epi16(
               _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
-              WeightScaleBits);
+              WeightScaleBitsLocal);
             _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
     #else
             const __m128i words0 = _mm_srai_epi16(
               _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
-              WeightScaleBits);
+              WeightScaleBitsLocal);
             const __m128i words1 = _mm_srai_epi16(
               _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
-              WeightScaleBits);
+              WeightScaleBitsLocal);
             const __m128i packedbytes = _mm_packs_epi16(words0, words1);
             _mm_store_si128(&out[i], _mm_subs_epi8(_mm_adds_epi8(packedbytes, k0x80s), k0x80s));
     #endif
@@ -110,18 +111,54 @@ class ClippedReLU {
         {
             int16x8_t  shifted;
             const auto pack = reinterpret_cast<int16x4_t*>(&shifted);
-            pack[0]         = vqshrn_n_s32(in[i * 2 + 0], WeightScaleBits);
-            pack[1]         = vqshrn_n_s32(in[i * 2 + 1], WeightScaleBits);
+            pack[0]         = vqshrn_n_s32(in[i * 2 + 0], WeightScaleBitsLocal);
+            pack[1]         = vqshrn_n_s32(in[i * 2 + 1], WeightScaleBitsLocal);
             out[i]          = vmax_s8(vqmovn_s16(shifted), Zero);
         }
         constexpr IndexType Start = NumChunks * (SimdWidth / 2);
+#elif defined(USE_LSX)
+        // 128 bits also with LASX, so that the outputs stay in order (the
+        // 256-bit packs work within 128-bit lanes)
+        constexpr IndexType NumChunks = InputDimensions / 16;
+        const auto          in        = reinterpret_cast<const __m128i*>(input);
+        const auto          out       = reinterpret_cast<__m128i*>(output);
+        for (IndexType i = 0; i < NumChunks; ++i)
+        {
+            // Unsigned saturation to 16 bits, then shift and signed saturation
+            // to 8 bits: clamp(input >> WeightScaleBitsLocal, 0, 127)
+            const __m128i packed0 = __lsx_vssrani_hu_w(in[i * 4 + 1], in[i * 4 + 0], 0);
+            const __m128i packed1 = __lsx_vssrani_hu_w(in[i * 4 + 3], in[i * 4 + 2], 0);
+            out[i]                = __lsx_vssrlni_b_h(packed1, packed0, WeightScaleBitsLocal);
+        }
+        constexpr IndexType Start = NumChunks * 16;
+
+#elif defined(USE_RVV)
+        for (std::size_t j = 0; j < InputDimensions;)
+        {
+            std::size_t vl = __riscv_vsetvl_e32m4(InputDimensions - j);
+
+            vint32m4_t in = __riscv_vle32_v_i32m4(&input[j], vl);
+            in            = __riscv_vmax_vx_i32m4(in, 0, vl);
+
+            // Saturating narrowing shifts (rounding down):
+            // clamp(input >> WeightScaleBitsLocal, 0, 127)
+            vint16m2_t words =
+              __riscv_vnclip_wx_i16m2(in, WeightScaleBitsLocal, __RISCV_VXRM_RDN, vl);
+            vint8m1_t narrowed = __riscv_vnclip_wx_i8m1(words, 0, __RISCV_VXRM_RDN, vl);
+
+            __riscv_vse8_v_u8m1(&output[j], __riscv_vreinterpret_v_i8m1_u8m1(narrowed), vl);
+            j += vl;
+        }
+        constexpr IndexType Start = InputDimensions;
+
 #else
         constexpr IndexType Start = 0;
 #endif
 
         for (IndexType i = Start; i < InputDimensions; ++i)
         {
-            output[i] = static_cast<OutputType>(std::clamp(input[i] >> WeightScaleBits, 0, 127));
+            output[i] =
+              static_cast<OutputType>(std::clamp(input[i] >> WeightScaleBitsLocal, 0, 127));
         }
     }
 };

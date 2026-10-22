@@ -492,18 +492,22 @@ void UCIEngine::position(std::istringstream& is) {
 
     is >> token;
 
+    std::vector<std::string> moves;
+
     if (token == "startpos")
     {
         fen = StartFEN;
-        is >> token;  // Consume the "moves" token, if any
+
+        // Consume the "moves" token, if any. Without it, what follows is still
+        // taken as moves rather than silently dropping the first one.
+        if (std::string next; is >> next && next != "moves")
+            moves.push_back(next);
     }
     else if (token == "fen")
         while (is >> token && token != "moves")
             fen += token + " ";
     else
         return;
-
-    std::vector<std::string> moves;
 
     while (is >> token)
     {
@@ -628,7 +632,7 @@ std::string UCIEngine::to_lower(std::string str) {
 
 Move UCIEngine::to_move(const Position& pos, std::string str) {
     // A move may carry the revealed / captured pieces (Jieqi), see Engine::set_position()
-    for (const auto& m : MoveList<LEGAL>(pos))
+    for (const auto& m : MoveList<ALL>(pos))
         if (str.substr(0, 4) == move(m))
             return m;
 

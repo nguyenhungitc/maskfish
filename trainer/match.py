@@ -8,6 +8,9 @@ SPRT, to decide whether a change is an improvement.
     python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
         --opt-a TTPenalize=true --nodes 20000 --sprt 0 3
 
+    python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
+        --engine-b old/maskfish --tc 10+0.1 --workers 1 --sprt 0 5
+
 A is the version being tested, B the reference (by default B uses the same
 engine and network as A). Results are reported for A.
 
@@ -34,7 +37,6 @@ import math
 import multiprocessing as mp
 import os
 import random
-import sys
 import time
 
 import jieqi_features as F
@@ -70,6 +72,8 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
         e.isready()
 
     last_scores = {F.WHITE: [], F.BLACK: []}   # from white's point of view
+    # Clocks in ms (--tc), white and black
+    clock = [args.tc_base, args.tc_base] if args.tc else None
     no_capture = 0
     repetitions = U.RepetitionTracker()
     for ply in range(args.max_plies):
@@ -84,7 +88,17 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
             move = opening[ply]
             score, mate = None, False
         else:
-            move, score, mate = eng.search(args.go)
+            if clock:
+                go = (f"wtime {max(1, int(clock[0]))} btime {max(1, int(clock[1]))} "
+                      f"winc {args.tc_inc} binc {args.tc_inc}")
+                start = time.monotonic()
+                move, score, mate = eng.search(go)
+                clock[stm] -= (time.monotonic() - start) * 1000
+                if clock[stm] < 0:                  # lost on time
+                    return -1 if stm == F.WHITE else 1
+                clock[stm] += args.tc_inc
+            else:
+                move, score, mate = eng.search(args.go)
             if move in ("(none)", "0000"):
                 return -1 if stm == F.WHITE else 1
         capture = U.is_capture(fen, move)
@@ -110,11 +124,12 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
 
 
 def make_engine(path, net, opts, hash_mb):
-    o = {"Threads": 1, "Hash": hash_mb, "RawScore": "true"}
+    o = {"Threads": 1, "Hash": hash_mb}
     if net:
         o["EvalFile"] = os.path.abspath(net)
     o.update(opts)
-    return U.Engine(path, o)
+    # RawScore only exists in this engine (adjudication compares internal units)
+    return U.Engine(path, o, optional={"RawScore": "true"})
 
 
 def worker_init(args):
@@ -199,18 +214,21 @@ def parse_opts(items):
     return opts
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", help="engine for A and B (default for --engine-a/--engine-b)")
     ap.add_argument("--engine-a")
     ap.add_argument("--engine-b")
     ap.add_argument("--net-a")
-    ap.add_argument("--net-b", help="default: same as --net-a")
+    ap.add_argument("--net-b", help="default: same as --net-a when B is the same engine, "
+                                     "otherwise B's own default network")
     ap.add_argument("--opt-a", nargs="*", default=[], help="UCI options of A, Name=Value")
     ap.add_argument("--opt-b", nargs="*", default=[], help="UCI options of B, Name=Value")
     ap.add_argument("--nodes", type=int, default=20000)
     ap.add_argument("--depth", type=int, default=0)
     ap.add_argument("--movetime", type=int, default=0, help="ms per move")
+    ap.add_argument("--tc", help="time control 'base+inc' in seconds (e.g. 10+0.1), clocks "
+                    "kept by match.py: tests the time management; a flag fall loses")
     ap.add_argument("--pairs", type=int, default=10000, help="maximum number of game pairs")
     ap.add_argument("--sprt", nargs=2, type=float, metavar=("ELO0", "ELO1"),
                     help="stop when H0 (elo0) or H1 (elo1) is accepted")
@@ -225,16 +243,48 @@ def main():
     ap.add_argument("--adjudicate", type=int, default=3000, help="internal units")
     ap.add_argument("--full-info", action="store_true")
     ap.add_argument("--seed", type=int, default=int(time.time()))
-    args = ap.parse_args()
+    return ap
 
+
+def finalize_args(args):
+    """Fills the defaults that depend on other arguments (engines, network of
+    B, options, the go command). Returns args."""
     args.engine_a = args.engine_a or args.engine
     args.engine_b = args.engine_b or args.engine or args.engine_a
     if not args.engine_a:
         raise SystemExit("--engine or --engine-a is required")
-    args.net_b = args.net_b or args.net_a
-    args.opt_a, args.opt_b = parse_opts(args.opt_a), parse_opts(args.opt_b)
+    # another engine keeps its own network unless --net-b is given
+    if not args.net_b and os.path.realpath(args.engine_b) == os.path.realpath(args.engine_a):
+        args.net_b = args.net_a
+    if not isinstance(args.opt_a, dict):
+        args.opt_a = parse_opts(args.opt_a)
+    if not isinstance(args.opt_b, dict):
+        args.opt_b = parse_opts(args.opt_b)
     args.go = (f"depth {args.depth}" if args.depth else
                f"movetime {args.movetime}" if args.movetime else f"nodes {args.nodes}")
+    if args.tc:
+        base, _, inc = args.tc.partition("+")
+        args.tc_base, args.tc_inc = int(float(base) * 1000), int(float(inc or 0) * 1000)
+        args.go = f"tc {args.tc}"
+    return args
+
+
+def play_pairs(args, count: int, seed: int, start: int = 0):
+    """Plays 'count' game pairs (args from finalize_args()) on args.workers
+    processes and yields the results (r1, r2) for A as they finish. Pair i
+    (start <= i < start + count) uses the opening and identities of seed
+    seed * 1000003 + i. Closing the generator (break) stops the games at once."""
+    pool = mp.Pool(args.workers, initializer=worker_init, initargs=(args,))
+    try:
+        seeds = (seed * 1000003 + i for i in range(start, start + count))
+        yield from pool.imap_unordered(play_pair, seeds)
+    finally:
+        pool.terminate()
+        pool.join()
+
+
+def main():
+    args = finalize_args(build_parser().parse_args())
     lower = math.log(args.beta / (1 - args.alpha))
     upper = math.log((1 - args.beta) / args.alpha)
 
@@ -244,11 +294,19 @@ def main():
           + (f", SPRT [{args.sprt[0]}, {args.sprt[1]}] bounds [{lower:.2f}, {upper:.2f}]"
              if args.sprt else ""), flush=True)
 
-    pairs, decision, line = [], None, "no game finished"
-    pool = mp.Pool(args.workers, initializer=worker_init, initargs=(args,))
+    # check both engines and their options once here (an error in the pool
+    # initializer would make multiprocessing respawn the workers forever)
     try:
-        seeds = (args.seed * 1000003 + i for i in range(args.pairs))
-        for r in pool.imap_unordered(play_pair, seeds):
+        for path, net, opts in ((args.engine_a, args.net_a, args.opt_a),
+                                (args.engine_b, args.net_b, args.opt_b)):
+            make_engine(path, net, opts, 1).quit()
+    except U.UnknownOption as e:
+        raise SystemExit(f"error: {e}")
+
+    pairs, decision, line = [], None, "no game finished"
+    games_iter = play_pairs(args, args.pairs, args.seed)
+    try:
+        for r in games_iter:
             pairs.append(r)
             penta = pentanomial(pairs)
             games = [x for p in pairs for x in p]
@@ -272,7 +330,7 @@ def main():
     except KeyboardInterrupt:
         print("interrupted")
     finally:
-        pool.terminate()
+        games_iter.close()
     print(line)
     print(decision or "no decision (maximum reached)")
 

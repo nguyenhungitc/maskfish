@@ -65,6 +65,7 @@ struct alignas(CacheLineSize) ThreatAccumulator {
     std::int32_t               psqt[COLOR_NB][PSQTBuckets];
     std::array<bool, COLOR_NB> computed  = {};
     std::array<bool, COLOR_NB> mirror    = {};     // mirroring acc was computed with
+    std::uint16_t              features[COLOR_NB];  // number of active features
     bool                       listValid = false;  // list / count hold the threats
     std::uint16_t              count;
     ThreatFeatureSet::Threat   list[ThreatFeatureSet::MaxActiveDimensions];
@@ -132,6 +133,19 @@ struct AccumulatorState {
     DirtyPiece                                   dirtyPiece;
 #ifdef JIEQI_NNUE_THREATS
     ThreatAccumulator<TransformedFeatureDimensionsBig> threats;
+    // Threats added and removed by the move (and reveal) that led to this
+    // state (UCI option ThreatsIncremental), filled by Position::do_move()
+    // and do_flip(); not touched by reset()
+    DirtyThreats dirtyThreats;
+#endif
+#ifdef JIEQI_NNUE_META
+    // The meta features (make meta=yes) whose weights are in accumulatorBig
+    // for each perspective (when it is computed): metaCount is 0 (none, after
+    // a refresh) or MetaFeatures. They are those of the position of this state
+    // only for the latest state of AccumulatorStack::evaluate(): the earlier
+    // states keep the ones of the state they were updated from.
+    IndexType    metaIndex[COLOR_NB][FeatureSet::MetaFeatures];
+    std::uint8_t metaCount[COLOR_NB] = {};
 #endif
 
     template<IndexType Size>
@@ -162,6 +176,17 @@ class AccumulatorStack {
     void push(const DirtyPiece& dirtyPiece) noexcept;
     void pop() noexcept;
 
+#ifdef JIEQI_NNUE_THREATS
+    // UCI option ThreatsIncremental: the threat accumulator is updated from
+    // the threats recorded by do_move() and do_flip() (as Pikafish), instead
+    // of the difference between the lists of threats of the two positions
+    static inline bool incrementalThreats = false;
+
+    // Threats of the state that the next push() makes the latest one: filled
+    // before the push (by do_move()), or again after a pop() (by do_flip())
+    DirtyThreats& next_dirty_threats() noexcept { return accumulators[size].dirtyThreats; }
+#endif
+
     template<IndexType Dimensions>
     void evaluate(const Position&                       pos,
                   const FeatureTransformer<Dimensions>& featureTransformer,
@@ -186,6 +211,19 @@ class AccumulatorStack {
     template<Color Perspective, IndexType Dimensions>
     void evaluate_threats_side(const Position&                       pos,
                                const FeatureTransformer<Dimensions>& featureTransformer) noexcept;
+
+    template<Color Perspective>
+    [[nodiscard]] std::size_t incremental_threats_source(bool mirror) const noexcept;
+
+    template<IndexType Dimensions>
+    bool evaluate_threats_incremental(const Position&                       pos,
+                                      const FeatureTransformer<Dimensions>& featureTransformer) noexcept;
+#endif
+
+#ifdef JIEQI_NNUE_META
+    template<Color Perspective, IndexType Dimensions>
+    void update_meta(const FeatureTransformer<Dimensions>& featureTransformer,
+                     const IndexType*                      metaIndex) noexcept;
 #endif
 
     template<Color Perspective, IndexType Dimensions>

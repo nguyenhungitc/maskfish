@@ -19,6 +19,7 @@
 
 #include "nnue_accumulator.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <initializer_list>
@@ -97,34 +98,200 @@ void AccumulatorStack::evaluate(const Position&                       pos,
                                 const FeatureTransformer<Dimensions>& featureTransformer,
                                 AccumulatorCaches::Cache<Dimensions>& cache) noexcept {
 
+#ifdef JIEQI_NNUE_META
+    const auto& computed = (latest().template acc<Dimensions>()).computed;
+    const bool  needMeta = !computed[WHITE] || !computed[BLACK];
+#endif
     evaluate_side<WHITE>(pos, featureTransformer, cache);
     evaluate_side<BLACK>(pos, featureTransformer, cache);
 #ifdef JIEQI_NNUE_THREATS
     evaluate_threats(pos, featureTransformer);
 #endif
+#ifdef JIEQI_NNUE_META
+    // The meta features are added to the HalfKA accumulator: evaluate_side()
+    // leaves in the latest state those of the state it was updated from (or
+    // none after a refresh), replaced here by those of the position
+    if (needMeta)
+    {
+        const int bucket[COLOR_NB] = {FeatureSet::make_feature_bucket(pos, WHITE).first,
+                                      FeatureSet::make_feature_bucket(pos, BLACK).first};
+        IndexType metaIndex[COLOR_NB][FeatureSet::MetaFeatures];
+        FeatureSet::make_meta_indices(pos, bucket, metaIndex);
+        update_meta<WHITE>(featureTransformer, metaIndex[WHITE]);
+        update_meta<BLACK>(featureTransformer, metaIndex[BLACK]);
+    }
+#endif
 }
 
-#ifdef JIEQI_NNUE_THREATS
+#if defined(JIEQI_NNUE_THREATS) || defined(JIEQI_NNUE_META)
 namespace {
 
-// dst = src - sum of the `removed` rows + sum of the `added` rows of the threat
-// weights (src == nullptr: zero), for the accumulator and the PSQT values. The
-// accumulator is processed by tiles kept in registers, so that it is read and
-// written once whatever the number of features.
+    #if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+// Rows of 8-bit threat weights to add to or to subtract from an accumulator
+// (Pikafish "Pair int8 weight rows in accumulator updates"). They are applied
+// two at a time with vec_widen_pair_i8() (one shuffle per two rows instead of
+// one sign extension per row), the last one alone if their number is odd. The
+// 16-bit sums wrap around like the separate additions they replace, so the
+// accumulator is the same whatever the order. A threat update has many rows
+// of each sign, unlike an incremental HalfKA update (mostly one of each), for
+// which this is not done.
+template<int MaxRows>
+class WeightRows {
+   public:
+    void push(const std::int8_t* row) {
+        assert(count < MaxRows);
+        rows[count++] = row;
+    }
+
+    // acc[0 .. 2 * NumVecs): the 16-bit lanes of the NumVecs * sizeof(vec_t)
+    // weights at the offset j of every row
+    template<int Sign, int NumVecs>
+    void apply(IndexType j, vec_t* acc) const {
+        static_assert(Sign == 1 || Sign == -1);
+        auto update = [](vec_t& a, const vec_t& w) {
+            if constexpr (Sign > 0)
+                a = vec_add_16(a, w);
+            else
+                a = vec_sub_16(a, w);
+        };
+
+        int i = 0;
+        for (; i + 1 < count; i += 2)
+            for (int v = 0; v < NumVecs; ++v)
+            {
+                vec_t lo, hi;
+                vec_widen_pair_i8(rows[i] + j + v * sizeof(vec_t),
+                                  rows[i + 1] + j + v * sizeof(vec_t), lo, hi);
+                update(acc[2 * v], lo);
+                update(acc[2 * v + 1], hi);
+            }
+        if (i < count)
+            for (int v = 0; v < NumVecs; ++v)
+            {
+                vec_t lo, hi;
+                vec_widen_i8(rows[i] + j + v * sizeof(vec_t), lo, hi);
+                update(acc[2 * v], lo);
+                update(acc[2 * v + 1], hi);
+            }
+    }
+
+   private:
+    const std::int8_t* rows[MaxRows];
+    int                count = 0;
+};
+
+// dst = src - the removed rows + the added rows (src == nullptr: zero), over
+// the Dimensions 16-bit lanes of an accumulator, by tiles kept in registers
+template<IndexType Dimensions, int MaxRows>
+void apply_weight_rows(std::int16_t*              dst,
+                       const std::int16_t*        src,
+                       const WeightRows<MaxRows>& removed,
+                       const WeightRows<MaxRows>& added) {
+    // Accumulator registers of a tile: the widening needs 4 more registers
+    // (two rows, ones, zero), so at most 12 of the 16 vector registers below
+    // AVX-512 (16 of 32 with it), as in Pikafish
+    constexpr int NumRegs = []() {
+        constexpr int Ideal   = int(Dimensions * sizeof(std::int16_t) / sizeof(vec_t));
+        constexpr int MaxRegs = sizeof(vec_t) == 64 ? 16 : 12;
+        int           n       = std::min(Ideal, MaxRegs);
+        while (Ideal % n != 0 || n % 2 != 0)
+            --n;
+        return n;
+    }();
+    constexpr IndexType Height = NumRegs * sizeof(vec_t) / sizeof(std::int16_t);
+    static_assert(NumRegs >= 2 && Dimensions % Height == 0);
+
+    for (IndexType j = 0; j < Dimensions; j += Height)
+    {
+        vec_t acc[NumRegs];
+        for (int k = 0; k < NumRegs; ++k)
+            acc[k] = src ? vec_load(reinterpret_cast<const vec_t*>(src + j) + k) : vec_zero();
+
+        removed.template apply<-1, NumRegs / 2>(j, acc);
+        added.template apply<+1, NumRegs / 2>(j, acc);
+
+        for (int k = 0; k < NumRegs; ++k)
+            vec_store(reinterpret_cast<vec_t*>(dst + j) + k, acc[k]);
+    }
+}
+
+// The 16-bit part of apply_rows() for weights permuted for vec_widen_pair_i8()
 template<IndexType Dimensions>
-void apply_threats(std::int16_t* __restrict dst,
-                   std::int32_t* __restrict dstPsqt,
-                   const std::int16_t* __restrict src,
-                   const std::int32_t* __restrict srcPsqt,
-                   const FeatureTransformer<Dimensions>& featureTransformer,
-                   const IndexType*                      removed,
-                   int                                   nRemoved,
-                   const IndexType*                      added,
-                   int                                   nAdded) {
+void apply_rows_paired(std::int16_t*       dst,
+                       const std::int16_t* src,
+                       const std::int8_t*  weights,
+                       const IndexType*    removed,
+                       int                 nRemoved,
+                       const IndexType*    added,
+                       int                 nAdded) {
+    constexpr int MaxRows = int(ThreatFeatureSet::MaxActiveDimensions);
+    assert(nRemoved <= MaxRows && nAdded <= MaxRows);
+    WeightRows<MaxRows> rowsRemoved, rowsAdded;
+    for (int k = 0; k < nRemoved; ++k)
+        rowsRemoved.push(weights + std::size_t(removed[k]) * Dimensions);
+    for (int k = 0; k < nAdded; ++k)
+        rowsAdded.push(weights + std::size_t(added[k]) * Dimensions);
+    apply_weight_rows<Dimensions>(dst, src, rowsRemoved, rowsAdded);
+}
+    #else
+// (no paired rows on this target: never instantiated)
+template<IndexType Dimensions>
+void apply_rows_paired(std::int16_t*,
+                       const std::int16_t*,
+                       const std::int8_t*,
+                       const IndexType*,
+                       int,
+                       const IndexType*,
+                       int) {
+    static_assert(Dimensions == 0, "paired weight rows need SSSE3");
+}
+    #endif
 
-    const ThreatWeightType* weights = featureTransformer.threatWeights;
+// The 16-bit part of apply_rows(), weights in the order of the accumulator
+template<IndexType Dimensions>
+void apply_rows_16(std::int16_t*       dst,
+                   const std::int16_t* src,
+                   const std::int8_t* __restrict weights,
+                   const IndexType* removed,
+                   int              nRemoved,
+                   const IndexType* added,
+                   int              nAdded) {
+#if defined(VECTOR)
+    // The SIMD helpers of the feature transformer: one sign-extending load
+    // (vpmovsxbw) per vector of weights, the accumulator kept in registers by
+    // tiles of Regs vectors (both accumulators are aligned to the cache line)
+    constexpr IndexType Lanes = sizeof(vec_t) / sizeof(std::int16_t);
+    constexpr IndexType Regs  = 8;
+    constexpr IndexType Tile  = Lanes * Regs;
+    static_assert(Dimensions % Tile == 0);
 
-#if defined(__GNUC__)
+    for (IndexType j = 0; j < Dimensions; j += Tile)
+    {
+        vec_t r[Regs];
+        if (src)
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_load(reinterpret_cast<const vec_t*>(src + j) + i);
+        else
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_zero();
+
+        for (int k = 0; k < nRemoved; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_sub_16(r[i], vec_load_i8_16(w + i * Lanes));
+        }
+        for (int k = 0; k < nAdded; ++k)
+        {
+            const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions + j;
+            for (IndexType i = 0; i < Regs; ++i)
+                r[i] = vec_add_16(r[i], vec_load_i8_16(w + i * Lanes));
+        }
+
+        for (IndexType i = 0; i < Regs; ++i)
+            vec_store(reinterpret_cast<vec_t*>(dst + j) + i, r[i]);
+    }
+#elif defined(__GNUC__)
     // GCC / clang vector extensions: 16 x int16 per vector (two registers on
     // 128-bit targets), sign extension of the 8-bit weights
     using I16 = std::int16_t __attribute__((vector_size(32)));
@@ -143,7 +310,7 @@ void apply_threats(std::int16_t* __restrict dst,
 
         for (int k = 0; k < nRemoved; ++k)
         {
-            const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions + j;
+            const std::int8_t* w = weights + std::size_t(removed[k]) * Dimensions + j;
             for (IndexType i = 0; i < Regs; ++i)
             {
                 I8 v;
@@ -153,7 +320,7 @@ void apply_threats(std::int16_t* __restrict dst,
         }
         for (int k = 0; k < nAdded; ++k)
         {
-            const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions + j;
+            const std::int8_t* w = weights + std::size_t(added[k]) * Dimensions + j;
             for (IndexType i = 0; i < Regs; ++i)
             {
                 I8 v;
@@ -170,17 +337,42 @@ void apply_threats(std::int16_t* __restrict dst,
         dst[j] = src ? src[j] : 0;
     for (int k = 0; k < nRemoved; ++k)
     {
-        const ThreatWeightType* w = weights + std::size_t(removed[k]) * Dimensions;
+        const std::int8_t* w = weights + std::size_t(removed[k]) * Dimensions;
         for (IndexType j = 0; j < Dimensions; ++j)
             dst[j] = std::int16_t(dst[j] - w[j]);
     }
     for (int k = 0; k < nAdded; ++k)
     {
-        const ThreatWeightType* w = weights + std::size_t(added[k]) * Dimensions;
+        const std::int8_t* w = weights + std::size_t(added[k]) * Dimensions;
         for (IndexType j = 0; j < Dimensions; ++j)
             dst[j] = std::int16_t(dst[j] + w[j]);
     }
 #endif
+}
+
+// dst = src - sum of the `removed` rows + sum of the `added` rows of the given
+// weights (src == nullptr: zero; src == dst: in place), for the accumulator
+// and the PSQT values. The
+// accumulator is processed by tiles kept in registers, so that it is read and
+// written once whatever the number of features. Paired: the rows are permuted
+// for vec_widen_pair_i8() (the threat weights with USE_PAIRED_WIDENING_ADD,
+// see FeatureTransformer::WideningPairOrder).
+template<IndexType Dimensions, bool Paired = false>
+void apply_rows(std::int16_t*       dst,
+                std::int32_t*       dstPsqt,
+                const std::int16_t* src,
+                const std::int32_t* srcPsqt,
+                const std::int8_t* __restrict weights,
+                const PSQTWeightType* __restrict psqtWeights,
+                const IndexType* removed,
+                int              nRemoved,
+                const IndexType* added,
+                int              nAdded) {
+
+    if constexpr (Paired)
+        apply_rows_paired<Dimensions>(dst, src, weights, removed, nRemoved, added, nAdded);
+    else
+        apply_rows_16<Dimensions>(dst, src, weights, removed, nRemoved, added, nAdded);
 
     if constexpr (!UsePSQT)
         return;
@@ -189,10 +381,41 @@ void apply_threats(std::int16_t* __restrict dst,
         dstPsqt[b] = srcPsqt ? srcPsqt[b] : 0;
     for (int k = 0; k < nRemoved; ++k)
         for (IndexType b = 0; b < PSQTBuckets; ++b)
-            dstPsqt[b] -= featureTransformer.threatPsqtWeights[removed[k] * PSQTBuckets + b];
+            dstPsqt[b] -= psqtWeights[std::size_t(removed[k]) * PSQTBuckets + b];
     for (int k = 0; k < nAdded; ++k)
         for (IndexType b = 0; b < PSQTBuckets; ++b)
-            dstPsqt[b] += featureTransformer.threatPsqtWeights[added[k] * PSQTBuckets + b];
+            dstPsqt[b] += psqtWeights[std::size_t(added[k]) * PSQTBuckets + b];
+}
+
+}  // namespace
+#endif
+
+#ifdef JIEQI_NNUE_THREATS
+namespace {
+
+// apply_rows() with the threat weights
+template<IndexType Dimensions>
+void apply_threats(std::int16_t* __restrict dst,
+                   std::int32_t* __restrict dstPsqt,
+                   const std::int16_t* __restrict src,
+                   const std::int32_t* __restrict srcPsqt,
+                   const FeatureTransformer<Dimensions>& featureTransformer,
+                   const IndexType*                      removed,
+                   int                                   nRemoved,
+                   const IndexType*                      added,
+                   int                                   nAdded) {
+    static_assert(sizeof(ThreatWeightType) == 1);
+    // (with USE_PAIRED_WIDENING_ADD the threat weights are permuted for it)
+    constexpr bool Paired =
+    #if defined(USE_PAIRED_WIDENING_ADD)
+      true;
+    #else
+      false;
+    #endif
+    apply_rows<Dimensions, Paired>(
+      dst, dstPsqt, src, srcPsqt,
+      reinterpret_cast<const std::int8_t*>(featureTransformer.threatWeights),
+      featureTransformer.threatPsqtWeights, removed, nRemoved, added, nAdded);
 }
 
 // Feature indices of a list of threats (those that are features). Branchless:
@@ -219,6 +442,10 @@ void AccumulatorStack::evaluate_threats(
     if (target.computed[WHITE] && target.computed[BLACK])
         return;
 
+    // UCI option ThreatsIncremental: from the threats recorded by the moves
+    if (incrementalThreats && evaluate_threats_incremental(pos, featureTransformer))
+        return;
+
     if (!target.listValid)
     {
         target.count     = std::uint16_t(ThreatFeatureSet::physical_threats(pos, target.list));
@@ -229,6 +456,151 @@ void AccumulatorStack::evaluate_threats(
         evaluate_threats_side<WHITE>(pos, featureTransformer);
     if (!target.computed[BLACK])
         evaluate_threats_side<BLACK>(pos, featureTransformer);
+}
+
+// Nearest earlier state with a computed threat accumulator for the
+// perspective, with the same mirroring, such that the threats of every move
+// (and reveal) since then are recorded; size if there is none.
+template<Color Perspective>
+std::size_t AccumulatorStack::incremental_threats_source(bool mirror) const noexcept {
+    for (std::size_t i = size - 1; i-- > 0;)
+    {
+        if (!accumulators[i + 1].dirtyThreats.valid)
+            return size;
+        if (accumulators[i].threats.computed[Perspective])
+            return accumulators[i].threats.mirror[Perspective] == mirror ? i : size;
+    }
+    return size;
+}
+
+// Updates the threat accumulators of the latest state that are not computed
+// from an earlier state by the threats recorded since then (Pikafish's
+// DirtyThreats), both perspectives together when they start from the same
+// state. Returns whether both perspectives are computed; a perspective that
+// cannot be updated this way (no source, too many changes) is left to
+// evaluate_threats_side().
+template<IndexType Dimensions>
+bool AccumulatorStack::evaluate_threats_incremental(
+  const Position& pos, const FeatureTransformer<Dimensions>& featureTransformer) noexcept {
+
+    // Threats recorded since the source: more than this, a refresh is cheaper
+    constexpr int MaxRaw     = 2 * ThreatFeatureSet::MaxActiveDimensions;
+    constexpr int MaxChanges = ThreatFeatureSet::MaxActiveDimensions;
+
+    auto&      target    = mut_latest().threats;
+    const bool mirror[2] = {FeatureSet::make_feature_bucket(pos, WHITE).second,
+                            FeatureSet::make_feature_bucket(pos, BLACK).second};
+    std::size_t src[2]   = {size, size};
+
+    if (!target.computed[WHITE])
+        src[WHITE] = incremental_threats_source<WHITE>(mirror[WHITE]);
+    if (!target.computed[BLACK])
+        src[BLACK] = incremental_threats_source<BLACK>(mirror[BLACK]);
+
+    IndexType removed[2][MaxChanges], added[2][MaxChanges];
+    int       nRemoved[2] = {}, nAdded[2] = {};
+    bool      ok[2]       = {src[WHITE] < size, src[BLACK] < size};
+
+    // The recorded threats since `begin`, without the ones that were added
+    // and removed again (by the reveal, or by a later move): a threat is
+    // recorded at most once in each direction in a row, so after sorting by
+    // threat a pair of opposite signs cancels. Their feature indices for the
+    // perspectives in (white, black), in one pass for both.
+    auto collect = [&](std::size_t begin, bool white, bool black) {
+        u32 raw[MaxRaw];
+        int n = 0;
+        for (std::size_t j = begin + 1; j < size; ++j)
+        {
+            const DirtyThreats& dts = accumulators[j].dirtyThreats;
+            if (n + dts.size > MaxRaw)
+            {
+                ok[WHITE] &= !white, ok[BLACK] &= !black;
+                return;
+            }
+            std::memcpy(raw + n, dts.list, dts.size * sizeof(u32));
+            n += dts.size;
+        }
+
+        // Sort by threat (rotating the sign bit to the bottom), then drop
+        // the pairs of the same threat with opposite signs
+        for (int k = 0; k < n; ++k)
+            raw[k] = raw[k] << 1 | raw[k] >> 31;
+        std::sort(raw, raw + n);
+        int m = 0;
+        for (int k = 0; k < n; ++k)
+        {
+            if (m && (raw[m - 1] ^ raw[k]) == 1)
+                --m;  // same threat, opposite signs
+            else
+                raw[m++] = raw[k];
+        }
+
+        for (int k = 0; k < m; ++k)
+        {
+            const bool add = raw[k] & 1;
+            const auto th  = ThreatFeatureSet::Threat(raw[k] >> 1);
+            for (Color c : {WHITE, BLACK})
+            {
+                if (!(c == WHITE ? white : black) || !ok[c])
+                    continue;
+                const IndexType idx = c == WHITE ? ThreatFeatureSet::index<WHITE>(th, mirror[c])
+                                                 : ThreatFeatureSet::index<BLACK>(th, mirror[c]);
+                if (idx >= ThreatFeatureSet::Dimensions)
+                    continue;
+                if (nRemoved[c] + nAdded[c] == MaxChanges)
+                    ok[c] = false;
+                else if (add)
+                    added[c][nAdded[c]++] = idx;
+                else
+                    removed[c][nRemoved[c]++] = idx;
+            }
+        }
+    };
+
+    if (ok[WHITE] && ok[BLACK] && src[WHITE] == src[BLACK])
+        collect(src[WHITE], true, true);
+    else
+    {
+        if (ok[WHITE])
+            collect(src[WHITE], true, false);
+        if (ok[BLACK])
+            collect(src[BLACK], false, true);
+    }
+
+    for (Color c : {WHITE, BLACK})
+    {
+        if (!ok[c])
+            continue;
+
+        // A refresh is cheaper than more changes than active features
+        const ThreatAccumulator<Dimensions>& source = accumulators[src[c]].threats;
+        const int features = source.features[c] + nAdded[c] - nRemoved[c];
+        if (nRemoved[c] + nAdded[c] > features)
+            continue;
+        apply_threats(target.acc[c], target.psqt[c], source.acc[c], source.psqt[c],
+                      featureTransformer, removed[c], nRemoved[c], added[c], nAdded[c]);
+        target.computed[c] = true;
+        target.mirror[c]   = mirror[c];
+        target.features[c] = std::uint16_t(features);
+
+#ifndef NDEBUG
+        // Debug builds: the same accumulator as a computation from scratch
+        ThreatFeatureSet::Threat list[ThreatFeatureSet::MaxActiveDimensions];
+        IndexType                idx[ThreatFeatureSet::MaxActiveDimensions];
+        const int                count = ThreatFeatureSet::physical_threats(pos, list);
+        const int                n     = c == WHITE
+                                         ? threat_indices<WHITE>(list, count, mirror[c], idx)
+                                         : threat_indices<BLACK>(list, count, mirror[c], idx);
+        auto fresh = std::make_unique<ThreatAccumulator<Dimensions>>();
+        apply_threats(fresh->acc[c], fresh->psqt[c], nullptr, nullptr, featureTransformer, idx, 0,
+                      idx, n);
+        assert(!std::memcmp(fresh->acc[c], target.acc[c], sizeof(target.acc[c])));
+        assert(!std::memcmp(fresh->psqt[c], target.psqt[c], sizeof(target.psqt[c])));
+        assert(n == target.features[c]);
+#endif
+    }
+
+    return target.computed[WHITE] && target.computed[BLACK];
 }
 
 template<Color Perspective, IndexType Dimensions>
@@ -244,10 +616,13 @@ void AccumulatorStack::evaluate_threats_side(
     // Nearest earlier state of the stack with a computed threat accumulator
     // (with the same mirroring, otherwise every feature changes)
     const ThreatAccumulator<Dimensions>* source = nullptr;
+    // (and with its list of threats, which the states updated with
+    // ThreatsIncremental do not have)
     for (std::size_t i = size - 1; i-- > 0;)
         if (accumulators[i].threats.computed[Perspective])
         {
-            if (accumulators[i].threats.mirror[Perspective] == mirror)
+            if (accumulators[i].threats.mirror[Perspective] == mirror
+                && accumulators[i].threats.listValid)
                 source = &accumulators[i].threats;
             break;
         }
@@ -282,12 +657,15 @@ void AccumulatorStack::evaluate_threats_side(
         apply_threats(target.acc[Perspective], target.psqt[Perspective],
                       source->acc[Perspective], source->psqt[Perspective], featureTransformer,
                       removedIdx, nRemoved, addedIdx, nAdded);
+        target.features[Perspective] =
+          std::uint16_t(source->features[Perspective] + nAdded - nRemoved);
     }
     else
     {
         nAdded = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
         apply_threats(target.acc[Perspective], target.psqt[Perspective], nullptr, nullptr,
-                      featureTransformer, removedIdx, 0, addedIdx, nAdded);
+                      featureTransformer, nullptr, 0, addedIdx, nAdded);
+        target.features[Perspective] = std::uint16_t(nAdded);
     }
 
     target.computed[Perspective] = true;
@@ -301,13 +679,45 @@ void AccumulatorStack::evaluate_threats_side(
         auto      fresh = std::make_unique<ThreatAccumulator<Dimensions>>();
         const int n     = threat_indices<Perspective>(target.list, count, mirror, addedIdx);
         apply_threats(fresh->acc[Perspective], fresh->psqt[Perspective], nullptr, nullptr,
-                      featureTransformer, removedIdx, 0, addedIdx, n);
+                      featureTransformer, nullptr, 0, addedIdx, n);
         assert(!std::memcmp(fresh->acc[Perspective], target.acc[Perspective],
                             sizeof(target.acc[Perspective])));
         assert(!std::memcmp(fresh->psqt[Perspective], target.psqt[Perspective],
                             sizeof(target.psqt[Perspective])));
     }
 #endif
+}
+#endif
+
+#ifdef JIEQI_NNUE_META
+template<Color Perspective, IndexType Dimensions>
+void AccumulatorStack::update_meta(const FeatureTransformer<Dimensions>& featureTransformer,
+                                   const IndexType*                      metaIndex) noexcept {
+
+    constexpr int N = FeatureSet::MetaFeatures;
+
+    auto&      state = mut_latest();
+    auto&      acc   = state.template acc<Dimensions>();
+    IndexType* old   = state.metaIndex[Perspective];
+
+    IndexType removed[N], added[N];
+    int       nRemoved = 0, nAdded = 0;
+    for (int k = 0; k < N; ++k)
+        if (!state.metaCount[Perspective] || old[k] != metaIndex[k])
+        {
+            if (state.metaCount[Perspective])
+                removed[nRemoved++] = old[k];
+            added[nAdded++] = metaIndex[k];
+        }
+
+    if (nAdded)
+        apply_rows<Dimensions>(acc.accumulation[Perspective], acc.psqtAccumulation[Perspective],
+                               acc.accumulation[Perspective], acc.psqtAccumulation[Perspective],
+                               featureTransformer.weights, featureTransformer.psqtWeights, removed,
+                               nRemoved, added, nAdded);
+
+    std::copy(metaIndex, metaIndex + N, old);
+    state.metaCount[Perspective] = N;
 }
 #endif
 
@@ -319,12 +729,28 @@ void AccumulatorStack::evaluate_side(const Position&                       pos,
     const auto last_usable_accum = find_last_usable_accumulator<Perspective, Dimensions>();
 
     if ((accumulators[last_usable_accum].template acc<Dimensions>()).computed[Perspective])
+    {
         forward_update_incremental<Perspective>(pos, featureTransformer, last_usable_accum);
-
+#ifdef JIEQI_NNUE_META
+        // The updated states have the meta features of the first one
+        const auto& from = accumulators[last_usable_accum];
+        for (std::size_t i = last_usable_accum + 1; i < size; ++i)
+        {
+            std::copy(std::begin(from.metaIndex[Perspective]), std::end(from.metaIndex[Perspective]),
+                      accumulators[i].metaIndex[Perspective]);
+            accumulators[i].metaCount[Perspective] = from.metaCount[Perspective];
+        }
+#endif
+    }
     else
     {
         update_accumulator_refresh_cache<Perspective>(featureTransformer, pos, mut_latest(), cache);
         backward_update_incremental<Perspective>(pos, featureTransformer, last_usable_accum);
+#ifdef JIEQI_NNUE_META
+        // A refresh computes the HalfKA features only
+        for (std::size_t i = last_usable_accum; i < size; ++i)
+            accumulators[i].metaCount[Perspective] = 0;
+#endif
     }
 }
 

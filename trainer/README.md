@@ -36,10 +36,16 @@ code is written specifically for this engine's feature set and file format.
 | `init_net.py` | Creates a material-only starting network |
 | `gen_data.py` | Self-play data generation with real hidden identities, multi-process |
 | `prepare_data.py` | Converts text data into shuffled binary shards (streamed, fixed RAM) |
-| `train.py` | Training loop; writes a checkpoint and a `.nnue` file every epoch |
+| `train.py` | Training loop (one GPU, or several with `torchrun`); writes a checkpoint and a `.nnue` file every epoch |
+| `watch_nets.py` | Measures every network of a run against a reference while it trains, ranks them, keeps the best |
+| `textio.py` | Reads / writes text data plain or compressed (`.zst`, `.gz`) |
+| `quant.py` | The two quantization schemes of the engine (`make quant=1/2`) as scales |
+| `ftperm.py` | Reorders the feature transformer neurons of a network so that the engine evaluates it faster (same evaluations) |
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
+| `ranger21.py` | Ranger21 optimizer (`train.py --optimizer ranger21`), from AB-JChess |
+| `chance_tables.py` | Score ↔ mass tables for the engine option `ChanceModel Tables` (fitted to self-play data, logistic, or copied from an AB-JChess network) |
 | `rescore.py` | Has another engine (e.g. AB-JChess) re-score positions |
 | `serialize.py` | Writes / reads `.nnue` files, converts `.nnue` into a checkpoint |
 | `jieqi_features.py` | Input features, a copy of Maskfish's `src/nnue/features/half_ka_v2_hm` |
@@ -70,6 +76,8 @@ The engine has two things dedicated to the trainer: the UCI option `RawScore`
 - A C++17 compiler (g++ or clang) and `make` to build the engine.
 - Python 3.9 or later.
 - The packages of `requirements.txt`: `torch`, `numpy`, `zstandard`.
+- Optional: `tensorboard` (`pip install tensorboard`) for `train.py
+  --tensorboard` / `watch_nets.py --tensorboard`.
 
 ## 3. Setup
 
@@ -89,9 +97,11 @@ cd ../trainer
 - Choose `ARCH` for your CPU (`make help` lists them, e.g. `x86-64-bmi2`,
   `x86-64-avx512`, `apple-silicon`). When generating data on several
   different machines, build on each machine.
-- The build downloads the latest released network to `src/maskfish.nnue`
-  if that file does not exist (`make net`). The scripts do not use it:
-  every script passes the Jieqi network with the `EvalFile` option.
+- The build fetches the network of the hidden ref `refs/assets/net` to
+  `src/maskfish.nnue` (`make net`) and embeds it in the binary. The scripts
+  do not use it: every script passes the Jieqi network with the `EvalFile`
+  option. A trained network is published with `scripts/push_net.sh` (from
+  `net/maskfish.nnue`, see the README).
 
 ### 3.2. Install Python
 
@@ -222,9 +232,13 @@ Good to know:
   together (several files given to `prepare_data.py`) or separately into
   different prefixes; `train.py` accepts several prefixes.
 - Keep the text files: they are needed to prepare the data again when the
-  architecture changes (e.g. `att`) and to run `fit_scaling.py`. They can be
-  compressed for storage, but `prepare_data.py` only reads plain text files,
-  so decompress them before use.
+  architecture changes (e.g. `att`) and to run `fit_scaling.py`.
+- **Compressed text:** `--out data/gen0.txt.zst` writes a zstd file, about 6
+  times smaller (15 bytes per position instead of 92 in a test). The
+  `.partN` files stay plain until they are merged. `prepare_data.py`,
+  `fit_scaling.py`, `chance_tables.py` and `rescore.py` (input) read `.zst`
+  and `.gz` files directly, so existing files can also be compressed with
+  `zstd --rm data/gen0.txt` and used as `data/gen0.txt.zst`.
 
 ### Step 3. Prepare the data
 
@@ -244,6 +258,8 @@ and the file `data/train0.arch` holding the architecture.
 | `--workers` | cores | Number of FEN parsing processes |
 | `--arch` | `default` | `att` for the experimental architecture ([section 7.2](#72-the-att-architecture)) |
 | `--jieqi-material` | off | The data was generated with the engine option `JieqiMaterial=true` (store the material `evaluate()` then uses) |
+| `--mirror` | off | Also add the positions mirrored left-right when their features differ ([section 7.15](#715-more-from-the-same-data-mirroring-and-repeated-positions)) |
+| `--max-dups` | all | Keep at most N copies of each position ([section 7.15](#715-more-from-the-same-data-mirroring-and-repeated-positions)) |
 
 Every shard is shuffled before it is written; during training every batch
 comes from a random shard, so the data is mixed across shards.
@@ -275,7 +291,12 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--gamma` | 0.992 | Learning rate decay after every epoch |
 | `--lambda` | 1.0 | 1.0: learn from the search score only; lower: also mix in the game result |
 | `--scaling` | 361 | Score → probability constant ([step 7](#step-7-calibrate-the-score--probability-constant)) |
+| `--lambda-end` | | Lambda of the last epoch: lambda goes linearly from `--lambda` to it (AB-JChess: 1.0 → 0.8) |
+| `--score-scaling` | `--scaling` | Score → probability constant of the data scores only (AB-JChess: 410, with `--scaling 361`) |
+| `--loss-power` | 2.5 | Exponent of the loss (AB-JChess: 2) |
+| `--layers`, `--ctx`, `--no-psqt` | | Architecture options of the model (sections 7.4 to 7.6) |
 | `--init-net` | | Start from a `.nnue` file (new optimizer) |
+| `--init-ft-only` | | With `--init-net`, take only its feature transformer and train the layer stacks from scratch (to compare layer stack architectures fairly from the same feature transformer) |
 | `--resume` | | Continue an interrupted run from a checkpoint (optimizer and epoch count included) |
 | `--device` | `cuda` if available | `cpu` to force the CPU |
 | `--threads` | 0 | Number of CPU threads for PyTorch (0 = default) |
@@ -283,9 +304,15 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--factorize-kb` | | Add virtual features per king bucket (used by AB-JChess; off by default) |
 | `--no-l1-fact` | | Disable the fc0 part shared by the layer stacks (on by default) |
 | `--output-lr-scale` | 0.1 | Learning rate of the output layer, relative to `--lr` |
+| `--optimizer` | `adam` | `ranger21`: the optimizer of AB-JChess and nnue-pytorch (AdamW with lookahead, `ranger21.py`); the learning rate still follows `--lr` and `--gamma`. A run resumed with another optimizer starts a new one at the current learning rate |
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
+| `--eval-scaling` | `complexity` | The engine's `EvalScaling` option the network will play with: `complexity` or `alignment` ([section 7.13](#713-evaluation-scaling-evalscaling)) |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
+| `--qat-start` | 0 (off) | Quantization-aware training from this epoch on ([section 7.10](#710-quantization-aware-training-qat-start)) |
+| `--val-qat` | | Also print the validation loss of the quantized network before `--qat-start` |
+| `--prefetch` | 4 | Batches read ahead in a background thread while the GPU trains (0: none) |
+| `--tensorboard` | | Also write TensorBoard logs to `<out>/tb` |
 
 The loss is that of nnue-pytorch: the network's score and the data score are
 both converted to a win probability with `sigmoid(score / scaling)`, the
@@ -345,10 +372,49 @@ these techniques) can still be loaded and trained further; their optimizer
 state is then created anew.
 
 **Monitoring:** the average loss is printed every 100 steps; at the end of
-every epoch the train loss, the validation loss, the learning rate and the
-time. The validation loss should go down and then level off. Only compare
-validation losses of runs that use **the same validation set**; a lower loss
-does not mean a stronger network, only a match tells (step 6).
+every epoch the train loss, the validation loss, the learning rate, the
+time and the training speed (positions per second). The validation loss
+should go down and then level off. Only compare validation losses of runs
+that use **the same validation set**; a lower loss does not mean a stronger
+network, only a match tells (step 6).
+
+The same numbers are appended to `runs/gen1/metrics.jsonl` (one JSON object
+per line: `"type": "step"` every 100 steps, `"type": "epoch"` per epoch; it
+continues across `--resume`). With `--tensorboard` they also go to
+`runs/gen1/tb`:
+
+```
+tensorboard --logdir runs        # then open http://localhost:6006
+```
+
+**Data loading:** batches are read from the memory-mapped shards in a
+background thread (`--prefetch`, 4 batches ahead) while the GPU computes the
+previous step, in page-locked memory, and are sent to the GPU in their
+stored types (16-bit feature indices, 4 times fewer bytes than before),
+then converted there. The batches and their order do not depend on
+`--prefetch` (same seed, same batches). On a 2-core test machine, building
+a batch of 16384 positions took 3.0 ms instead of 4.8 ms, and it now
+overlaps the GPU step instead of adding to it.
+
+**Several GPUs** (one machine): start the same command with `torchrun`:
+
+```
+torchrun --standalone --nproc_per_node 4 train.py data/train0 --val data/val0 \
+    --out runs/gen1 --epochs 40 --epoch-size 10000000 --batch-size 16384
+```
+
+- `--batch-size` stays the **total** batch: each of the 4 processes draws its
+  own random 4096 positions, and DistributedDataParallel averages the
+  gradients, so a step is the same as a step on one GPU with 16384 positions:
+  same hyperparameters, same number of steps per epoch, about 4 times
+  faster when the GPUs are the bottleneck. `--batch-size` must be a multiple
+  of the number of processes.
+- Only process 0 prints, validates and writes the files; `--resume`,
+  `--init-net` and every other option work as with one GPU.
+- With threats networks (about 400 MB of gradients to average per step) the
+  speed-up depends on the link between the GPUs (NVLink ≫ PCIe).
+- `scripts/pipeline.sh`: set `TRAIN_GPUS=4` in `pipeline.env`.
+- On the CPU (`--device cpu`, tests only) the processes use the gloo backend.
 
 **Output** in `runs/gen1/`: for every epoch `epoch_K.pt` (checkpoint, about
 190 MB, about 750 MB for `att`, about 1.3 GB for `threats`) and `epoch_K.nnue`
@@ -392,6 +458,23 @@ python match.py --engine ../src/maskfish \
   `--depth` or `--movetime`). Every engine uses 1 thread; `--workers` pairs
   of games run in parallel.
 
+**Measuring every epoch while training** (as nnue-pytorch's `run_games.py`):
+`watch_nets.py` plays a fixed number of pairs of every new `epoch_K.nnue`
+against the reference, with the same openings for every network, prints a
+ranking, and keeps the best one as `runs/gen1/best.nnue`. Run it next to the
+training, on the CPU cores the trainer does not use:
+
+```
+python watch_nets.py runs/gen1 --engine ../src/maskfish --ref nets/gen0.nnue \
+    --pairs 200 --nodes 5000 --workers 8 --every 2 --follow --until-epoch 40
+```
+
+Results are kept in `runs/gen1/watch.json` (restartable; a larger `--pairs`
+tops up the networks already measured), and `--tensorboard` adds the Elo of
+each epoch to the run's TensorBoard logs. A few hundred pairs give about
+±15–30 Elo: use the ranking to choose which epochs go to the SPRT above,
+not as the final decision.
+
 If the new network wins (H1), copy it as the current network:
 
 ```
@@ -419,7 +502,23 @@ observed win rates with the predicted ones. Use that value for:
 - the trainer: `train.py --scaling <s>`.
 
 Fit it again after every generation. Check with `match.py` that the new value
-does not weaken the engine before making it the default.
+does not weaken the engine before making it the default. `--by-material`
+also fits it by ranges of material, for `train.py --scaling-table`
+([section 7.16](#716-score--probability-by-material---scaling-table)).
+
+The same data can also give lookup tables for the engine option
+`ChanceModel Tables` (AB-JChess's averaging of chance nodes in "mass" space,
+not tested for Maskfish yet):
+
+```
+python chance_tables.py fit data/gen1.txt --out tables/gen1
+python match.py ... --opt-a ChanceModel=Tables ChanceTables=$PWD/tables/gen1
+```
+
+`chance_tables.py logistic --scale <s>` writes tables equivalent to the default
+averaging (a reference), and `chance_tables.py extract <AB-JChess .nnue>`
+copies the tables of an AB-JChess network (in the score units of its
+networks: they fit Maskfish's only roughly).
 
 ### Step 8. Next generation
 
@@ -693,6 +792,11 @@ network (2048 outputs) cannot be converted to `threats`.
 | `prepare_data.py` | about 15,000 lines/s per core | about 6,000 lines/s per core |
 | Checkpoint | about 190 MB | about 1.3 GB |
 
+(Measured before the threat updates were paired, Pikafish's "Pair int8 weight
+rows in accumulator updates": with SSSE3 or better, the threat accumulator is
+now updated two weight rows at a time, about +15 % nps for `threats=yes` on
+AVX2, measured with a random network, which narrows the gap.)
+
 Since the engine is about a third slower, compare with a regular network
 trained on the same data using `--movetime` (or at least check again with
 `--movetime` after winning with `--nodes`):
@@ -716,9 +820,9 @@ current layer stacks (`fc0`: L1 → 15 + 1, `fc1`: 30 → 32, `fc2`: 32 → 1):
 - the term added directly to the result is the difference of the last two
   outputs of `fc0` (`fc0[30] − fc0[31]`) instead of a separate 16th output.
 
-The quantization stays that of the current layer stacks (upstream changed the
-quantization scales at the same time, for quantization-aware training — QAT
-— which this trainer does not do).
+The quantization stays that of the current layer stacks by default; the
+quantization of current Pikafish is an option of its own (`make quant=2`,
+[section 7.12](#712-quantization-of-current-pikafish-make-quant2)).
 
 The new layer stacks work with every feature set: the architecture names get
 the suffix `-l2` (`default-l2`, `att-l2`, `threats-l2`, `att-threats-l2`). The
@@ -745,7 +849,11 @@ stacks are trained from scratch. `--resume` needs the same architecture.
 A quick measurement on the development machine (small data, 166,000
 self-play positions, CPU, 15 epochs, so only indicative): validation loss
 0.00188 versus 0.00200 for the current layer stacks; the engine is about 12 %
-(`default`) and 8 % (`threats`) slower because `fc0` is twice as large.
+(`default`) and 8 % (`threats`) slower because `fc0` is twice as large. (Since
+then the two activations of each layer are computed together with AVX2 /
+AVX-512, Pikafish's "paired activations": about +3 % nps for `layers=2` on
+AVX2, measured with a random network, within the noise of the measure;
+Pikafish measured +2.5 %.)
 Compare with `--movetime`:
 
 ```
@@ -754,10 +862,471 @@ python match.py --engine-a ../src/maskfish-l2 --net-a runs/l2/epoch_40.nnue \
     --movetime 100 --workers 15 --sprt 0 5
 ```
 
+### 7.5. Networks without PSQT (`psqt=no`)
+
+The engine built with `make psqt=no` reads networks without the PSQT part of
+the feature transformer (as Pikafish's SFNNv17 and AB-JChess's networks): the
+evaluation is the layer stack output alone, the material goes through the
+layer stacks too. The architecture names get the suffix `-nopsqt` (after
+`-l2`: `default-nopsqt`, `att-l2-nopsqt`, ...). The input features do not
+change, so prepared data can be shared.
+
+A network without PSQT cannot be a material-only starting network
+(`init_net.py` refuses): start from the feature transformer of a network with
+PSQT and the same feature set.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 psqt=no && mv maskfish maskfish-nopsqt
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-nopsqt --arch default-nopsqt
+python train.py data/train --val data/val --out runs/nopsqt --no-psqt \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python match.py --engine-a ../src/maskfish-nopsqt --net-a runs/nopsqt/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue --movetime 100 --sprt 0 5
+```
+
+### 7.6. Inventory context (`ctx=yes`)
+
+From AB-JChess: the pool counts are already input features, but only through
+the feature transformer, whose output does not change much when one dark
+piece is revealed or captured. The context gives the layer stacks the
+uncertainty of the position directly: 16 values (see
+`jieqi_features.context_inputs()`), from the side to move, go through a small
+layer (`ctx_tower`, 16 → 16, clipped ReLU, shared by the layer stacks) whose
+outputs are 16 more inputs of `fc0` in every layer stack. The trainer
+recovers the 16 values from the features of the side to move, so **prepared
+data can be shared**; `verify.py` checks that they are the ones the engine
+computes.
+
+The architecture names get the suffix `-ctx` (after `-l2`, before
+`-nopsqt`: `default-ctx`, `att-l2-ctx`, `threats-ctx-nopsqt`, ...).
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 ctx=yes && mv maskfish maskfish-ctx
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-ctx --arch default-ctx
+python train.py data/train --val data/val --out runs/ctx --ctx \
+    --epochs 40 --epoch-size 10000000 --init-net nets/genN.nnue
+python match.py --engine-a ../src/maskfish-ctx --net-a runs/ctx/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/genN.nnue --movetime 100 --sprt 0 5
+```
+
+`--init-net` with a network without context takes its feature transformer;
+the layer stacks and the context layer are trained from scratch.
+
+### 7.7. Layer stack selection of AB-JChess (`lsblend=yes`)
+
+The layer stack of a position is chosen by its number of pieces. AB-JChess
+raises that bucket by an "uncertainty phase": +1 to +4 for the number of dark
+pieces on the board (1, 5, 9, 17 or more), +1 to +3 for the number of rooks,
+cannons and knights left in the pools (2, 5, 9 or more), at most 15. And it
+interpolates between the chosen layer stack and the next one, with a weight
+given by the position of the three counts within their intervals (the
+evaluation then changes smoothly with them instead of jumping at the
+boundaries of the buckets). See `jieqi_features.layer_stack_selection()`;
+about half of the positions use two layer stacks, which costs the engine
+about 10 % of its speed.
+
+The architecture names get the suffix `-blend`, first (`default-blend`,
+`att-blend-l2-ctx`, ...). **The prepared data changes** (layer stack and
+interpolation weight of each position): prepare it with `--arch
+default-blend` (or `att-blend`, ...); the other options (`--layers 2`,
+`--ctx`, `--no-psqt`) are given to `train.py`.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 lsblend=yes && mv maskfish maskfish-blend
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-blend --arch default-blend
+python prepare_data.py data/gen*.txt --out data/train-blend --arch default-blend
+python train.py data/train-blend --out runs/blend --epochs 40 --epoch-size 10000000 \
+    --init-net nets/genN.nnue
+```
+
+`--init-net` with a network without `-blend` (same feature set) takes its
+feature transformer. `--stack-balance` weights the layer stacks of the new
+selection.
+
+### 7.8. Meta features of AB-JChess (`meta=yes`)
+
+88 more input features per feature transformer bucket, of which 9 are active
+for each side, one per group (see `jieqi_features.meta_offsets()`): from the
+side of the perspective, the numbers of rooks, cannons and knights in its
+pool and in the opponent's (up to 7), the numbers of pieces in both pools (up
+to 7), the number of dark pieces on the board (8 buckets), the numbers of
+dark pieces of each side captured without being identified (0..15), and the
+numbers of revealed pieces of each side attacked by revealed enemy pieces
+(up to 7). The pool counts are already features (repeated once per piece),
+but only linearly: the one-hot groups let the network react to them
+non-linearly at no cost; the attacked pieces are new information (a small
+summary of what the `threats` architecture gives in full).
+
+The engine computes them at each evaluation and keeps them in the HalfKA
+accumulator (about 30% slower). The architecture names get the suffix
+`-meta`, first (`default-meta`, `att-meta-blend`, ...). **The input features
+change**: prepare the data with `--arch default-meta` (the feature arrays have
+80 columns instead of 64), and `--init-net` needs a network with them.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 meta=yes && mv maskfish maskfish-meta
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-meta --arch default-meta
+python prepare_data.py data/gen*.txt --out data/train-meta --arch default-meta
+python train.py data/train-meta --out runs/meta --epochs 40 --epoch-size 10000000
+```
+
+### 7.9. Starting a new architecture from an existing network
+
+A new architecture does not have to start from a material-only network:
+
+- `-meta`, `-ctx` (and both) only add inputs: `serialize.py --convert` turns a
+  network without them into one with zero weights for them, which evaluates
+  every position exactly as the original (checked with the released network).
+  It is a generation 0 as strong as the current one:
+
+  ```
+  python serialize.py --convert default-meta-ctx nets/gen5.nnue nets/default-meta-ctx-gen0.nnue
+  ```
+
+- `-blend` can also be added by `--convert`, keeping the layer stacks; the
+  evaluation changes (the layer stacks are selected differently), so it is
+  only a starting point for training.
+- `-l2` and `-nopsqt` change the layer stacks or the output: they cannot be
+  converted. `train.py --init-net` takes the feature transformer of a network
+  with the same feature set (also without `-meta`: zero rows are added), and
+  the layer stacks are trained. Train them on the data of the current line
+  (prepared for the new feature set) and compare with `match.py
+  --engine-a ... --engine-b ...` before using them as a generation 0.
+
+`train.py --init-net` converts automatically when it can (the whole network is
+then used), otherwise it takes the feature transformer only; it says which.
+
+### 7.10. Quantization-aware training (`--qat-start`)
+
+The engine plays with the integer network that `serialize.py` exports, not
+with the float model: weights rounded to int8 / int16, the accumulator
+products shifted, the activations saturated, the divisions truncated. The
+difference is what `verify.py --checkpoint` reports as "largest
+float/quantized difference" (a few dozen internal units for a trained
+network, a few hundred for a random one), and the loss printed by the trainer
+is the loss of the float model, not of the network that plays.
+
+With `--qat-start E`, from epoch E on the forward pass is the engine's
+integer computation (`model.forward_parts_qat()`): the weights rounded
+exactly as at export (the virtual features and the shared fc0 part folded
+in), the integer arithmetic of the feature transformer, the layer stacks and
+`evaluate()`. The roundings let the gradient through unchanged
+(straight-through estimator), so the float weights keep learning, while the
+loss is the loss of the exported network. Nothing changes in the file format
+or in the engine; every architecture is supported (`-l2`, `threats`,
+`-ctx`, `-blend`, `-meta`, `-nopsqt`).
+
+```
+# float training, then the last 5 of 40 epochs quantization-aware
+python train.py data/train --val data/val --out runs/gen2 --epochs 40 \
+    --epoch-size 10000000 --init-net nets/gen1.nnue --qat-start 36 --val-qat
+
+# or a short QAT fine-tuning of an existing run
+python train.py data/train --val data/val --out runs/gen2 --epochs 45 \
+    --resume runs/gen2/last.pt --qat-start 41 --lr 2e-4
+```
+
+- `--val-qat` prints, before `--qat-start`, the validation loss of the
+  quantized network as well (`quantized net loss`), so that the effect of QAT
+  can be seen; during QAT, `val loss` is already the quantized network's
+  (the epoch line says `qat`). Both go to `metrics.jsonl` /
+  TensorBoard (`quantized_val_loss`).
+- `verify.py --checkpoint` checks that the QAT forward pass of the
+  checkpoint gives the engine's `evalraw` and `evaluate()` values (line
+  `quantization-aware forward: N/N positions equal to the engine`).
+- Cost: QAT builds a rounded copy of the feature transformer weights at
+  every step (more GPU memory: about 3 × 62 MB for `default`, 3 × 385 MB for
+  `threats`; `scripts/pipeline.sh` probes the batch size with QAT when
+  `QAT_START` is set), but folds the virtual features into it, so it does one
+  embedding lookup instead of two: on the CPU test machine a QAT step was
+  even faster (5.4k instead of 3.7k positions/s). Compare the `pos/s` of the
+  epoch lines on your GPU.
+- Measured so far only at a tiny scale (92,000 positions, 7 epochs, CPU): the
+  quantized network's validation loss was within 0.5 % of the float model's
+  in every epoch, and QAT for the last 3 epochs gave the same quantized loss
+  as float training (0.006771 both), QAT from the first epoch 0.006597, all
+  within the noise of such a run. Whether QAT helps at real scale is open:
+  try it on the last few epochs of a generation and decide with `match.py`
+  (SPRT), not with the loss.
+
+### 7.11. Engine speed: neuron order (`ftperm.py`)
+
+The first layer of the layer stacks (fc0) reads the 0..127 outputs of the
+feature transformer in chunks of 4 and skips the chunks that are entirely
+zero (`AffineTransformSparseInput`). The order of the neurons is arbitrary,
+so `ftperm.py` (after nnue-pytorch's script of the same name) puts neurons
+that are often zero at the same time in the same chunk:
+
+```
+python ftperm.py nets/gen3.nnue nets/gen3.nnue --data data/gen3.txt.zst
+python ftperm.py nets/gen3.nnue --data data/gen3.txt.zst --stats-only   # report only
+```
+
+- The network computes exactly the same values: the permutation moves the
+  two halves of the feature transformer (biases, HalfKA and threat weights)
+  and the matching fc0 input columns together. The script compares
+  `serialize.quantized_eval()` before and after on held-out positions and
+  writes nothing if one differs; `bench` gives the same node count.
+- Every architecture is supported (checked with `default`, `default-l2`,
+  `threats-blend-ctx`, `att-threats-meta-blend-l2-ctx-nopsqt`: same
+  evaluations, `verify.py` bit-exact, same `bench` node count).
+- The gain depends on how sparse the network is. On a small test network
+  (7 epochs on 92,000 positions, 38 % zero outputs) the all-zero chunks went
+  from 4.1 % to 15.7 % of the held-out positions, and the instructions spent
+  in `Network::evaluate()` during `bench` from 654 to 594 million (−9 %),
+  −1.7 % for the whole bench (measured with callgrind: wall-clock nodes per
+  second on the test machine vary more than that). Well-trained networks are
+  sparser, so the gain should be larger: measure with `bench` on your machine.
+- Run it on the network that will be used (`scripts/pipeline.sh` does it
+  after promoting the SPRT winner with `FTPERM=1` in pipeline.env; off by
+  default). The permuted `.nnue` no
+  longer matches the training checkpoint column for column, so compare it
+  with `verify.py` without `--checkpoint`; training can continue from it
+  (`--init-net`) or from the checkpoint as before.
+- It takes about a minute and a half (test machine) with the default 20,000 + 5,000 positions
+  (`--positions`, `--holdout`); positions are drawn from the first
+  `--scan` lines of the data.
+
+### 7.12. Quantization of current Pikafish (`make quant=2`)
+
+Pikafish's networks use another quantization than Maskfish's default (since
+before its "Update nnue-architecture"): the feature transformer at scale 255
+instead of 127 doubled (twice the resolution, half the range: weights within
+±0.498 instead of ±1), fc0 at scale 128 with activations shifted by 7 (twice
+the resolution), and the last layer in the units of fc0 (scale 128 instead of
+75.6: twice the resolution, weights within ±0.99 instead of ±1.68), the direct
+term added before the final conversion. `make quant=2` builds the engine
+with it, for both layer stacks (`layers=1` and `2`) and every other option;
+the networks are the `*-q2` architectures (`default-q2`, `default-l2-q2`,
+`threats-l2-ctx-q2`, ...), with another hash: each build rejects the
+networks of the other. `quant.py` lists the scales of both schemes; the
+default (`quant=1`) is unchanged, bit for bit (same `bench` node count as
+before).
+
+Checked: `verify.py` bit-exact, and the QAT forward pass equal to the engine,
+with `default-q2`, `default-l2-q2`, `threats-blend-ctx-q2` and
+`att-threats-meta-blend-l2-ctx-nopsqt-q2`.
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 quant=2 && mv maskfish maskfish-q2
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-q2 --arch default-q2
+```
+
+**Starting from a network of the default quantization** (same feature set):
+
+```
+# the same network requantized (rounded to the new grid, the feature
+# transformer weights beyond +-0.498 clipped; the script says how many)
+python serialize.py --convert default-q2 nets/gen5.nnue nets/gen5-q2.nnue
+
+# or trained further in the new quantization
+python train.py data/train --val data/val --out runs/q2 --quant2 \
+    --init-net nets/gen5.nnue --epochs 40 --epoch-size 10000000 [--qat-start 36]
+```
+
+`--init-net` with the other quantization dequantizes the network with its own
+scales and clips it into the new ranges (it prints how many feature
+transformer weights were clipped). The prepared data is shared (`-q2` does not
+change the features). In `scripts/pipeline.sh`, `QUANT=2` (with `INIT_NET` to
+start from an existing network) is a line of networks of its own
+(`nets/default-q2-genN.nnue`, ...).
+
+**Testing it with an SPRT**: compare networks trained the same way, one in
+each quantization, each with its own build:
+
+```
+python train.py data/train --val data/val --out runs/q1 --init-net nets/gen5.nnue \
+    --epochs 40 --epoch-size 10000000 --seed 1
+python train.py data/train --val data/val --out runs/q2 --init-net nets/gen5.nnue \
+    --epochs 40 --epoch-size 10000000 --seed 1 --quant2
+python match.py --engine-a ../src/maskfish-q2 --net-a runs/q2/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b runs/q1/epoch_40.nnue \
+    --movetime 100 --workers 15 --sprt 0 5
+```
+
+`--movetime` makes the speed of each build count (on the test machine the
+two had the same speed within the noise of `bench`); `--nodes` measures the
+networks alone. The requantized network of the first command above only
+tests the rounding (it should be within a few Elo of the original: on a small
+test network its raw evaluations differed by 0.9 internal units on average,
+8 at most); the real question is whether training in the new quantization
+gives a stronger network, which only the trained pair answers. Combine with
+QAT (section 7.10) in a second test rather than in the same one, to know
+which change helped.
+
+### 7.13. Evaluation scaling (`EvalScaling`)
+
+`evaluate()` does not return the network output as is: it scales it (see
+step 4 and `eval_scale.py`), and the trainer applies the same scaling in the
+loss, so the two must agree. The engine has two scalings that the trainer
+models, chosen by the UCI option `EvalScaling`:
+
+- `Complexity` (default, unchanged): the output is damped by the
+  "complexity" |psqt − positional| and scaled by the major material
+  (`JieqiMaterial` applies to it). With a network **without PSQT**
+  (`make psqt=no`) the material balance stands for the missing PSQT part,
+  as in Pikafish: complexity = |2 × sed − output|, where sed
+  (`simple_eval_dark()`) counts each dark piece at the average value of its
+  side's pool. `prepare_data.py` stores it (field `sed`): data prepared
+  before must be prepared again to train such a network with this scaling.
+  (Before, the complexity was |output| itself, which damped every large
+  evaluation.)
+- `Alignment`: Pikafish's "Replace nnueComplexity with simple_eval
+  equivalent" (September 2026), made to allow networks without PSQT: the
+  output is scaled up or down by its agreement with the material balance
+  (`simple_eval`), then by the total material, then by the 40-move counter as
+  before. It needs the material balance and the total material of every
+  position, which `prepare_data.py` now stores (fields `se`, `allmat`):
+  data prepared before must be prepared again from the text files.
+
+A third value, `Correlation`, is the agreement with the material balance as
+`Alignment`, but with dark pieces at the average value of their pool and the
+major material scaling of `Complexity`. The trainer does not model it: do not
+generate training data with it.
+
+`Complexity` and `Alignment` are checked bit for bit by `verify.py --eval-scaling ...` (also with
+`psqt=no` and `quant=2`). To use `Alignment`:
+
+```
+python prepare_data.py data/gen5.txt --out data/train5        # again, for se / allmat
+python train.py data/train5 --val data/val5 --out runs/align --init-net nets/gen5.nnue \
+    --eval-scaling alignment --epochs 40 --epoch-size 10000000
+python verify.py --engine ../src/maskfish --net runs/align/epoch_40.nnue --eval-scaling alignment
+python match.py --engine ../src/maskfish --net-a runs/align/epoch_40.nnue --net-b nets/gen5.nnue \
+    --opt-a EvalScaling=Alignment --movetime 100 --workers 15 --sprt 0 5
+```
+
+The net trained with `--eval-scaling alignment` must play with
+`EvalScaling Alignment` (A), the reference with the default (B). The two
+scalings give evaluations of different sizes (`Alignment` scales up with
+the material, `Complexity` down), so do not switch the option of an existing
+network without training it again. The data may come from either scaling:
+the loss compares win probabilities, and `fit_scaling.py` fits the constant
+of the data used. `scripts/pipeline.sh`: `EVAL_SCALING=Alignment` sets the
+option for the data generation, the checks and the SPRT, and
+`--eval-scaling alignment` for the training. It suits `PSQT=0` best.
+
+### 7.14. 32 layer stacks (`make stacks=32`)
+
+Pikafish went from 16 to 32 layer stacks ("32 LayerStack buckets", October
+2026), splitting its buckets (rooks and knights + cannons of each side) more
+finely. Maskfish selects its 16 layer stacks by the number of pieces; with
+`stacks=32` each of these buckets is split in two by the share of dark
+pieces: layer stack `2b + 1` when more than half of the pieces other than the
+kings are still dark, `2b` otherwise (`HalfKAv2_hm::make_layer_stack_bucket()`,
+`jieqi_features.layer_stack_bucket()`). Two positions with the same number of
+pieces, one still closed (many unknown identities) and one almost revealed,
+then have their own layer stacks. This split is a choice of Maskfish (the one
+of AB-JChess's `lsblend` uses the dark pieces too), not Pikafish's: test it
+with an SPRT. The layer stacks `2b` and `2b + 1` share the PSQT bucket `b`, so
+the feature transformer is the same as with 16 layer stacks; the network file
+has 32 layer stacks (about 0.5 MB more) and the engine still evaluates one
+layer stack per position, so its speed should hardly change. Not with
+`lsblend=yes`.
+
+The architecture names get the suffix `-s32`, after `-meta` / `-blend`
+(`default-s32`, `att-meta-s32-l2`, ...). **The prepared data changes** (layer
+stack of each position): prepare it with `--arch default-s32`. A network with
+16 layer stacks converts into `-s32` with the same evaluation (each layer
+stack copied into the two that split it), so a new line can start from the
+current network:
+
+```
+cd ../src
+make clean && make -j build ARCH=x86-64-avx2 stacks=32 && mv maskfish maskfish-s32
+make clean && make -j build ARCH=x86-64-avx2
+cd ../trainer
+python verify.py --engine ../src/maskfish-s32 --arch default-s32
+python prepare_data.py data/gen5.txt --out data/train5-s32 --arch default-s32
+python train.py data/train5-s32 --out runs/s32 --epochs 40 --epoch-size 10000000 \
+    --init-net nets/gen5.nnue --stack-balance 8
+python match.py --engine-a ../src/maskfish-s32 --net-a runs/s32/epoch_40.nnue \
+    --engine-b ../src/maskfish --net-b nets/gen5.nnue --movetime 100 --workers 15 --sprt 0 5
+```
+
+(`python serialize.py --convert default-s32 nets/gen5.nnue nets/gen5-s32.nnue`
+writes the converted network itself.) The layer stacks of the endgames and of
+the openings with many revealed pieces are seen less often: `--stack-balance`
+weights them up. `scripts/pipeline.sh`: `STACKS=32` (with `INIT_NET` of 16
+layer stacks: the same evaluation at generation 0).
+
+### 7.15. More from the same data: mirroring and repeated positions
+
+`prepare_data.py --mirror` adds every position mirrored left-right (files a ↔
+i): Jieqi is symmetric (the dark pieces stand on symmetric squares and move
+like the kind of their square), so it has the same score and result. It adds
+something only when the mirrored position has other features: the HalfKAv2_hm
+features of a king off the middle file are already mirrored to one side, so
+the two positions differ only when **both kings stand on the middle file**,
+about 40 % of the positions of random games. With the `att` feature sets the
+mid mirror decides the side of those too: nothing is added. The script counts
+the positions it adds. It is dhbloo's augmentation by the symmetries of the
+board, which matters for the trainers of board games without such features;
+here it is a modest gain at most, to compare by SPRT (the data is about 1.4
+times as large).
+
+`--max-dups N` keeps at most N copies of each position (same FEN but the move
+number; the first ones of the input). Every game starts from the same
+position and the first moves repeat across games, so a few positions weigh
+much more than the others in the loss; with `--max-dups 8` they count at most
+8 times (their results are still averaged over 8 games). The inputs are read
+twice (the first pass hashes the positions, 8 bytes per line in memory).
+
+```
+python prepare_data.py data/gen5.txt --out data/train5 --mirror --max-dups 8
+```
+
+`scripts/pipeline.sh`: `PREP_MIRROR=1`, `PREP_MAX_DUPS=8` (data prepared with
+other values is prepared again).
+
+### 7.16. Score → probability by material (`--scaling-table`)
+
+The loss maps scores to win probabilities with one constant (`--scaling`,
+361). Stockfish's win rate model depends on the material: the same advantage
+does not mean the same in the opening and in an endgame. `fit_scaling.py
+--by-material N` fits the constant in N ranges of total material (piece values
+of both sides but the kings, the field `allmat` of the prepared data) and
+writes a table; `train.py --scaling-table` then uses, for every position, the
+value interpolated at its material (for the network output and for the data
+score alike):
+
+```
+python fit_scaling.py data/gen5.txt --by-material 8 --table-out nets/scaling5.json
+python train.py data/train5 --val data/val5 --out runs/mat --init-net nets/gen5.nnue \
+    --scaling-table nets/scaling5.json --lambda 0.8 --epochs 40 --epoch-size 10000000
+```
+
+With `--lambda 1.0` (scores only) the table only reweights the loss; it
+matters when the game results count (`--lambda` below 1), since it then sets
+how the results translate into evaluations, position by position. The
+engine's `ChanceScaling` stays one constant (use the global value printed by
+`fit_scaling.py`): a network trained with the table evaluates in units that
+depend a little on the material. Untested so far: keep it only after an SPRT
+against the same training with `--scaling`. The data needs the field `allmat`
+(prepared since the `EvalScaling` patch, section 7.13). `scripts/pipeline.sh`:
+`EXTRA_TRAIN="--scaling-table nets/scaling5.json"` (its words are passed to
+`train.py`).
+
 ## 8. Data formats
 
 **Text** (written by `gen_data.py`, read by `prepare_data.py` and
-`fit_scaling.py`):
+`fit_scaling.py`; plain, or compressed when the name ends with `.zst` or
+`.gz`, see `textio.py`):
 
 ```
 xxxxkxxxx/9/1x5x1/x1x1x3x/1P4n2/9/X1X1X1X1X/6B2/9/XXXXKXXXX b R2A2C2P4N2B1r2a2c2p5n1b2 5 3 | -272 | 1
@@ -767,12 +1336,16 @@ The engine's FEN (with the pool), the score for the side to move in internal
 units, and the result for the side to move (1 / 0 / −1). Data from other
 sources can be added if it uses this format and internal units (`RawScore`).
 
-**Prepared** (per shard, about 260 bytes per position):
+**Prepared** (per shard, about 264 bytes per position):
 
-- `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)`, feature indices of the side
-  to move and of the other side, padded with the padding index;
+- `PREFIX-NNNNN.features.npy`: `int16 (N, 2, 64)` (`(N, 2, 80)` for the `-meta`
+  architectures), feature indices of the side to move and of the other side,
+  padded with the padding index;
 - `PREFIX-NNNNN.meta.npy`: records `bucket` (layer stack), `result`, `score`,
-  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4);
+  `material` and `rule40` (inputs of the `evaluate()` scaling, see step 4),
+  `se` and `allmat` (material balance for the side to move and total
+  material, for `EvalScaling Alignment`, section 7.13), and `blend`
+  (interpolation weight of the layer stacks) for the `-blend` architectures;
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`).
 
@@ -794,9 +1367,9 @@ your own machine.
 | --- | --- |
 | Data generation speed | about 40–50 positions/s per worker with `--nodes 5000` (roughly inversely proportional to the node count) |
 | 16-core machine, `--nodes 5000` | about 2–2.5 million positions/hour |
-| Text file | about 100 bytes/position (10 million ≈ 1 GB) |
-| Prepared data | about 260 bytes/position (10 million ≈ 2.6 GB) |
-| `prepare_data.py` | about 15,000 lines/s per CPU core |
+| Text file | about 100 bytes/position (10 million ≈ 1 GB); `.zst`: about 15 bytes/position |
+| Prepared data | about 264 bytes/position (10 million ≈ 2.6 GB) |
+| `prepare_data.py` | about 15,000 lines/s per CPU core (`threats`: about 6,500): 50 million positions take a few minutes on 16 cores, much less than generating them |
 | Checkpoint | about 190 MB (`att`: 750 MB, `threats`: 1.3 GB) per epoch |
 | `.nnue` file | about 8 MB (`att`: larger, `threats`: up to about 60 MB), zstd compressed |
 
@@ -808,17 +1381,22 @@ Training speed depends on the GPU; run a small epoch first
 | Symptom | Cause / fix |
 | --- | --- |
 | `verify.py` reports `MISMATCH` | The engine and the trainer do not use the same architecture. Use the engine and the trainer of the same Maskfish commit and rebuild the engine; for `att` / `threats` remember `make clean` and the matching `--arch` |
-| The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att` and `layers=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
+| The engine reports `network file ... was not loaded` | Wrong architecture (an `att` / `threats` / `-l2` network on a regular engine or the other way round; `threats=yes`, `nnue=att`, `layers=2` and `quant=2` must match the network's architecture), or the file is not a zstd compressed `.nnue` exported by the trainer |
 | `no threat data (prepare the data again ...)` | The data was prepared by an old version of `prepare_data.py`; run it again with `--arch threats` |
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |
 | `the train data has no material / rule40` | The data was prepared before the loss used the `evaluate()` scaling: run `prepare_data.py` again on the text files (or train with `--no-eval-scale`) |
+| `the train data has no se / allmat` | `--eval-scaling alignment` needs data prepared by the current `prepare_data.py`: prepare it again from the text files |
+| `SCALE MISMATCH` with a network trained with `--eval-scaling alignment` | Run `verify.py` (and the engine) with `--eval-scaling alignment` / `EvalScaling Alignment` |
 | `SCALE MISMATCH` in `verify.py` | `eval_scale.py` no longer matches `src/evaluate.cpp` (constants or material): update it |
 | `incompatible network for arch ...` | A network of the wrong architecture was given to `--init-net` / `serialize.py`; the message gives the file's real architecture |
 | `prepare_data.py` runs out of RAM | Lower `--shard-size` (e.g. 500000) |
 | `train.py` runs out of GPU memory | Lower `--batch-size` (e.g. 8192); the `att` architecture needs more |
 | The loss becomes `nan` or jumps up | Lower `--lr` (e.g. 5e-4), check the data for abnormal scores (lower `--max-score`); try `--no-factorize` to see whether factorization is the cause |
 | `warning: optimizer state not restored` with `--resume` | The checkpoint was made by an old trainer version (a single parameter group): the model is loaded, only the optimizer state is created anew |
-| Slow training, GPU idle | The data is on a slow disk: move it to an SSD; increase `--batch-size` |
+| Slow training, GPU idle | The data is on a slow disk: move it to an SSD; increase `--batch-size` or `--prefetch`; compare the `pos/s` of the epoch lines |
+| `torchrun`: `--batch-size N is not a multiple of the K processes` | Choose a batch size divisible by `--nproc_per_node` |
+| `torchrun` hangs at the start, or NCCL errors | Check that every process sees its GPU (`CUDA_VISIBLE_DEVICES`), try `NCCL_P2P_DISABLE=1`; one GPU (plain `python train.py`) is always a fallback |
+| `watch_nets.py` measures nothing | The networks are younger than 2 seconds, not multiples of `--every`, or already measured with the same `--ref` and limit (see `watch.json`) |
 | `gen_data.py` was interrupted | Use the remaining `.partN` files as normal data |
 | AB-JChess / the old branch print `No such option: RawScore` | Normal: these engines do not have that option; their scores must be rescaled with `--score-scale` ([section 6.3](#63-rescale-the-scores-and-train)) |
 | Two data generation runs are identical | `--seed` was not set to different values |
@@ -858,3 +1436,21 @@ should be checked with a match before use. `.pt` checkpoints need no
 conversion: `train.py` clips the weights into the new range
 (`model.clip_weights()`, including the virtual features of the factorization)
 at the first step, and `serialize.py` exports them as usual.
+
+### 11.2. Optional: blocks without LEB128
+
+The biases and the PSQT weights of the feature transformer are written as
+LEB128 blocks (with the `COMPRESSED_LEB128` marker). Like Pikafish ("Remove
+leb128"), they can also be written as plain little-endian integers: the whole
+file is compressed with zstd anyway, so the size hardly changes and loading is
+a little simpler. The engine reads both forms (a block without the marker is
+read as plain integers), so this is not a new file version, but **older engines
+only read LEB128 blocks**: keep the default for networks that older builds must
+load.
+
+```
+python serialize.py net.nnue net-raw.nnue --no-leb128     # rewrite a network
+python serialize.py runs/x/epoch_40.pt net.nnue --no-leb128  # export a checkpoint
+```
+
+The evaluation is the same (bench gives the same node count).

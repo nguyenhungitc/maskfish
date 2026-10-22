@@ -20,6 +20,7 @@
 #include "network.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,15 @@
 #include "nnue_architecture.h"
 #include "nnue_common.h"
 #include "nnue_misc.h"
+#include "nnz_helper.h"
+
+// The default network embedded in the binary (nnue/embedded_nnue.S): the
+// zstd-compressed maskfish.nnue, or nothing (size 0) when the binary was built
+// without it
+extern "C" {
+extern const unsigned char gEmbeddedNNUEData[];
+extern const unsigned int  gEmbeddedNNUESize;
+}
 
 namespace Maskfish::Eval::NNUE {
 
@@ -66,16 +76,33 @@ bool write_parameters(std::ostream& stream, const T& reference) {
 }  // namespace Detail
 
 template<typename Arch, typename Transformer>
-void Network<Arch, Transformer>::load(const std::string& rootDirectory, std::string evalfilePath) {
+void Network<Arch, Transformer>::load(const std::filesystem::path& rootDirectory,
+                                      std::string                  evalfilePath) {
 #if defined(DEFAULT_NNUE_DIRECTORY)
-    std::vector<std::string> dirs = {"", rootDirectory, stringify(DEFAULT_NNUE_DIRECTORY)};
+    std::vector<std::filesystem::path> dirs = {std::filesystem::path{}, rootDirectory,
+                                               path_from_utf8(stringify(DEFAULT_NNUE_DIRECTORY))};
 #else
-    std::vector<std::string> dirs = {"", rootDirectory};
+    std::vector<std::filesystem::path> dirs = {std::filesystem::path{}, rootDirectory};
 #endif
 
     if (evalfilePath.empty())
         evalfilePath = evalFile.defaultName;
 
+    if (std::string(evalFile.current) == evalfilePath)
+        return;
+
+    // EvalFile not set (empty or the default name): the network embedded in
+    // the binary only, never a file (verify() reports a binary without one).
+    // A file named like the default network is loaded with a path, e.g.
+    // ./maskfish.nnue.
+    if (evalfilePath == std::string(evalFile.defaultName))
+    {
+        load_internal();
+        return;
+    }
+
+    // EvalFile set: this file only, looked up as given (absolute, or relative
+    // to the working directory), then in the directory of the binary
     for (const auto& directory : dirs)
     {
         if (std::string(evalFile.current) != evalfilePath)
@@ -130,11 +157,67 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
 
     ASSERT_ALIGNED(transformedFeatures, alignment);
 
+    NNZInfo<FTDimensions> nnzInfo;
+
     const int  bucket = FeatureSet::make_layer_stack_bucket(pos);
-    const auto psqt =
-      featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-    const auto positional = network[bucket].propagate(transformedFeatures);
+    const auto psqt   = featureTransformer.transform(pos, accumulatorStack, cache,
+                                                     transformedFeatures, psqt_bucket(bucket), nnzInfo);
+
+    std::uint8_t context[ContextOutputs] = {};
+    if constexpr (UseContext)
+        compute_context(pos, context);
+
+    auto positional = network[bucket].propagate(transformedFeatures, nnzInfo, context);
+
+    // make lsblend=yes: interpolation with the next layer stack (the PSQT
+    // bucket stays the floor one)
+    if constexpr (UseLayerStackBlend)
+    {
+        const int blend = FeatureSet::make_layer_stack_selection(pos).blend;
+        if (blend)
+        {
+            const auto next =
+              network[bucket + 1].propagate(transformedFeatures, nnzInfo, context);
+            positional =
+              std::int32_t((std::int64_t(positional) * (256 - blend) + std::int64_t(next) * blend)
+                           / 256);
+        }
+    }
     return {static_cast<Value>(psqt / OutputScale), static_cast<Value>(positional / OutputScale)};
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::compute_context(const Position& pos, std::uint8_t* context) const {
+    std::uint8_t inputs[ContextInputs];
+    ContextTower::make_inputs(pos, inputs);
+    contextTower.propagate(inputs, context);
+}
+
+
+void ContextTower::make_inputs(const Position& pos, std::uint8_t* inputs) {
+    // Divisors of the inputs (see the declaration), and q = round(127 * n / d)
+    constexpr int PoolMax[6] = {2, 2, 2, 5, 2, 2};
+    auto          q          = [](int n, int d) {
+        return std::uint8_t(std::min(127, (2 * 127 * n + d) / (2 * d)));
+    };
+
+    const Color us = pos.side_to_move();
+    int         k  = 0;
+    int         pool[COLOR_NB] = {};
+    for (Color c : {us, ~us})
+        for (PieceType pt = ROOK; pt < KING; ++pt)
+        {
+            const int n = pos.rest_piece(make_piece(c, pt));
+            pool[c] += n;
+            inputs[k++] = q(n, PoolMax[pt - ROOK]);
+        }
+    const int dark[COLOR_NB] = {popcount(pos.pieces(WHITE, DARK)), popcount(pos.pieces(BLACK, DARK))};
+    inputs[k++] = q(dark[us], 16);
+    inputs[k++] = q(dark[~us], 16);
+    inputs[k++] = q(std::max(0, pool[us] - dark[us]), 15);
+    inputs[k++] = q(std::max(0, pool[~us] - dark[~us]), 15);
+    assert(k == int(ContextInputs));
 }
 
 
@@ -148,17 +231,29 @@ void Network<Arch, Transformer>::verify(std::string                             
     {
         if (f)
         {
+            const bool  embedded = evalfilePath == std::string(evalFile.defaultName);
             std::string msg1 =
               "Network evaluation parameters compatible with the engine must be available.";
             std::string msg2 = "The network file " + evalfilePath + " was not loaded successfully.";
             std::string msg3 = "The UCI option EvalFile might need to specify the full path, "
                                "including the directory name, to the network file.";
+            if (embedded)
+            {
+                if (gEmbeddedNNUESize == 0)
+                    msg2 = "This binary has no embedded network (it was built without the "
+                           "network of the ref refs/assets/net, or with embed=no).";
+                else
+                    msg2 = "The network embedded in this binary is not compatible with the "
+                           "engine (built with other network architecture options).";
+                msg3 = "Set the UCI option EvalFile to a network file (with a path, e.g. ./"
+                     + evalfilePath + ", for a file with the default name).";
+            }
             std::string msg4 =
               "A Jieqi network (default name " + std::string(evalFile.defaultName)
               + ") can be trained with the trainer in the trainer/ directory of "
                   "https://github.com/nguyenhungitc/maskfish";
             std::string msg5 = "The engine will be terminated now.";
-            if (oldVersionFile)
+            if (oldVersionFile && !embedded)
                 msg3 = "The network file has an old format (16-bit weights): convert it with "
                        "trainer/serialize.py --upgrade.";
 
@@ -173,9 +268,12 @@ void Network<Arch, Transformer>::verify(std::string                             
 
     if (f)
     {
-        size_t size = sizeof(featureTransformer) + sizeof(Arch) * LayerStacks;
-        f("NNUE evaluation using " + evalfilePath + " (" + std::to_string(size / (1024 * 1024))
-          + "MiB, (" + std::to_string(featureTransformer.InputDimensions) + ", "
+        size_t            size   = sizeof(featureTransformer) + sizeof(Arch) * LayerStacks;
+        const std::string source = evalfilePath == std::string(evalFile.defaultName)
+                                   ? evalfilePath + " (embedded)"
+                                   : evalfilePath;
+        f("NNUE evaluation using " + source + " (" + std::to_string(size / (1024 * 1024)) + "MiB, ("
+          + std::to_string(featureTransformer.InputDimensions) + ", "
           + std::to_string(network[0].TransformedFeatureDimensions) + ", "
           + std::to_string(network[0].FC_0_OUTPUTS) + ", " + std::to_string(network[0].FC_1_OUTPUTS)
           + ", 1))");
@@ -200,9 +298,14 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     t.correctBucket = FeatureSet::make_layer_stack_bucket(pos);
     for (IndexType bucket = 0; bucket < LayerStacks; ++bucket)
     {
-        const auto materialist =
-          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-        const auto positional = network[bucket].propagate(transformedFeatures);
+        NNZInfo<FTDimensions> nnzInfo;
+        const auto            materialist =
+          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures,
+                                       psqt_bucket(int(bucket)), nnzInfo);
+        std::uint8_t context[ContextOutputs] = {};
+        if constexpr (UseContext)
+            compute_context(pos, context);
+        const auto positional = network[bucket].propagate(transformedFeatures, nnzInfo, context);
 
         t.psqt[bucket]       = static_cast<Value>(materialist / OutputScale);
         t.positional[bucket] = static_cast<Value>(positional / OutputScale);
@@ -213,18 +316,34 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
 
 
 template<typename Arch, typename Transformer>
-void Network<Arch, Transformer>::load_user_net(const std::string& dir,
-                                               const std::string& evalfilePath) {
+void Network<Arch, Transformer>::load_user_net(const std::filesystem::path& dir,
+                                               const std::string&           evalfilePath) {
     // dir has no trailing separator (binary directory), so join with the
     // filesystem operator; an empty dir or an absolute evalfilePath give
-    // evalfilePath unchanged.
-    std::stringstream stream =
-      read_compressed_nnue(std::filesystem::path(dir) / std::filesystem::path(evalfilePath));
-    auto              description = load(stream);
+    // evalfilePath unchanged. evalfilePath is UTF-8 (path_from_utf8() also
+    // accepts the ANSI code page of old GUIs on Windows).
+    std::stringstream stream = read_compressed_nnue(dir / path_from_utf8(evalfilePath));
+    load_stream(stream, evalfilePath);
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::load_internal() {
+    if (gEmbeddedNNUESize == 0)
+        return;
+
+    std::stringstream stream = read_compressed_nnue(gEmbeddedNNUEData, gEmbeddedNNUESize);
+    load_stream(stream, std::string(evalFile.defaultName));
+}
+
+
+template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::load_stream(std::stringstream& stream, const std::string& name) {
+    auto description = load(stream);
 
     if (description.has_value())
     {
-        evalFile.current        = evalfilePath;
+        evalFile.current        = name;
         evalFile.netDescription = description.value();
         oldVersionFile          = false;
     }
@@ -271,6 +390,8 @@ std::size_t Network<Arch, Transformer>::get_content_hash() const {
 
     std::size_t h = 0;
     hash_combine(h, featureTransformer);
+    if constexpr (UseContext)
+        hash_combine(h, contextTower.get_content_hash());
     for (auto&& layerstack : network)
         hash_combine(h, layerstack);
     hash_combine(h, evalFile);
@@ -333,6 +454,9 @@ bool Network<Arch, Transformer>::read_parameters(std::istream& stream,
         return false;
     if (!Detail::read_parameters(stream, featureTransformer))
         return false;
+    if constexpr (UseContext)
+        if (!Detail::read_parameters(stream, contextTower))
+            return false;
     for (std::size_t i = 0; i < LayerStacks; ++i)
     {
         if (!Detail::read_parameters(stream, network[i]))
@@ -349,6 +473,9 @@ bool Network<Arch, Transformer>::write_parameters(std::ostream&      stream,
         return false;
     if (!Detail::write_parameters(stream, featureTransformer))
         return false;
+    if constexpr (UseContext)
+        if (!Detail::write_parameters(stream, contextTower))
+            return false;
     for (std::size_t i = 0; i < LayerStacks; ++i)
     {
         if (!Detail::write_parameters(stream, network[i]))

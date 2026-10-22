@@ -32,6 +32,7 @@
 #include <string_view>
 #include <vector>
 
+#include "evaluate.h"
 #include "history.h"
 #include "misc.h"
 #include "nnue/network.h"
@@ -200,6 +201,39 @@ struct SharedState {
 
 class Worker;
 
+// How the outcomes of a chance node are averaged (UCI option ChanceModel)
+enum class ChanceModel : u8 {
+    Winrate,  // in win-rate space, sigmoid(score / ChanceScaling) (default)
+    Tables,   // in "mass" space, with the lookup tables of ChanceTables (AB-JChess)
+    Linear    // linear average of the scores clamped to +-2000 (AB-JChess,
+              // AggressiveLevel 10 with ChanceRiskAversion)
+};
+
+// Score <-> mass lookup tables for ChanceModel Tables, in the format of
+// AB-JChess's networks (probability_score_to_mass.i32le with 4001 entries
+// for the scores -2000..2000, probability_mass_to_score.i32le with 1901
+// entries for the masses -950..950, little-endian int32). Both tables must
+// be non-decreasing: the bounds computed by the chance nodes rely on it.
+struct ChanceTables {
+    static constexpr int ScoreMin = -2000, ScoreMax = 2000;
+    static constexpr int MassMin = -950, MassMax = 950;
+
+    std::vector<std::int32_t> scoreToMass;  // ScoreMax - ScoreMin + 1 entries
+    std::vector<std::int32_t> massToScore;  // MassMax - MassMin + 1 entries
+
+    int mass(int score) const {
+        return scoreToMass[std::clamp(score, ScoreMin, ScoreMax) - ScoreMin];
+    }
+    int score(int mass) const { return massToScore[std::clamp(mass, MassMin, MassMax) - MassMin]; }
+};
+
+// Loads the tables from a directory holding the two files (an empty path
+// unloads them). Returns a message for the GUI. Must not be called during a
+// search.
+std::string load_chance_tables(const std::string& directory);
+// The loaded tables, or nullptr
+const ChanceTables* chance_tables();
+
 // TT key for a position searched for the given observer (the side whose
 // knowledge of the pool the search models, see HiddenCaptureModel). All 64
 // bits change, so that the entries of the two observers fall in different
@@ -295,23 +329,10 @@ class NullSearchManager: public ISearchManager {
 // Search::Worker is the class that does the actual search.
 // It is instantiated once per thread, and it is responsible for keeping track
 // of the search history, and storing data required for the search.
-// The histories that can be shared between the threads of a NUMA node
-// (UCI option SharedHistory). Without sharing, each Worker uses its own copy.
-struct HistoryTables {
-    ContinuationHistory continuationHistory[2][2];
-    PawnHistory         pawnHistory;
-
-    CorrectionHistory<Pawn>         pawnCorrectionHistory;
-    CorrectionHistory<Minor>        minorPieceCorrectionHistory;
-    CorrectionHistory<NonPawn>      nonPawnCorrectionHistory;
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
-};
-
 class Worker {
    public:
     Worker(SharedState&, std::unique_ptr<ISearchManager>, size_t, NumaReplicatedAccessToken);
 
-    // Called at instantiation to initialize reductions tables.
     // Reset histories, usually before a new game.
     void clear();
 
@@ -329,20 +350,17 @@ class Worker {
 
     CapturePieceToHistory captureHistory;
 
-    // Shared tables of this thread's NUMA node (nullptr when not shared), and
-    // whether this Worker is the one that clears them.
-    bool           ownsSharedHistories = false;  // declared first: set by the claim below
-    HistoryTables* sharedHistories     = nullptr;
-    HistoryTables  ownHistories;
+    // The continuation, pawn and correction histories: those of this thread's
+    // NUMA node with the UCI option SharedHistory, otherwise this thread's own
+    // (ownHistories). This thread is thread numaThreadIdx of the numaTotal
+    // threads that share them (0 of 1 when not shared).
+    // Declared first: set by the claim below.
+    usize                            numaThreadIdx = 0, numaTotal = 1;
+    std::unique_ptr<SharedHistories> ownHistories;
+    SharedHistories&                 sharedHistory;
 
-    // The tables actually used: references into sharedHistories or ownHistories
     ContinuationHistory (&continuationHistory)[2][2];
-    PawnHistory& pawnHistory;
-
-    CorrectionHistory<Pawn>&         pawnCorrectionHistory;
-    CorrectionHistory<Minor>&        minorPieceCorrectionHistory;
-    CorrectionHistory<NonPawn>&      nonPawnCorrectionHistory;
-    CorrectionHistory<Continuation>& continuationCorrectionHistory;
+    CorrectionHistory<Continuation> continuationCorrectionHistory;
 
     TTMoveHistory ttMoveHistory;
 
@@ -355,16 +373,24 @@ class Worker {
     bool bestMoveBonusScale = false;
     bool contHistOffset = false;
     bool contCorr6Ply = false;
+    bool simplifications    = false;
     bool bigPawnHistory = false;
 
-    // Index of the pawn history for the position (UCI option BigPawnHistory)
-    int pawn_history_index(const Position& pos) const {
-        return pawn_structure_index(pos, bigPawnHistory);
+    // Entry of the pawn history for the position (UCI option BigPawnHistory)
+    auto& pawn_history_entry(const Position& pos) {
+        return sharedHistory.pawn_entry(pos, bigPawnHistory);
+    }
+    const auto& pawn_history_entry(const Position& pos) const {
+        return sharedHistory.pawn_entry(pos, bigPawnHistory);
     }
 
    private:
+    SharedHistories& claim_histories(SharedState& sharedState, NumaIndex numaIndex);
+
     // Returns whether the last PV sent to the GUI is up to date
     bool iterative_deepening();
+
+    void reset_correction_histories();
 
     void do_move(Position& pos, const Move move, StateInfo& st);
     void prefetch_correction_histories(const Stack* ss, const Position& pos, Move move) const;
@@ -397,6 +423,13 @@ class Worker {
                                 bool      isQsearch,
                                 Depth     depth,
                                 bool      cutNode);
+
+    // Whether move m, made in pos, is a capture of a dark piece by the
+    // observer whose identity is uncertain (its owner's pool holds more than
+    // one kind of piece): with hiddenCaptureModel the search goes on with
+    // every possible identity, so the moves after m in a PV come from one of
+    // them only. Such a PV is cut after m, and gives no ponder move.
+    bool uncertain_hidden_capture(const Position& pos, Move m) const;
 
     // This is the flip search function for any nodes
     template<NodeType nodeType>
@@ -431,10 +464,14 @@ class Worker {
 
     Position  rootPos;
     StateInfo rootState;
+    // False for a position that is not searched (invalid, see
+    // ThreadPool::start_thinking()): it has no root moves, but is not a mate
+    bool rootSearchable = true;
 
     // Jieqi information model. The side the engine is searching for (the
-    // side to move at the root, or its opponent while pondering) learns the
-    // identity of the dark pieces it captures, but not of its own dark pieces
+    // side to move at the root; also while pondering, since the root is then
+    // the position after the expected reply, see iterative_deepening()) learns
+    // the identity of the dark pieces it captures, but not of its own dark pieces
     // captured by the opponent. With hiddenCaptureModel, a capture of a dark
     // piece by the observer is a chance node over the captured identity.
     // TT keys are salted with the observer because the same position is then
@@ -462,11 +499,19 @@ class Worker {
     bool   nmpFailHighCount = false;
     bool   mateTTExtension = false;
     bool   stopEarly = false;
+    bool   frequentTimeCheck = false;
+    bool   revealQsearchEvasions = false;
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
     bool   jieqiMaterial      = false;
+    Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
+    bool   optimismSimple     = false;
+    bool   pikaFutility       = false;
+    bool   simpleThreadVote   = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;
+    ChanceModel         chanceModel  = ChanceModel::Winrate;
+    const ChanceTables* chanceTables = nullptr;  // with ChanceModel::Tables
 
     // Aggregates the outcomes of a chance node (flip_search, hidden_capture_search),
     // from their exact values or from bounds of them
@@ -476,6 +521,11 @@ class Worker {
         Upper
     };
     Value aggregate_chance(
+      const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+    // ChanceModel Linear and Tables (see aggregate_chance())
+    Value aggregate_linear(
+      const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+    Value aggregate_tables(
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
 
     // Searches the outcomes of a chance node, see search.cpp
@@ -499,9 +549,6 @@ class Worker {
 
     size_t                    threadIdx;
     NumaReplicatedAccessToken numaAccessToken;
-
-    // Reductions lookup table initialized at startup
-    std::array<int, std::max(MAX_PLY, MAX_MOVES) + 10> reductions;  // [depth or moveNumber]
 
     // The main thread has a SearchManager, the others have a NullSearchManager
     std::unique_ptr<ISearchManager> manager;

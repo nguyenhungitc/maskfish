@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <type_traits>
 
 #include "../misc.h"
@@ -45,6 +46,26 @@
 
 #elif defined(USE_NEON)
     #include <arm_neon.h>
+
+#elif defined(USE_LASX)
+    #include <lasxintrin.h>
+    #include <lsxintrin.h>
+
+#elif defined(USE_LSX)
+    #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    #include <riscv_vector.h>
+#endif
+
+// The squared and the plain clipped ReLU of the layer stacks computed together
+// with 256- or 512-bit vectors (SqrClippedReLU::propagate_pair(), Pikafish's
+// "paired activations"); used by the layer stacks of make layers=2, whose
+// activations have 32 inputs. Their outputs are in the lane order of the
+// pack instructions, which the weights of the next layers are permuted to
+// match at load time (AffineTransform with ScrambledInput).
+#if defined(USE_AVX2)
+    #define USE_PAIR_ACTIVATIONS
 #endif
 
 namespace Maskfish::Eval::NNUE {
@@ -68,6 +89,29 @@ constexpr std::uint32_t OldVersion = 0x7AF32F20u;
 constexpr int OutputScale     = 16;
 constexpr int WeightScaleBits = 6;
 
+// Quantization (make quant=2: that of current Pikafish).
+//               quant=1 (default)                quant=2
+// FT weights    scale 127, accumulators doubled  scale 255, not doubled
+//               and clipped to 0..254            clipped to 0..FtMaxVal = 255
+// FT output     0..127, 1.0 = 127               0..127, 1.0 = HiddenOneVal = 128
+// fc_0          weights scale 64, 1.0 = 127*64   weights scale 128, 1.0 = 128*64*2
+//               activations >> 6                 activations >> 7 (and sqr >> 21)
+// fc_1          weights scale 64, >> 6           weights scale 64, >> 6 (1.0 = 128*64)
+// fc_2 output   1.0 = 600 * OutputScale          1.0 = 128*64*2 (fc_0 units), the
+//               direct term rescaled to it       sum with the direct term rescaled
+#ifdef JIEQI_NNUE_QUANT2
+constexpr bool UseQuant2 = true;
+#else
+constexpr bool UseQuant2 = false;
+#endif
+constexpr int FtMaxVal         = UseQuant2 ? 255 : 127 * 2;   // clip of the FT accumulators
+constexpr int FtAccMultiplier  = UseQuant2 ? 1 : 2;           // applied to them first
+constexpr int HiddenOneVal     = UseQuant2 ? 128 : 127;
+constexpr int Fc0ScaleBits     = WeightScaleBits + (UseQuant2 ? 1 : 0);
+// Xored into the hash of the layer stacks (networks of one quantization are
+// rejected by builds of the other)
+constexpr std::uint32_t Quant2ArchHash = 0x0A2C0000u;
+
 // Size of cache line (in bytes)
 constexpr std::size_t CacheLineSize = 64;
 
@@ -82,6 +126,12 @@ constexpr std::size_t SimdWidth = 32;
 constexpr std::size_t SimdWidth = 16;
 
 #elif defined(USE_NEON)
+constexpr std::size_t SimdWidth = 16;
+
+#elif defined(USE_LASX)
+constexpr std::size_t SimdWidth = 32;
+
+#elif defined(USE_LSX)
 constexpr std::size_t SimdWidth = 16;
 #endif
 
@@ -190,10 +240,42 @@ inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) 
     // file fails the stream instead of triggering an assert.
     char leb128MagicString[Leb128MagicStringSize];
     stream.read(leb128MagicString, Leb128MagicStringSize);
-    if (stream.gcount() != std::streamsize(Leb128MagicStringSize)
-        || strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
+    if (stream.gcount() != std::streamsize(Leb128MagicStringSize))
     {
         stream.setstate(std::ios::failbit);
+        return;
+    }
+
+    // Without the magic string, the block holds the values as plain
+    // little-endian integers (Pikafish "Remove leb128": the whole file is
+    // compressed with zstd anyway; trainer: serialize.py --no-leb128). The
+    // bytes already read are the start of the first values.
+    if (strncmp(Leb128MagicString, leb128MagicString, Leb128MagicStringSize) != 0)
+    {
+        const std::size_t total = count * sizeof(IntType);
+        if (total < Leb128MagicStringSize)
+        {
+            stream.setstate(std::ios::failbit);
+            return;
+        }
+        auto bytes = std::make_unique<char[]>(total);
+        std::memcpy(bytes.get(), leb128MagicString, Leb128MagicStringSize);
+        stream.read(bytes.get() + Leb128MagicStringSize,
+                    std::streamsize(total - Leb128MagicStringSize));
+        if (stream.gcount() != std::streamsize(total - Leb128MagicStringSize))
+        {
+            stream.setstate(std::ios::failbit);
+            return;
+        }
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            std::make_unsigned_t<IntType> v = 0;
+            for (std::size_t b = 0; b < sizeof(IntType); ++b)
+                v |= std::make_unsigned_t<IntType>(
+                       std::uint8_t(bytes[i * sizeof(IntType) + b]))
+                  << (8 * b);
+            out[i] = IntType(v);
+        }
         return;
     }
 

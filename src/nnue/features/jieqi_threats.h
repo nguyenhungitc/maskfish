@@ -64,8 +64,16 @@ class JieqiThreats {
     static constexpr IndexType Dimensions = 92711;
 
     // Maximum number of simultaneously active threats (of which the features
-    // are a subset): at most 67 per side (2 rooks, 2 cannons x 4, 2 knights x 8,
-    // 2 bishops, 2 advisors x 4, king x 4, 5 pawns x 3)
+    // are a subset), i.e. of attacked occupied squares: at most 69 per side,
+    // 138 in all. A dark piece attacks like the kind of its starting square,
+    // so a side may have more than 2 rook, cannon or knight movers, but it has
+    // at most 15 pieces besides its king (Position::pool_is_consistent()), at
+    // most 2 revealed of a kind (5 pawns), and a dark piece attacks few
+    // squares from its starting square. The 15 best attackers: 2 revealed
+    // knights (8 squares each), 10 pieces of 4 squares (revealed rooks,
+    // cannons, bishops, advisors, and dark cannons on b2 / h2), 3 of 3 (pawns
+    // across the river, or dark knights on b0 / h0): 65, and the king 4.
+    // physical_threats() only asserts this bound.
     static constexpr IndexType MaxActiveDimensions = 144;
 
     static constexpr int ClassNb = 16;

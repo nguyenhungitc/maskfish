@@ -25,9 +25,24 @@ Four architectures exist (select with set_arch() before building a model):
   "Threat features" section below). Idea and design from Pikafish/Stockfish
   ("full threats"), adapted to dark pieces.
 
-Each of them also exists with the layer stacks of `make layers=2` (name
-suffix "-l2", e.g. "threats-l2"): same input features (so the same prepared
-data), different layer stacks (see model.py).
+Each of them also exists with options of the engine build, as name suffixes
+in this order (e.g. "threats-l2-nopsqt"):
+
+* "-meta": the meta features of AB-JChess (`make meta=yes`, see
+  meta_offsets()), 88 more rows per feature transformer bucket;
+* "-blend": the layer stack selection of AB-JChess (`make lsblend=yes`, see
+  layer_stack_selection()), which changes the prepared data (layer stack and
+  interpolation weight of each position);
+* "-s32": 32 layer stacks (`make stacks=32`, see layer_stack_bucket()), which
+  changes the prepared data (layer stack of each position); not with "-blend";
+* "-l2": the layer stacks of `make layers=2` (see model.py);
+* "-ctx": the inventory context inputs of the layer stacks (`make ctx=yes`,
+  from AB-JChess, see context_inputs());
+* "-nopsqt": no PSQT part in the feature transformer (`make psqt=no`);
+* "-q2": the quantization of current Pikafish (`make quant=2`, see quant.py).
+
+The last four only change the model: the input features, and so the prepared
+data, are those of the name without them (feature_arch()).
 
 If you change the feature set in the engine, change it here too and re-run
 verify.py.
@@ -36,33 +51,102 @@ verify.py.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 FILE_NB = 9
 RANK_NB = 10
 SQUARE_NB = 90
 
-PS_NB = 14 * SQUARE_NB              # 1260
+PS_META = 14 * SQUARE_NB            # 1260: rows of the meta features ("-meta")
+META_NB = 88
+META_HASH = 0x3E7A0000              # engine: xored into HalfKAv2_hm::HashValue (meta=yes)
+PS_NB = PS_META                     # + META_NB with "-meta" (set_arch())
 NUM_KING_BUCKETS = 6
-MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62
+MAX_ACTIVE = 64                     # engine: MaxActiveDimensions = 62 (+ 9 meta features)
 
 MAX_REST_COUNT = 5                  # engine: pool counts are clamped to this (types.h)
 
 NUM_PSQT_BUCKETS = 16
-NUM_LAYER_STACKS = 16
+NUM_LAYER_STACKS = 16               # 32 with "-s32" (set_arch())
 
-ARCHS = {
-    # name: (attack buckets, feature hash, mid mirror, threat features, layer stacks)
-    "default": (1, 0x0D17B100, False, False, 1),
-    "att": (4, 0x7A17B104, True, False, 1),
-    "threats": (1, 0x0D17B100, False, True, 1),
-    "att-threats": (4, 0x7A17B104, True, True, 1),
+class Arch(NamedTuple):
+    attack_buckets: int
+    feature_hash: int
+    mid_mirror: bool
+    threats: bool
+    meta: bool = False
+    blend: bool = False
+    layers: int = 1
+    ctx: bool = False
+    psqt: bool = True
+    quant2: bool = False
+    stacks: int = 16
+
+
+BASE_ARCHS = {
+    # name: (attack buckets, feature hash, mid mirror, threat features)
+    "default": (1, 0x0D17B100, False, False),
+    "att": (4, 0x7A17B104, True, False),
+    "threats": (1, 0x0D17B100, False, True),
+    "att-threats": (4, 0x7A17B104, True, True),
 }
-LAYERS2_SUFFIX = "-l2"           # same features, layer stacks of `make layers=2`
-for _name, _a in list(ARCHS.items()):
-    ARCHS[_name + LAYERS2_SUFFIX] = _a[:4] + (2,)
+
+# Options of the engine build, as name suffixes in this order: (suffix, field
+# of Arch, value with the suffix, whether the prepared data depends on it)
+SUFFIXES = (
+    ("-meta", "meta", True, True),
+    ("-blend", "blend", True, True),
+    ("-s32", "stacks", 32, True),
+    ("-l2", "layers", 2, False),
+    ("-ctx", "ctx", True, False),
+    ("-nopsqt", "psqt", False, False),
+    ("-q2", "quant2", True, False),
+)
+LAYERS2_SUFFIX = "-l2"
+
+
+def _all_archs() -> dict:
+    archs = {}
+    for base, values in BASE_ARCHS.items():
+        for mask in range(1 << len(SUFFIXES)):
+            name, fields = base, {}
+            for k, (suffix, field, value, _) in enumerate(SUFFIXES):
+                if mask >> k & 1:
+                    name += suffix
+                    fields[field] = value
+            if fields.get("blend") and fields.get("stacks") == 32:
+                continue    # make stacks=32 lsblend=yes is refused
+            archs[name] = Arch(*values, **fields)
+    return archs
+
+
+ARCHS = _all_archs()
+
+
+def arch_name(base: str, **fields) -> str:
+    """Name of the architecture with these input features and options."""
+    name = base
+    for suffix, field, value, _ in SUFFIXES:
+        if fields.get(field, Arch._field_defaults[field]) == value:
+            name += suffix
+    return name
+
+
+def split_arch(name: str) -> tuple[str, dict]:
+    """(base name, options) of an architecture."""
+    if name not in ARCHS:
+        raise ValueError(f"unknown architecture {name!r}")
+    a = ARCHS[name]
+    base = name
+    for suffix, _, _, _ in reversed(SUFFIXES):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+    return base, {field: getattr(a, field) for _, field, _, _ in SUFFIXES}
+
 
 ARCH = "default"
-ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[ARCH]
+ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2, \
+    _STACKS = ARCHS[ARCH]
 NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB   # 7560 (default) / 30240 (att)
 PAD_INDEX = NUM_FEATURES            # padding entry used by the trainer
 L1 = 2048                           # feature transformer outputs (1024 with threats)
@@ -70,12 +154,18 @@ L1 = 2048                           # feature transformer outputs (1024 with thr
 
 def set_arch(name: str):
     """Selects the network architecture (call before creating a model)."""
-    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS, NUM_FEATURES
+    global ARCH, ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT
+    global QUANT2, NUM_LAYER_STACKS
+    global NUM_FEATURES, PS_NB, MAX_ACTIVE
     global PAD_INDEX, L1
     if name not in ARCHS:
         raise ValueError(f"unknown architecture {name!r}, expected one of {list(ARCHS)}")
     ARCH = name
-    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, LAYERS = ARCHS[name]
+    ATTACK_BUCKETS, FEATURE_HASH, MID_MIRROR, THREATS, META, BLEND, LAYERS, CTX, PSQT, QUANT2, \
+        NUM_LAYER_STACKS = ARCHS[name]
+    FEATURE_HASH ^= META_HASH if META else 0
+    PS_NB = PS_META + (META_NB if META else 0)
+    MAX_ACTIVE = 80 if META else 64
     NUM_FEATURES = NUM_KING_BUCKETS * ATTACK_BUCKETS * PS_NB
     PAD_INDEX = NUM_FEATURES
     L1 = 1024 if THREATS else 2048
@@ -83,13 +173,32 @@ def set_arch(name: str):
 
 def feature_arch(name: str) -> str:
     """Architecture of the input features (what prepared data is made for):
-    the name without the layer stacks suffix."""
-    return name[:-len(LAYERS2_SUFFIX)] if name.endswith(LAYERS2_SUFFIX) else name
+    the name without the suffixes that only change the model."""
+    base, fields = split_arch(name)
+    return arch_name(base, **{f: v for (_, f, _, data) in SUFFIXES if data
+                              for v in [fields[f]]})
+
+
+def input_arch(name: str) -> str:
+    """Architecture of the feature transformer inputs alone: networks with the
+    same input_arch() can share their feature transformer (train.py --init-net)."""
+    base, fields = split_arch(name)
+    return arch_name(base, meta=fields["meta"])
+
+
+def model_arch(name: str, layers: int = 1, ctx: bool = False, psqt: bool = True,
+               quant2: bool = False) -> str:
+    """Architecture with the input features of `name` and these model options."""
+    base, fields = split_arch(feature_arch(name))
+    fields.update(layers=layers, ctx=ctx, psqt=psqt, quant2=quant2)
+    return arch_name(base, **fields)
 
 
 def with_layers(name: str, layers: int) -> str:
-    """Architecture with these input features and these layer stacks."""
-    return feature_arch(name) + (LAYERS2_SUFFIX if layers == 2 else "")
+    """Architecture `name` with these layer stacks."""
+    base, fields = split_arch(name)
+    fields["layers"] = layers
+    return arch_name(base, **fields)
 
 # Engine piece codes (maskfish/src/types.h): 1..7 white, 9..15 black, 16 = dark
 ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP, KING = range(1, 8)
@@ -324,7 +433,9 @@ def parse_fen(fen: str) -> JieqiPosition:
                     raise ValueError(f"bad FEN piece {ch!r}: {fen}")
                 pos.board[s] = idx
             f += 1
-    pos.side_to_move = WHITE if len(parts) < 2 or parts[1] == 'w' else BLACK
+    # As Position::set() in the engine: only "b" is black; anything else (also
+    # a missing field, or "r" for red as in some xiangqi FENs) is white
+    pos.side_to_move = BLACK if len(parts) > 1 and parts[1] == 'b' else WHITE
     if len(parts) > 2 and parts[2] != '-':
         tok = parts[2]
         i = 0
@@ -338,6 +449,19 @@ def parse_fen(fen: str) -> JieqiPosition:
     if len(parts) > 4:
         pos.fullmove = int(parts[4])
     return pos
+
+
+def mirror_position(pos: JieqiPosition) -> JieqiPosition:
+    """The position mirrored left-right (files a <-> i). Its value is the same:
+    the rules are symmetric, and so are the starting squares of the dark pieces
+    (a dark piece moves like the kind of its square). prepare_data.py --mirror
+    adds it to the data when its features differ from the original's."""
+    m = JieqiPosition(rest=list(pos.rest), side_to_move=pos.side_to_move, rule40=pos.rule40,
+                      fullmove=pos.fullmove)
+    for s in range(SQUARE_NB):
+        m.board[flip_file(s)] = pos.board[s]
+        m.dark[flip_file(s)] = pos.dark[s]
+    return m
 
 
 def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
@@ -361,11 +485,182 @@ def active_features(pos: JieqiPosition, perspective: int) -> list[int]:
             n = pos.rest[pc]
             if n:
                 out.extend([base + dri[pc]] * n)
+    if META:
+        out.extend(base + PS_META + o for o in meta_offsets(pos, perspective))
     return out
 
 
+# ---------------------------------------------------------------- meta features
+#
+# Architectures "-meta" (make meta=yes, from AB-JChess; engine:
+# HalfKAv2_hm::make_meta_indices()): 9 features per perspective, one in each
+# group, at PS_META + offset in the bucket of the perspective ("us"):
+#    0 + min(7, rooks, cannons and knights in our pool)
+#    8 + min(7, the same in the opponent's pool)
+#   16 + min(7, pieces in our pool)
+#   24 + min(7, pieces in the opponent's pool)
+#   32 + number of dark pieces on the board, bucketed (0, 1-2, 3-4, 5-8, 9-12,
+#        13-16, 17-24, more)
+#   40 + our dark pieces captured without being identified (pool count minus
+#        dark pieces on the board, 0..15)
+#   56 + the same for the opponent
+#   72 + min(7, revealed enemy pieces attacked by our revealed pieces)
+#   80 + min(7, our revealed pieces attacked by revealed enemy pieces)
+
+def _dark_density(n: int) -> int:
+    for k, limit in enumerate((0, 2, 4, 8, 12, 16, 24)):
+        if n <= limit:
+            return k
+    return 7
+
+
+def meta_offsets(pos: JieqiPosition, perspective: int) -> list[int]:
+    us, them = perspective, 1 - perspective
+    pool, strong, dark = [0, 0], [0, 0], [0, 0]
+    for c in (WHITE, BLACK):
+        for pt in (ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP):
+            n = pos.rest[make_piece(c, pt)]
+            pool[c] += n
+            if pt in (ROOK, CANNON, KNIGHT):
+                strong[c] += n
+    occupied = set()
+    for s in range(SQUARE_NB):
+        if pos.board[s]:
+            occupied.add(s)
+            if pos.dark[s]:
+                dark[color_of(pos.board[s])] += 1
+
+    def unknown(c):
+        return max(0, min(15, pool[c] - dark[c]))
+
+    def targets(attacker):
+        attacked = set()
+        for s in occupied:
+            pc = pos.board[s]
+            if not pos.dark[s] and color_of(pc) == attacker:
+                attacked.update(piece_attacks(type_of(pc), attacker, s, occupied))
+        return min(7, sum(1 for t in attacked if not pos.dark[t]
+                          and pos.board[t] and color_of(pos.board[t]) != attacker))
+
+    return [min(strong[us], 7), 8 + min(strong[them], 7), 16 + min(pool[us], 7),
+            24 + min(pool[them], 7), 32 + _dark_density(dark[0] + dark[1]),
+            40 + unknown(us), 56 + unknown(them), 72 + targets(us), 80 + targets(them)]
+
+
 def layer_stack_bucket(pos: JieqiPosition) -> int:
-    return LAYER_STACK_BUCKETS[pos.piece_count()]
+    """Layer stack of a position (engine: HalfKAv2_hm::make_layer_stack_bucket()):
+    the bucket of the piece count, or with "-s32" (make stacks=32) twice it,
+    plus 1 if more than half of the pieces other than the kings are dark."""
+    if BLEND:
+        return layer_stack_selection(pos)[0]
+    pieces = pos.piece_count()
+    if NUM_LAYER_STACKS == 32:
+        dark = sum(1 for s in range(SQUARE_NB) if pos.board[s] and pos.dark[s])
+        return 2 * LAYER_STACK_BUCKETS[pieces] + int(2 * dark > pieces - 2)
+    return LAYER_STACK_BUCKETS[pieces]
+
+
+def psqt_bucket(stack):
+    """PSQT bucket of a layer stack (engine: psqt_bucket()): with "-s32" the
+    layer stacks 2b and 2b + 1 share the PSQT bucket b. Works on ints, numpy
+    arrays and torch tensors."""
+    return stack // (NUM_LAYER_STACKS // NUM_PSQT_BUCKETS)
+
+
+# Layer stack selection of the "-blend" architectures (make lsblend=yes, from
+# AB-JChess; engine: HalfKAv2_hm::make_layer_stack_selection()). The bucket of
+# the piece count is raised by an "uncertainty phase" (numbers of dark pieces
+# and of rooks, cannons and knights in the pools), and the evaluation is
+# interpolated between the layer stacks floor and floor + 1 with the weight
+# blend / 256, from the position of the three counts within their intervals.
+PIECE_INTERVALS = ((2, 7), (7, 9), (9, 11), (11, 13), (13, 15), (15, 17), (17, 19), (19, 21),
+                   (21, 23), (23, 25), (25, 27), (27, 29), (29, 31), (31, 32), (32, 33), (33, 34))
+DARK_THRESHOLDS = (0, 1, 5, 9, 17, 33)
+STRONG_THRESHOLDS = (0, 2, 5, 9, 19)
+
+
+def _residual(v: int, thresholds) -> tuple[int, int]:
+    k = 0
+    while k + 1 < len(thresholds) and thresholds[k + 1] <= v:
+        k += 1
+    if k >= len(thresholds) - 1:
+        return 0, 1
+    lower, upper = thresholds[k], thresholds[k + 1]
+    return min(upper - lower - 1, max(0, v - lower)), upper - lower
+
+
+def layer_stack_selection(pos: JieqiPosition) -> tuple[int, int]:
+    """(floor, blend): layer stacks floor and floor + 1, weight blend / 256."""
+    pieces = max(2, min(32, pos.piece_count()))
+    dark = sum(1 for s in range(SQUARE_NB) if pos.board[s] and pos.dark[s])
+    strong = sum(pos.rest[make_piece(c, pt)] for c in (WHITE, BLACK)
+                 for pt in (ROOK, CANNON, KNIGHT))
+    dark_phase = 4 if dark >= 17 else 3 if dark >= 9 else 2 if dark >= 5 else 1 if dark >= 1 else 0
+    strong_phase = 3 if strong >= 9 else 2 if strong >= 5 else 1 if strong >= 2 else 0
+    base = LAYER_STACK_BUCKETS[pieces]
+    floor = max(0, min(15, base + dark_phase + strong_phase))
+    if floor == 15:
+        return 15, 0
+    lower, upper = PIECE_INTERVALS[base]
+    r1 = (min(upper - lower - 1, max(0, pieces - lower)), upper - lower)
+    r2 = _residual(dark, DARK_THRESHOLDS)
+    r3 = _residual(strong, STRONG_THRESHOLDS)
+    den = r1[1] * r2[1] * r3[1]
+    num = 85 * (r1[0] * r2[1] * r3[1] + r2[0] * r1[1] * r3[1] + r3[0] * r1[1] * r2[1])
+    blend = (2 * num + den) // (2 * den)        # round(255 * (r1 + r2 + r3) / 3), half up
+    if blend >= 255:
+        return min(15, floor + 1), 0
+    return floor, max(0, min(254, blend))
+
+
+# ---------------------------------------------------------------- inventory context
+#
+# Architectures "-ctx" (make ctx=yes, from AB-JChess): 16 inputs of a small
+# layer (ContextTower in maskfish/src/nnue/nnue_architecture.h) whose outputs
+# are additional inputs of fc0. From the point of view of the side to move:
+# its pool counts by piece type, the opponent's, the numbers of dark pieces of
+# both sides on the board, and the numbers of their dark pieces captured
+# without being identified (pool count minus dark pieces on the board), each
+# divided by its maximum and quantized to 0..127 (round half up).
+
+CONTEXT_INPUTS = 16
+CONTEXT_POOL_MAX = (2, 2, 2, 5, 2, 2)      # rook, advisor, cannon, pawn, knight, bishop
+CONTEXT_DARK_MAX = 16
+CONTEXT_UNKNOWN_MAX = 15
+POOL_TYPES = (ROOK, ADVISOR, CANNON, PAWN, KNIGHT, BISHOP)
+
+
+def context_quantize(n: int, d: int) -> int:
+    """round(127 * n / d), half up, at most 127 (engine: ContextTower::make_inputs)."""
+    return min(127, (2 * 127 * n + d) // (2 * d))
+
+
+def context_inputs(pos: JieqiPosition) -> list[int]:
+    us = pos.side_to_move
+    out, pool = [], [0, 0]
+    for c in (us, 1 - us):
+        for pt, d in zip(POOL_TYPES, CONTEXT_POOL_MAX):
+            n = pos.rest[make_piece(c, pt)]
+            pool[c] += n
+            out.append(context_quantize(n, d))
+    dark = [0, 0]
+    for s in range(SQUARE_NB):
+        if pos.board[s] and pos.dark[s]:
+            dark[color_of(pos.board[s])] += 1
+    out.append(context_quantize(dark[us], CONTEXT_DARK_MAX))
+    out.append(context_quantize(dark[1 - us], CONTEXT_DARK_MAX))
+    out.append(context_quantize(max(0, pool[us] - dark[us]), CONTEXT_UNKNOWN_MAX))
+    out.append(context_quantize(max(0, pool[1 - us] - dark[1 - us]), CONTEXT_UNKNOWN_MAX))
+    return out
+
+
+# Where context_inputs() finds its counts among the features of the side to
+# move (feature index modulo PS_NB): the pool features (repeated once per
+# piece), and the dark squares of each side once the board is seen from the
+# side to move (own dark pieces on ranks 0..4, the opponent's on ranks 5..9;
+# the pool features use squares of ranks 1 and 8 where no dark piece stands)
+CONTEXT_OWN_POOL = tuple(PS_DARK + 9 + i for i in range(6))
+CONTEXT_OPP_POOL = tuple(PS_DARK + 72 + i for i in range(6))
 
 
 def fen_to_features(fen: str):

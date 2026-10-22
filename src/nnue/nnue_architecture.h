@@ -22,6 +22,7 @@
 #ifndef NNUE_ARCHITECTURE_H_INCLUDED
 #define NNUE_ARCHITECTURE_H_INCLUDED
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iosfwd>
@@ -33,6 +34,7 @@
 #include "layers/clipped_relu.h"
 #include "layers/sqr_clipped_relu.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 
 namespace Maskfish::Eval::NNUE {
 
@@ -66,7 +68,93 @@ constexpr bool UsePSQT = false;
 #else
 constexpr bool UsePSQT = true;
 #endif
+// make stacks=32: 32 layer stacks instead of 16 (Pikafish "32 LayerStack
+// buckets"), see HalfKAv2_hm::make_layer_stack_bucket(). The PSQT buckets stay
+// 16: layer stacks 2b and 2b + 1 use the PSQT bucket b (psqt_bucket()).
+#ifdef JIEQI_NNUE_STACKS32
+constexpr IndexType LayerStacks = 32;
+#else
 constexpr IndexType LayerStacks = 16;
+#endif
+static_assert(LayerStacks % PSQTBuckets == 0);
+
+// PSQT bucket of a layer stack
+constexpr int psqt_bucket(int stack) { return stack / int(LayerStacks / PSQTBuckets); }
+
+// Xored into the hash of the layer stacks with make stacks=32
+constexpr std::uint32_t Stacks32ArchHash = 0x5A320000u;
+
+// make ctx=yes: the "inventory context" of AB-JChess. 16 values describing
+// the uncertainty of the position (pool counts, numbers of dark pieces and of
+// dark pieces captured without being identified, for both sides) go through
+// a small layer (ContextTower, 16 -> 16, clipped ReLU) shared by the layer
+// stacks, whose 16 outputs are additional inputs of fc0 in every layer stack.
+#ifdef JIEQI_NNUE_CTX
+constexpr bool UseContext = true;
+#else
+constexpr bool UseContext = false;
+#endif
+constexpr IndexType ContextInputs  = 16;
+constexpr IndexType ContextOutputs = 16;
+// Xored into the hash of the layer stacks when they have context inputs
+constexpr std::uint32_t ContextArchHash = 0x0C7A0000u;
+
+// make lsblend=yes: layer stacks selected and interpolated as in AB-JChess
+// (see HalfKAv2_hm::make_layer_stack_selection()); xored into their hash
+#ifdef JIEQI_NNUE_BLEND
+constexpr bool UseLayerStackBlend = true;
+#else
+constexpr bool UseLayerStackBlend = false;
+#endif
+constexpr std::uint32_t BlendArchHash = 0x0B1E0000u;
+
+struct ContextTower {
+    // Hash value embedded in the evaluation file
+    static constexpr std::uint32_t get_hash_value() { return 0x0C7A16C7u; }
+
+    // Inputs (unsigned, 127 = 1.0), from the point of view of the side to move:
+    // its pool counts by piece type (rook, advisor, cannon, pawn, knight,
+    // bishop; divided by 2, 2, 2, 5, 2, 2), the opponent's, the numbers of dark
+    // pieces of both sides on the board (divided by 16), and the numbers of
+    // their dark pieces captured without being identified (pool count minus
+    // dark pieces on the board, divided by 15). Defined in network.cpp.
+    static void make_inputs(const Position& pos, std::uint8_t* inputs);
+
+    bool read_parameters(std::istream& stream) {
+        read_little_endian<std::int32_t>(stream, biases, ContextOutputs);
+        read_little_endian<std::int8_t>(stream, &weights[0][0], ContextOutputs * ContextInputs);
+        return !stream.fail();
+    }
+
+    bool write_parameters(std::ostream& stream) const {
+        write_little_endian<std::int32_t>(stream, biases, ContextOutputs);
+        write_little_endian<std::int8_t>(stream, &weights[0][0], ContextOutputs * ContextInputs);
+        return !stream.fail();
+    }
+
+    // Affine transform and clipped ReLU, as the hidden layers (weights at
+    // scale 64, biases at scale 64 * 127, outputs 127 = 1.0)
+    void propagate(const std::uint8_t* inputs, std::uint8_t* outputs) const {
+        for (IndexType o = 0; o < ContextOutputs; ++o)
+        {
+            std::int32_t sum = biases[o];
+            for (IndexType i = 0; i < ContextInputs; ++i)
+                sum += weights[o][i] * inputs[i];
+            outputs[o] = std::uint8_t(std::clamp(sum >> WeightScaleBits, 0, 127));
+        }
+    }
+
+    std::size_t get_content_hash() const {
+        std::size_t h = 0;
+        hash_combine(h, get_raw_data_hash(biases));
+        hash_combine(h, get_raw_data_hash(weights));
+        hash_combine(h, get_hash_value());
+        return h;
+    }
+
+    std::int32_t biases[ContextOutputs];
+    std::int8_t  weights[ContextOutputs][ContextInputs];
+};
 
 // If vector instructions are enabled, we update and refresh the
 // accumulator tile by tile such that each tile fits in the CPU's
@@ -80,7 +168,8 @@ static_assert(PSQTBuckets % 8 == 0,
 // fc_0 has L2 = 32 outputs, all of them activated, and the direct term is the
 // difference of its last two outputs; fc_1 gets a squared activation too, and
 // fc_2 is fed by all the activations (fc_0's and fc_1's, 128 inputs). The
-// quantization is the one of the default layer stacks.
+// quantization is the one of the default layer stacks, or Pikafish's with
+// make quant=2 (see nnue_common.h).
 template<IndexType L1, int L2, int L3>
 struct NetworkArchitecture {
     static constexpr IndexType TransformedFeatureDimensions = L1;
@@ -90,12 +179,24 @@ struct NetworkArchitecture {
     static_assert(FC_0_OUTPUTS >= 2);
 
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS> fc_0;
-    Layers::SqrClippedReLU<FC_0_OUTPUTS>                                           ac_sqr_0;
-    Layers::ClippedReLU<FC_0_OUTPUTS>                                              ac_0;
-    Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS>                        fc_1;
+    Layers::SqrClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                             ac_sqr_0;
+    Layers::ClippedReLU<FC_0_OUTPUTS, Fc0ScaleBits>                                ac_0;
+    // (fc_1 and fc_2 read the outputs of the paired activations, see propagate())
+    Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS, true>                  fc_1;
     Layers::SqrClippedReLU<FC_1_OUTPUTS>                                           ac_sqr_1;
     Layers::ClippedReLU<FC_1_OUTPUTS>                                              ac_1;
-    Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1>                fc_2;
+    Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1, true>          fc_2;
+
+    // make ctx=yes: weights of the context inputs of fc_0 (scale 64; with
+    // quant=2, 128*64*2 / 127: the context tower outputs 127 = 1.0)
+    static constexpr IndexType FC_0_CONTEXT_OUTPUTS = FC_0_OUTPUTS;
+    std::int8_t fc_0_context[UseContext ? FC_0_CONTEXT_OUTPUTS : 1][ContextOutputs];
+
+    void add_context(const std::uint8_t* context, std::int32_t* fc0Out) const {
+        for (IndexType o = 0; o < FC_0_CONTEXT_OUTPUTS; ++o)
+            for (IndexType i = 0; i < ContextOutputs; ++i)
+                fc0Out[o] += fc_0_context[o][i] * context[i];
+    }
 
     // Hash value embedded in the evaluation file (the squared activations are
     // not part of it, like upstream)
@@ -110,58 +211,92 @@ struct NetworkArchitecture {
         hashValue = decltype(ac_1)::get_hash_value(hashValue);
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
-        return hashValue;
+        return hashValue ^ (UseContext ? ContextArchHash : 0)
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0)
+             ^ (LayerStacks == 32 ? Stacks32ArchHash : 0);
     }
 
     // Read network parameters
     bool read_parameters(std::istream& stream) {
-        return fc_0.read_parameters(stream) && ac_0.read_parameters(stream)
+        if (!fc_0.read_parameters(stream))
+            return false;
+        if constexpr (UseContext)
+            read_little_endian<std::int8_t>(stream, &fc_0_context[0][0],
+                                            FC_0_CONTEXT_OUTPUTS * ContextOutputs);
+        return ac_0.read_parameters(stream)
             && fc_1.read_parameters(stream) && ac_1.read_parameters(stream)
             && fc_2.read_parameters(stream);
     }
 
     // Write network parameters
     bool write_parameters(std::ostream& stream) const {
-        return fc_0.write_parameters(stream) && ac_0.write_parameters(stream)
+        if (!fc_0.write_parameters(stream))
+            return false;
+        if constexpr (UseContext)
+            write_little_endian<std::int8_t>(stream, &fc_0_context[0][0],
+                                             FC_0_CONTEXT_OUTPUTS * ContextOutputs);
+        return ac_0.write_parameters(stream)
             && fc_1.write_parameters(stream) && ac_1.write_parameters(stream)
             && fc_2.write_parameters(stream);
     }
 
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures) const {
+    // context: the outputs of the ContextTower (make ctx=yes), else unused
+    std::int32_t propagate(const TransformedFeatureType*        transformedFeatures,
+                           const NNZInfo<L1>&                   nnzInfo,
+                           [[maybe_unused]] const std::uint8_t* context = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             // [sqr(fc_0), crelu(fc_0), sqr(fc_1), crelu(fc_1)]
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
-              concat[ceil_to_multiple<IndexType>(FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 32)];
-            alignas(CacheLineSize) typename decltype(ac_0)::OutputBuffer ac_0_out;
+              concat[FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2];
             alignas(CacheLineSize) typename decltype(fc_1)::OutputBuffer fc_1_out;
-            alignas(CacheLineSize) typename decltype(ac_1)::OutputBuffer ac_1_out;
             alignas(CacheLineSize) typename decltype(fc_2)::OutputBuffer fc_2_out;
-
-            Buffer() { std::memset(concat, 0, sizeof(concat)); }
         };
+        // The activations fill concat completely (no padding to clear), each
+        // part starting on a multiple of 32 bytes (Pikafish "Remove
+        // unnecessary memset(), memcpy() from NetworkArchitecture::propagate()")
+        static_assert((FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2) % 32 == 0);
+        static_assert(FC_0_OUTPUTS % 32 == 0 && FC_1_OUTPUTS % 32 == 0);
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
+        if constexpr (UseContext)
+            add_context(context, buffer.fc_0_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        // Both activations at once, written in place (in the lane order of
+        // the packs, which the weights of fc_1 and fc_2 are permuted to match)
+        ac_sqr_0.propagate_pair(buffer.fc_0_out, buffer.concat, buffer.concat + FC_0_OUTPUTS);
+    #else
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.concat);
-        ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
-        std::memcpy(buffer.concat + FC_0_OUTPUTS, buffer.ac_0_out,
-                    FC_0_OUTPUTS * sizeof(typename decltype(ac_0)::OutputType));
+        ac_0.propagate(buffer.fc_0_out, buffer.concat + FC_0_OUTPUTS);
+    #endif
 
         fc_1.propagate(buffer.concat, buffer.fc_1_out);
+    #if defined(USE_PAIR_ACTIVATIONS)
+        ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2,
+                                buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #else
         ac_sqr_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2);
-        ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
-        std::memcpy(buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS, buffer.ac_1_out,
-                    FC_1_OUTPUTS * sizeof(typename decltype(ac_1)::OutputType));
+        ac_1.propagate(buffer.fc_1_out, buffer.concat + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
+    #endif
 
         fc_2.propagate(buffer.concat, buffer.fc_2_out);
 
+        const std::int64_t skip = std::int64_t(buffer.fc_0_out[FC_0_OUTPUTS - 2])
+                                - buffer.fc_0_out[FC_0_OUTPUTS - 1];
+        if constexpr (UseQuant2)
+        {
+            // fc_2_out is in fc_0 units like the direct term: 1.0 is
+            // HiddenOneVal*(1<<WeightScaleBits)*2, but we want 1.0 to be equal
+            // to 600*OutputScale (64-bit product)
+            const std::int64_t fwdOut = buffer.fc_2_out[0] + skip;
+            return std::int32_t(fwdOut * (600 * OutputScale)
+                                / (std::int64_t(HiddenOneVal) * (1 << WeightScaleBits) * 2));
+        }
         // The direct term, like fc_0_out[15] of the default layer stacks: 1.0
         // is 127*(1<<WeightScaleBits) in quantized form, but we want 1.0 to be
         // equal to 600*OutputScale (64-bit product, see there)
-        const std::int64_t skip = std::int64_t(buffer.fc_0_out[FC_0_OUTPUTS - 2])
-                                - buffer.fc_0_out[FC_0_OUTPUTS - 1];
         std::int32_t fwdOut =
           std::int32_t(skip * (600 * OutputScale) / (127 * (1 << WeightScaleBits)));
         std::int32_t outputValue = buffer.fc_2_out[0] + fwdOut;
@@ -177,6 +312,8 @@ struct NetworkArchitecture {
         hash_combine(h, ac_sqr_1.get_content_hash());
         hash_combine(h, ac_1.get_content_hash());
         hash_combine(h, fc_2.get_content_hash());
+        if constexpr (UseContext)
+            hash_combine(h, get_raw_data_hash(fc_0_context));
         hash_combine(h, get_hash_value());
         return h;
     }
@@ -191,11 +328,22 @@ struct NetworkArchitecture {
     static constexpr int       FC_1_OUTPUTS                 = L3;
 
     Layers::AffineTransformSparseInput<TransformedFeatureDimensions, FC_0_OUTPUTS + 1> fc_0;
-    Layers::SqrClippedReLU<FC_0_OUTPUTS + 1>                                           ac_sqr_0;
-    Layers::ClippedReLU<FC_0_OUTPUTS + 1>                                              ac_0;
+    Layers::SqrClippedReLU<FC_0_OUTPUTS + 1, Fc0ScaleBits>                             ac_sqr_0;
+    Layers::ClippedReLU<FC_0_OUTPUTS + 1, Fc0ScaleBits>                                ac_0;
     Layers::AffineTransform<FC_0_OUTPUTS * 2, FC_1_OUTPUTS>                            fc_1;
     Layers::ClippedReLU<FC_1_OUTPUTS>                                                  ac_1;
     Layers::AffineTransform<FC_1_OUTPUTS, 1>                                           fc_2;
+
+    // make ctx=yes: weights of the context inputs of fc_0 (scale 64; with
+    // quant=2, 128*64*2 / 127), also of its last output (the direct term)
+    static constexpr IndexType FC_0_CONTEXT_OUTPUTS = FC_0_OUTPUTS + 1;
+    std::int8_t fc_0_context[UseContext ? FC_0_CONTEXT_OUTPUTS : 1][ContextOutputs];
+
+    void add_context(const std::uint8_t* context, std::int32_t* fc0Out) const {
+        for (IndexType o = 0; o < FC_0_CONTEXT_OUTPUTS; ++o)
+            for (IndexType i = 0; i < ContextOutputs; ++i)
+                fc0Out[o] += fc_0_context[o][i] * context[i];
+    }
 
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
@@ -209,24 +357,39 @@ struct NetworkArchitecture {
         hashValue = decltype(ac_1)::get_hash_value(hashValue);
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
-        return hashValue;
+        return hashValue ^ (UseContext ? ContextArchHash : 0)
+             ^ (UseLayerStackBlend ? BlendArchHash : 0) ^ (UseQuant2 ? Quant2ArchHash : 0)
+             ^ (LayerStacks == 32 ? Stacks32ArchHash : 0);
     }
 
     // Read network parameters
     bool read_parameters(std::istream& stream) {
-        return fc_0.read_parameters(stream) && ac_0.read_parameters(stream)
+        if (!fc_0.read_parameters(stream))
+            return false;
+        if constexpr (UseContext)
+            read_little_endian<std::int8_t>(stream, &fc_0_context[0][0],
+                                            FC_0_CONTEXT_OUTPUTS * ContextOutputs);
+        return ac_0.read_parameters(stream)
             && fc_1.read_parameters(stream) && ac_1.read_parameters(stream)
             && fc_2.read_parameters(stream);
     }
 
     // Write network parameters
     bool write_parameters(std::ostream& stream) const {
-        return fc_0.write_parameters(stream) && ac_0.write_parameters(stream)
+        if (!fc_0.write_parameters(stream))
+            return false;
+        if constexpr (UseContext)
+            write_little_endian<std::int8_t>(stream, &fc_0_context[0][0],
+                                             FC_0_CONTEXT_OUTPUTS * ContextOutputs);
+        return ac_0.write_parameters(stream)
             && fc_1.write_parameters(stream) && ac_1.write_parameters(stream)
             && fc_2.write_parameters(stream);
     }
 
-    std::int32_t propagate(const TransformedFeatureType* transformedFeatures) const {
+    // context: the outputs of the ContextTower (make ctx=yes), else unused
+    std::int32_t propagate(const TransformedFeatureType*        transformedFeatures,
+                           const NNZInfo<L1>&                   nnzInfo,
+                           [[maybe_unused]] const std::uint8_t* context = nullptr) const {
         struct alignas(CacheLineSize) Buffer {
             alignas(CacheLineSize) typename decltype(fc_0)::OutputBuffer fc_0_out;
             alignas(CacheLineSize) typename decltype(ac_sqr_0)::OutputType
@@ -241,7 +404,9 @@ struct NetworkArchitecture {
 
         Buffer buffer;
 
-        fc_0.propagate(transformedFeatures, buffer.fc_0_out);
+        fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
+        if constexpr (UseContext)
+            add_context(context, buffer.fc_0_out);
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.ac_sqr_0_out);
         ac_0.propagate(buffer.fc_0_out, buffer.ac_0_out);
         std::memcpy(buffer.ac_sqr_0_out + FC_0_OUTPUTS, buffer.ac_0_out,
@@ -250,6 +415,16 @@ struct NetworkArchitecture {
         ac_1.propagate(buffer.fc_1_out, buffer.ac_1_out);
         fc_2.propagate(buffer.ac_1_out, buffer.fc_2_out);
 
+        if constexpr (UseQuant2)
+        {
+            // fc_2_out is in fc_0 units like the direct term: 1.0 is
+            // HiddenOneVal*(1<<WeightScaleBits)*2, but we want 1.0 to be equal
+            // to 600*OutputScale (64-bit product)
+            const std::int64_t fwdOut =
+              std::int64_t(buffer.fc_2_out[0]) + buffer.fc_0_out[FC_0_OUTPUTS];
+            return std::int32_t(fwdOut * (600 * OutputScale)
+                                / (std::int64_t(HiddenOneVal) * (1 << WeightScaleBits) * 2));
+        }
         // buffer.fc_0_out[FC_0_OUTPUTS] is such that 1.0 is equal to 127*(1<<WeightScaleBits) in
         // quantized form, but we want 1.0 to be equal to 600*OutputScale. The
         // product is computed in 64 bits: in 32 bits it overflows as soon as
@@ -269,6 +444,8 @@ struct NetworkArchitecture {
         hash_combine(h, fc_1.get_content_hash());
         hash_combine(h, ac_1.get_content_hash());
         hash_combine(h, fc_2.get_content_hash());
+        if constexpr (UseContext)
+            hash_combine(h, get_raw_data_hash(fc_0_context));
         hash_combine(h, get_hash_value());
         return h;
     }

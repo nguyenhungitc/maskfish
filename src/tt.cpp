@@ -52,11 +52,14 @@ namespace Maskfish {
 
 struct TTEntry {
 
-    // Convert internal bitfields to external types
+    // Convert internal bitfields to external types. Each field is read once:
+    // another thread may write the entry meanwhile, and the copy may then be
+    // self-inconsistent, but every field is a valid value (see below).
     TTData read() const {
-        return TTData{Move(move16),           Value(value16),
-                      Value(eval16),          Depth(depth8 + DEPTH_NONE),
-                      Bound(genBound8 & 0x3), bool(genBound8 & 0x4)};
+        const uint8_t genBound = genBound8;
+        return TTData{Move(move16),          Value(value16),
+                      Value(eval16),         Depth(depth8 + DEPTH_NONE),
+                      Bound(genBound & 0x3), bool(genBound & 0x4)};
     }
 
     bool is_occupied() const;
@@ -76,13 +79,18 @@ struct TTEntry {
     friend class TranspositionTable;
     friend struct TTWriter;
 
-    uint16_t key16;
-    uint8_t  depth8;
-    uint8_t  genBound8;
-    Move     move16;
-    int16_t  value16;
-    int16_t  eval16;
+    // The table is shared by the search threads, which read and write entries
+    // without locks: relaxed atomics make these races well defined (plain
+    // loads and stores on the usual targets), as in Stockfish and Pikafish.
+    RelaxedAtomic<uint16_t> key16;
+    RelaxedAtomic<uint8_t>  depth8;
+    RelaxedAtomic<uint8_t>  genBound8;
+    RelaxedAtomic<Move>     move16;
+    RelaxedAtomic<int16_t>  value16;
+    RelaxedAtomic<int16_t>  eval16;
 };
+
+static_assert(sizeof(TTEntry) == 10, "TTEntry must stay 10 bytes (3 per 32-byte cluster)");
 
 // `genBound8` is where most of the details are. We use the following constants to manipulate 5 leading generation bits
 // and 3 trailing miscellaneous bits.
@@ -116,6 +124,14 @@ void TTEntry::save(Key     k,
     // Preserve the old ttmove if we don't have a new one
     if (m || uint16_t(k) != key16)
         move16 = m;
+
+    // A value without a bound (a static evaluation only, or the estimate of a
+    // chance node, see Search::Worker::chance_node()) does not replace a usable
+    // bound of the same position that is at least as deep: only the move is
+    // updated (above).
+    if (b == BOUND_NONE && uint16_t(k) == key16 && Bound(genBound8 & 0x3) != BOUND_NONE
+        && d - DEPTH_NONE <= depth8)
+        return;
 
     // Overwrite less valuable entries (cheapest checks first)
     if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_NONE + 2 * pv > depth8 - 4
@@ -235,7 +251,7 @@ void TranspositionTable::clear(ThreadPool& threads) {
             const size_t start  = stride * i;
             const size_t len    = i + 1 != threadCount ? stride : clusterCount - start;
 
-            std::memset(&table[start], 0, len * sizeof(Cluster));
+            std::memset(static_cast<void*>(&table[start]), 0, len * sizeof(Cluster));
         });
     }
 

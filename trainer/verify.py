@@ -11,7 +11,10 @@ output with:
   * the bit-exact integer reference (serialize.quantized_eval): must be equal;
   * the evaluate() scaling of that output (eval_scale.evaluate_int, the
     function train.py applies in the loss): must be equal to the engine's;
-  * the float PyTorch model: must be close (quantization error only).
+  * the float PyTorch model: must be close (quantization error only);
+  * the quantization-aware forward pass of the model (train.py --qat-start,
+    model.forward_parts_qat()): equal, or off by a unit where float32
+    roundings of the weights land on the other side of .5 (reported).
 """
 
 from __future__ import annotations
@@ -64,9 +67,13 @@ def main():
                     help="architecture of the random test network (ignored with --net)")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="check the evaluate() scaling with the engine option JieqiMaterial=true")
+    ap.add_argument("--eval-scaling", choices=E.SCALINGS, default="complexity",
+                    help="check the evaluate() scaling with the engine option EvalScaling "
+                         "(train.py --eval-scaling)")
     args = ap.parse_args()
     F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
-    print(f"arch {F.ARCH}")
+    print(f"arch {F.ARCH}" + (f", EvalScaling {args.eval_scaling}"
+                              if args.eval_scaling != "complexity" else ""))
 
     import torch
     from model import NNUE, NNUE2SCORE, threat_inputs
@@ -103,11 +110,14 @@ def main():
         S.write_nnue(q, tmp.name, "verify")
         net = tmp.name
 
-    engine = U.Engine(args.engine, {"EvalFile": os.path.abspath(net),
-                                    "JieqiMaterial": str(args.jieqi_material).lower()})
+    opts = {"EvalFile": os.path.abspath(net), "JieqiMaterial": str(args.jieqi_material).lower()}
+    if args.eval_scaling != "complexity":       # (older engines do not have the option)
+        opts["EvalScaling"] = args.eval_scaling.capitalize()
+    engine = U.Engine(args.engine, opts)
     fens = random_positions(engine, args.positions, args.seed)
 
     exact, worst, scaled, no_final = 0, 0.0, 0, 0
+    qat_exact, qat_worst, qat_final_exact = 0, 0, 0
     for fen in fens:
         engine.send(f"position fen {fen}")
         e_psqt, e_pos, e_bucket, e_final = engine.evalraw_full()
@@ -119,23 +129,50 @@ def main():
         if e_final is None:
             no_final += 1
         else:
-            material, rule40 = E.position_scale_inputs(F.parse_fen(fen), args.jieqi_material)
-            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40)
+            pos = F.parse_fen(fen)
+            material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
+            se, allmat = E.alignment_inputs(pos)
+            sed = None if F.PSQT else E.simple_eval_dark(pos)
+            r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, args.eval_scaling, se, allmat,
+                                     sed)
             if r_final == e_final:
                 scaled += 1
             else:
                 ok = False
                 print("SCALE MISMATCH", fen, "engine evaluate()", e_final, "reference", r_final,
-                      f"(material {material}, rule40 {rule40})")
+                      f"(material {material}, rule40 {rule40}, se {se}, allmat {allmat})")
+        if F.CTX:
+            # the trainer recovers the context inputs from the features
+            from model import context_from_features
+            s_f = F.fen_to_features(fen)[0]
+            got = context_from_features(torch.tensor([s_f + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(s_f))]))
+            want = F.context_inputs(F.parse_fen(fen))
+            if [int(v) for v in got[0].tolist()] != want:
+                ok = False
+                print("CONTEXT MISMATCH", fen, "from the features", got[0].tolist(), "expected", want)
         exact += ok
         if model is not None:
             s, n, b, _ = F.fen_to_features(fen)
             pad = lambda l: l + [F.PAD_INDEX] * (F.MAX_ACTIVE - len(l))
             thr = threat_inputs(list(F.fen_to_threats(fen))) if F.THREATS else None
+            blend = (torch.tensor([F.layer_stack_selection(F.parse_fen(fen))[1]])
+                     if F.BLEND else None)
             with torch.no_grad():
                 v = model(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
-                          torch.tensor([b]), thr).item() * NNUE2SCORE
+                          torch.tensor([b]), thr, blend).item() * NNUE2SCORE
+                qp, qv = model.forward_parts_qat(torch.tensor([pad(s)]), torch.tensor([pad(n)]),
+                                                 torch.tensor([b]), thr, blend)
             worst = max(worst, abs(v - (e_psqt + e_pos)))
+            qp, qv = int(round(qp.item())), int(round(qv.item()))
+            qat_worst = max(qat_worst, abs(qp - e_psqt), abs(qv - e_pos))
+            qat_exact += (qp, qv) == (e_psqt, e_pos)
+            if e_final is not None:
+                pos = F.parse_fen(fen)
+                mat, r40 = E.position_scale_inputs(pos, args.jieqi_material)
+                se, allmat = E.alignment_inputs(pos)
+                t = lambda x: torch.tensor([float(x)])
+                qf = E.evaluate_qat(t(qp), t(qv), t(mat), t(r40), args.eval_scaling, t(se), t(allmat))
+                qat_final_exact += int(round(qf.item())) == e_final
     engine.quit()
     if tmp:
         os.unlink(tmp.name)
@@ -148,6 +185,9 @@ def main():
         print(f"evaluate() scaling: {scaled}/{len(fens) - no_final} positions bit-exact")
     if model is not None:
         print(f"largest float/quantized difference: {worst:.1f} internal units")
+        print(f"quantization-aware forward: {qat_exact}/{len(fens)} positions equal to the engine "
+              f"(largest difference {qat_worst}), evaluate(): "
+              f"{qat_final_exact}/{len(fens) - no_final}")
     raise SystemExit(0 if exact == len(fens) else 1)
 
 

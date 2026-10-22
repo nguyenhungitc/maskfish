@@ -27,13 +27,14 @@
 namespace Maskfish {
 
 class Position;
+class OptionsMap;
 
 namespace Eval {
 
-// The default net name. It MUST match the file name of the network attached to
-// the GitHub releases (maskfish.nnue), which scripts/net.sh downloads for the
-// build (`make net`). Do not change the name of the macro or the location where
-// this macro is defined.
+// The default net name. It MUST match the file name of the network in the
+// hidden git ref refs/assets/net (maskfish.nnue), which scripts/net.sh fetches
+// for the build (`make net`) and the build embeds in the binary. Do not change
+// the name of the macro or the location where this macro is defined.
 #define EvalFileDefaultNameBig "maskfish.nnue"
 
 namespace NNUE {
@@ -44,12 +45,24 @@ class AccumulatorStack;
 
 std::string trace(Position& pos, const Eval::NNUE::Networks& networks);
 
+// Scaling of the network output in evaluate() (UCI option EvalScaling)
+enum class EvalScaling {
+    Complexity,  // |psqt - positional| and the major material (default)
+    Alignment,   // Pikafish: agreement with simple_eval(), total material
+    Correlation  // agreement with simple_eval_dark(), major material
+};
+
+// The value of the UCI option EvalScaling
+EvalScaling eval_scaling(const OptionsMap& options);
+
 Value evaluate(const NNUE::Networks&          networks,
                const Position&                pos,
                Eval::NNUE::AccumulatorStack&  accumulators,
                Eval::NNUE::AccumulatorCaches& caches,
                int                            optimism,
-               bool                           jieqiMaterial = false);
+               bool                           jieqiMaterial  = false,
+               EvalScaling                    scaling        = EvalScaling::Complexity,
+               bool                           optimismSimple = false);
 }  // namespace Eval
 
 }  // namespace Maskfish

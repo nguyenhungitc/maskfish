@@ -66,7 +66,8 @@ def memory_mb() -> tuple[int, int]:
     return total, avail
 
 
-def probe_batch(torch, arch: str, target: int, headroom: float) -> tuple[int, int]:
+def probe_batch(torch, arch: str, target: int, headroom: float,
+                qat: bool = False) -> tuple[int, int]:
     """Largest batch size (target, target/2, ... >= 1024) whose training step
     fits in the free memory of the current GPU. Returns (batch, peak MB)."""
     import numpy as np
@@ -100,7 +101,7 @@ def probe_batch(torch, arch: str, target: int, headroom: float) -> tuple[int, in
                          torch.from_numpy(rng.normal(0, 400, bs).astype(np.float32)).to(dev),
                          torch.from_numpy(rng.integers(-1, 2, bs).astype(np.float32)).to(dev), thr)
                 opt.zero_grad(set_to_none=True)
-                loss = loss_fn(model, batch, 361.0, 1.0)
+                loss = loss_fn(model, batch, 361.0, 1.0, qat=qat)   # QAT needs more memory
                 loss.backward()
                 opt.step()
             torch.cuda.synchronize()
@@ -123,6 +124,8 @@ def main():
     ap.add_argument("--probe-batch", action="store_true")
     ap.add_argument("--path", default=".")
     ap.add_argument("--headroom", type=float, default=0.85)
+    ap.add_argument("--qat", action="store_true",
+                    help="probe with quantization-aware training (train.py --qat-start)")
     args = ap.parse_args()
 
     out = {}
@@ -157,7 +160,7 @@ def main():
                 # the trainer modules (jieqi_features, model, train) are in the parent directory
                 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 try:
-                    bs, peak = probe_batch(torch, args.arch, args.batch, args.headroom)
+                    bs, peak = probe_batch(torch, args.arch, args.batch, args.headroom, args.qat)
                     out["BATCH_FIT"] = bs
                     out["BATCH_PEAK_MB"] = peak
                 except Exception as e:               # noqa: BLE001  (report, keep the other values)

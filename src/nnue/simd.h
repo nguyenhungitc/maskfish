@@ -34,6 +34,18 @@
 
 #elif defined(USE_NEON)
     #include <arm_neon.h>
+
+#elif defined(USE_LASX)
+    #include <lasxintrin.h>
+    #include <lsxintrin.h>
+
+#elif defined(USE_LSX)
+    #include <lsxintrin.h>
+
+#elif defined(USE_RVV)
+    // The RISC-V vectors have no fixed size: VECTOR is not defined, the
+    // feature transformer and the layers have their own RVV code
+    #include <riscv_vector.h>
 #endif
 
 #include "../types.h"
@@ -216,9 +228,160 @@ static constexpr std::uint32_t Mask[4] = {1, 2, 4, 8};
     #define NumRegistersSIMD 16
     #define MaxChunkSize 16
 
+#elif USE_LASX
+// LoongArch Advanced SIMD eXtension (256 bits; the LSX instructions work on
+// the low 128 bits of its registers)
+using vec_t      = __m256i;
+using vec128_t   = __m128i;
+using psqt_vec_t = __m256i;
+using vec_uint_t = __m256i;
+
+inline __m256i lasx_packus_16(__m256i a, __m256i b) {
+    #if defined(__clang__) && defined(__has_builtin) && __has_builtin(__builtin_lasx_xvssrani_bu_h)
+    return (__m256i) __builtin_lasx_xvssrani_bu_h((v32i8) b, (v32i8) a, 0);
+    #else
+    return __lasx_xvssrani_bu_h(b, a, 0);
+    #endif
+}
+
+inline int lasx_vec_nnz(__m256i a) {
+    const __m256i cmp = __lasx_xvslt_w(__lasx_xvldi(0), a);
+    const __m256i msk = __lasx_xvmskltz_w(cmp);
+    return int(__lasx_xvpickve2gr_w(msk, 0)) | (int(__lasx_xvpickve2gr_w(msk, 4)) << 4);
+}
+
+    #define vec_load(a) __lasx_xvld(reinterpret_cast<const void*>(a), 0)
+    #define vec_store(a, b) __lasx_xvst(b, reinterpret_cast<void*>(a), 0)
+    #define vec_add_16(a, b) __lasx_xvadd_h(a, b)
+    #define vec_adds_16(a, b) __lasx_xvsadd_h(a, b)
+    #define vec_sub_16(a, b) __lasx_xvsub_h(a, b)
+    #define vec_mulhi_16(a, b) __lasx_xvmuh_h(a, b)
+    #define vec_zero() __lasx_xvldi(0)
+    #define vec_set_16(a) __lasx_xvreplgr2vr_h(a)
+    #define vec_max_16(a, b) __lasx_xvmax_h(a, b)
+    #define vec_min_16(a, b) __lasx_xvmin_h(a, b)
+    #define vec_slli_16(a, b) __lasx_xvslli_h(a, b)
+    // Inverse permuted at load time (packs within 128-bit lanes, like AVX2)
+    #define vec_packus_16(a, b) lasx_packus_16(a, b)
+    #define vec_load_psqt(a) __lasx_xvld(reinterpret_cast<const void*>(a), 0)
+    #define vec_store_psqt(a, b) __lasx_xvst(b, reinterpret_cast<void*>(a), 0)
+    #define vec_add_psqt_32(a, b) __lasx_xvadd_w(a, b)
+    #define vec_sub_psqt_32(a, b) __lasx_xvsub_w(a, b)
+    #define vec_zero_psqt() __lasx_xvldi(0)
+    #define vec_nnz(a) lasx_vec_nnz(a)
+
+    #define vec128_zero __lsx_vldi(0)
+    #define vec128_set_16(a) __lsx_vreplgr2vr_h(a)
+    #define vec128_load(a) __lsx_vld(reinterpret_cast<const void*>(a), 0)
+    #define vec128_storeu(a, b) __lsx_vst(b, reinterpret_cast<void*>(a), 0)
+    #define vec128_add(a, b) __lsx_vadd_h(a, b)
+
+    #define NumRegistersSIMD 32
+    #define MaxChunkSize 32
+
+#elif USE_LSX
+// LoongArch SIMD eXtension (128 bits)
+using vec_t      = __m128i;
+using vec128_t   = __m128i;
+using psqt_vec_t = __m128i;
+using vec_uint_t = __m128i;
+
+inline __m128i lsx_packus_16(__m128i a, __m128i b) {
+    #if defined(__clang__) && defined(__has_builtin) && __has_builtin(__builtin_lsx_vssrani_bu_h)
+    return (__m128i) __builtin_lsx_vssrani_bu_h((v16i8) b, (v16i8) a, 0);
+    #else
+    return __lsx_vssrani_bu_h(b, a, 0);
+    #endif
+}
+
+inline int lsx_vec_nnz(__m128i a) {
+    const __m128i cmp = __lsx_vslt_w(__lsx_vldi(0), a);
+    const __m128i msk = __lsx_vmskltz_w(cmp);
+    return int(__lsx_vpickve2gr_w(msk, 0));
+}
+
+    #define vec_load(a) (*(a))
+    #define vec_store(a, b) *(a) = (b)
+    #define vec_add_16(a, b) __lsx_vadd_h(a, b)
+    #define vec_adds_16(a, b) __lsx_vsadd_h(a, b)
+    #define vec_sub_16(a, b) __lsx_vsub_h(a, b)
+    #define vec_mulhi_16(a, b) __lsx_vmuh_h(a, b)
+    #define vec_zero() __lsx_vldi(0)
+    #define vec_set_16(a) __lsx_vreplgr2vr_h(a)
+    #define vec_max_16(a, b) __lsx_vmax_h(a, b)
+    #define vec_min_16(a, b) __lsx_vmin_h(a, b)
+    #define vec_slli_16(a, b) __lsx_vslli_h(a, b)
+    #define vec_packus_16(a, b) lsx_packus_16(a, b)
+    #define vec_load_psqt(a) (*(a))
+    #define vec_store_psqt(a, b) *(a) = (b)
+    #define vec_add_psqt_32(a, b) __lsx_vadd_w(a, b)
+    #define vec_sub_psqt_32(a, b) __lsx_vsub_w(a, b)
+    #define vec_zero_psqt() __lsx_vldi(0)
+    #define vec_nnz(a) lsx_vec_nnz(a)
+
+    #define vec128_zero __lsx_vldi(0)
+    #define vec128_set_16(a) __lsx_vreplgr2vr_h(a)
+    #define vec128_load(a) __lsx_vld(reinterpret_cast<const void*>(a), 0)
+    #define vec128_storeu(a, b) __lsx_vst(b, reinterpret_cast<void*>(a), 0)
+    #define vec128_add(a, b) __lsx_vadd_h(a, b)
+
+    #define NumRegistersSIMD 32
+    #define MaxChunkSize 16
+
 #else
     #undef VECTOR
 
+#endif
+
+// On x86 with SSSE3 or better (AVX-512 with BW), two rows of 8-bit feature
+// transformer weights are widened and summed into 16-bit lanes with one
+// unpack and one maddubs (against a vector of ones), instead of one sign
+// extension per row (Pikafish "Pair int8 weight rows in accumulator
+// updates"). The weights are permuted at load time to match (see
+// FeatureTransformer::WideningPairOrder): vec_widen_i8() and
+// vec_widen_pair_i8() turn sizeof(vec_t) weights into two consecutive
+// vectors of the accumulator.
+#if defined(USE_SSSE3) && (!defined(USE_AVX512) || defined(USE_AVX512BW))
+    #define USE_PAIRED_WIDENING_ADD
+
+    #if defined(USE_AVX512)
+        #define vec_loadu_8(a) _mm512_loadu_si512(reinterpret_cast<const void*>(a))
+        #define vec_set_8(a) _mm512_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm512_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm512_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm512_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm512_srai_epi16(a, b)
+    #elif defined(USE_AVX2)
+        #define vec_loadu_8(a) _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a))
+        #define vec_set_8(a) _mm256_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm256_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm256_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm256_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm256_srai_epi16(a, b)
+    #else
+        #define vec_loadu_8(a) _mm_loadu_si128(reinterpret_cast<const __m128i*>(a))
+        #define vec_set_8(a) _mm_set1_epi8(a)
+        #define vec_unpacklo_8(a, b) _mm_unpacklo_epi8(a, b)
+        #define vec_unpackhi_8(a, b) _mm_unpackhi_epi8(a, b)
+        #define vec_maddubs_16(a, b) _mm_maddubs_epi16(a, b)
+        #define vec_srai_16(a, b) _mm_srai_epi16(a, b)
+    #endif
+
+// The sizeof(vec_t) weights at p, sign-extended to 16 bits: lo then hi
+inline void vec_widen_i8(const std::int8_t* p, vec_t& lo, vec_t& hi) {
+    const vec_t w = vec_loadu_8(p);
+    lo            = vec_srai_16(vec_unpacklo_8(vec_zero(), w), 8);
+    hi            = vec_srai_16(vec_unpackhi_8(vec_zero(), w), 8);
+}
+
+// The sums of the sizeof(vec_t) weights at p0 and at p1, in 16 bits
+inline void vec_widen_pair_i8(const std::int8_t* p0, const std::int8_t* p1, vec_t& lo, vec_t& hi) {
+    const vec_t ones = vec_set_8(1);
+    const vec_t w0   = vec_loadu_8(p0);
+    const vec_t w1   = vec_loadu_8(p1);
+    lo               = vec_maddubs_16(ones, vec_unpacklo_8(w0, w1));
+    hi               = vec_maddubs_16(ones, vec_unpackhi_8(w0, w1));
+}
 #endif
 
 #ifdef VECTOR
@@ -244,6 +407,23 @@ inline vec_t vec_load_i8_16(const std::int8_t* p) {
     return _mm_srai_epi16(_mm_unpacklo_epi8(x, x), 8);
     #elif defined(USE_NEON)
     return vmovl_s8(vld1_s8(p));
+    #elif defined(USE_LASX)
+    // Sign extension of the 16 bytes of the low 128 bits
+    const __m128i x = __lsx_vld(reinterpret_cast<const void*>(p), 0);
+        #if defined(__has_builtin) && __has_builtin(__builtin_lasx_cast_128)
+    return __lasx_vext2xv_h_b(__lasx_cast_128(x));
+        #elif defined(__GNUC__) && !defined(__clang__)
+    __m256i out;
+    __asm__("vext2xv.h.b %u0, %u1" : "=f"(out) : "f"(x));
+    return out;
+        #else
+    __m256i v = __lasx_xvldi(0);
+    v         = __lasx_xvinsgr2vr_d(v, __lsx_vpickve2gr_d(x, 0), 0);
+    v         = __lasx_xvinsgr2vr_d(v, __lsx_vpickve2gr_d(x, 1), 2);
+    return __lasx_xvsllwil_h_b(v, 0);
+        #endif
+    #elif defined(USE_LSX)
+    return __lsx_vsllwil_h_b(__lsx_vldrepl_d(reinterpret_cast<const void*>(p), 0), 0);
     #endif
 }
 #endif
@@ -395,6 +575,43 @@ dotprod_m128_add_dpbusd_epi32(int32x4_t& acc, int8x16_t a, int8x16_t b) {
 
 [[maybe_unused]] static int neon_m128_hadd(int32x4_t sum, int bias) {
     return neon_m128_reduce_add_epi32(sum) + bias;
+}
+
+#endif
+
+#if defined(USE_LASX)
+
+[[maybe_unused]] static int lasx_m256_hadd(__m256i sum, int bias) {
+    __m256i v  = sum;
+    v          = __lasx_xvadd_w(v, __lasx_xvshuf4i_w(v, 0x4E));  // [C,D,A,B] per lane
+    v          = __lasx_xvadd_w(v, __lasx_xvshuf4i_w(v, 0xB1));  // [B,A,D,C] per lane
+    int lo_sum = int(__lasx_xvpickve2gr_w(v, 0));
+    int hi_sum = int(__lasx_xvpickve2gr_w(v, 4));
+    return lo_sum + hi_sum + bias;
+}
+
+// acc += the sums of the products of 4 unsigned bytes of a and 4 signed bytes
+// of b (as _mm256_dpbusd_epi32: no saturation with inputs below 128)
+[[maybe_unused]] static void lasx_m256_add_dpbusd_epi32(__m256i& acc, __m256i a, __m256i b) {
+    __m256i tmp = __lasx_xvmulwev_h_bu_b(a, b);
+    tmp         = __lasx_xvmaddwod_h_bu_b(tmp, a, b);
+    acc         = __lasx_xvadd_w(acc, __lasx_xvhaddw_w_h(tmp, tmp));
+}
+
+#endif
+
+#if defined(USE_LSX)
+
+[[maybe_unused]] static int lsx_m128_hadd(__m128i sum, int bias) {
+    sum = __lsx_vadd_w(sum, __lsx_vshuf4i_w(sum, 0x4E));  // [C,D,A,B]
+    sum = __lsx_vadd_w(sum, __lsx_vshuf4i_w(sum, 0xB1));  // [B,A,D,C]
+    return __lsx_vpickve2gr_w(sum, 0) + bias;
+}
+
+[[maybe_unused]] static void lsx_m128_add_dpbusd_epi32(__m128i& acc, __m128i a, __m128i b) {
+    __m128i tmp = __lsx_vmulwev_h_bu_b(a, b);
+    tmp         = __lsx_vmaddwod_h_bu_b(tmp, a, b);
+    acc         = __lsx_vadd_w(acc, __lsx_vhaddw_w_h(tmp, tmp));
 }
 
 #endif

@@ -63,6 +63,11 @@ struct StateInfo {
     Piece      capturedPiece;
     Move       move;
     bool       captureDark;
+    // Squares attacked by the side not to move, by piece type (ALL_PIECES:
+    // all of them), x-raying the king of the side to move: computed on demand
+    // by threats_by() (UCI options ThreatCache, ThreatCacheMovePick)
+    mutable Bitboard threats[PIECE_TYPE_NB];
+    mutable bool     threatsComputed;
 #ifndef NDEBUG
     // A dark piece has moved and do_flip() has not revealed it yet: the check
     // info (checkersBB, blockersForKing, pinners, checkSquares, needFullCheck)
@@ -126,10 +131,21 @@ class Position {
     Bitboard checkers_to(Color c, Square s, Bitboard occupied) const;
     template<PieceType Pt>
     Bitboard attacks_by(Color c) const;
+    // Squares attacked by the pieces of type pt of the side not to move (as
+    // Pikafish), with the king of the side to move removed from the occupancy
+    // (x-ray), cached in the StateInfo. threats_by(ALL_PIECES) & s is the same
+    // as checkers_to(~side_to_move(), s, pieces() ^ king square | s) for a
+    // square s next to the king.
+    Bitboard threats_by(PieceType pt) const;
+    // Pikafish's legality test and generation of king moves with
+    // threats_by(ALL_PIECES) (UCI option ThreatCache): no functional change
+    static inline bool useThreatCache = false;
+    // The threats by lesser pieces of the move ordering from threats_by()
+    // (UCI option ThreatCacheMovePick): x-rays the king, changes the ordering
+    static inline bool useThreatCacheMovePick = false;
 
     // Properties of moves
     bool  legal(Move m) const;
-    bool  pseudo_legal(const Move m) const;
     bool  capture(Move m) const;
     bool  gives_check(Move m) const;
     Piece moved_piece(Move m) const;
@@ -138,11 +154,13 @@ class Position {
 
     // Doing and undoing moves
     void       do_move(Move m, StateInfo& newSt);
-    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck);
+    // With dts, the threats the move adds and removes (see DirtyThreats) are
+    // appended to it (make threats=yes, UCI option ThreatsIncremental)
+    DirtyPiece do_move(Move m, StateInfo& newSt, bool givesCheck, DirtyThreats* dts = nullptr);
     void       undo_move(Move m);
     void       do_null_move(StateInfo& newSt);
     void       undo_null_move();
-    Piece do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr);
+    Piece do_flip(Square s, Piece pc, DirtyPiece* dp = nullptr, DirtyThreats* dts = nullptr);
     void undo_flip(Square s, Piece fromPc);
 
     // Take one piece out of / put it back into the pool of unrevealed pieces,
@@ -213,6 +231,18 @@ class Position {
     // Initialization helpers (used while setting up a position)
     void set_state() const;
     void set_check_info() const;
+    void set_threats() const;
+
+    // Threat bookkeeping (see DirtyThreats): class of the piece on a square,
+    // and the threats added (add) or removed by putting or removing, on s, a
+    // piece of class cls that attacks like a piece of type pt. The piece must be
+    // on the board when it is called, the rest of the board as it is before
+    // (for a removal) or after (for an addition). Without computeRay, only the
+    // threats from and to s (the class of the piece on s changes, not the
+    // occupancy).
+    int  threat_class(Square s) const;
+    void update_piece_threats(
+      int cls, PieceType pt, bool add, Square s, DirtyThreats& dts, bool computeRay) const;
 
     // Other helpers
     void                  move_piece(Square from, Square to);
@@ -313,6 +343,13 @@ inline Bitboard Position::attacks_by(Color c) const {
             threats |= Attacks::attacks_bb(Pt, s, pieces());
     }
     return threats;
+}
+
+inline Bitboard Position::threats_by(PieceType pt) const {
+    assert(check_info_valid());
+    if (!st->threatsComputed)
+        set_threats();
+    return st->threats[pt];
 }
 
 inline bool Position::check_info_valid() const {
@@ -457,6 +494,10 @@ inline bool Position::capture(Move m) const {
 inline Piece Position::captured_piece() const { return st->capturedPiece; }
 
 inline bool Position::move_dark(Move m) const { return pieces(DARK) & m.from_sq(); }
+
+inline int Position::threat_class(Square s) const {
+    return is_dark(s) ? int(color_of(piece_on(s))) << 3 : int(piece_on(s));
+}
 
 inline void Position::put_piece(Piece pc, Square s) {
 

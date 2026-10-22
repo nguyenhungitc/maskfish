@@ -163,24 +163,22 @@ MovePicker::MovePicker(const Position&              p,
                        const LowPlyHistory*         lph,
                        const CapturePieceToHistory* cph,
                        const PieceToHistory**       ch,
-                       const PawnHistory*           ph,
-                       int                          pl,
-                       int                          pi) :
+                       const PawnHistoryEntry*      ph,
+                       int                          pl) :
     pos(p),
     mainHistory(mh),
     lowPlyHistory(lph),
     captureHistory(cph),
     continuationHistory(ch),
     pawnHistory(ph),
-    pawnIndex(pi),
     ttMove(ttm),
     depth(d),
     ply(pl) {
 
     if (pos.checkers())
-        stage = EVASION_TT + !(ttm && pos.pseudo_legal(ttm));
+        stage = EVASION_TT + !(ttm && pos.legal(ttm));
     else
-        stage = (depth > 0 ? MAIN_TT : QSEARCH_TT) + !(ttm && pos.pseudo_legal(ttm));
+        stage = (depth > 0 ? MAIN_TT : QSEARCH_TT) + !(ttm && pos.legal(ttm));
 }
 
 // MovePicker constructor for ProbCut: we generate captures with Static Exchange
@@ -193,7 +191,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
     assert(!pos.checkers());
 
     stage = PROBCUT_TT
-          + !(ttm && pos.capture(ttm) && pos.pseudo_legal(ttm) && pos.see_ge(ttm, threshold));
+          + !(ttm && pos.legal(ttm) && pos.capture(ttm) && pos.see_ge(ttm, threshold));
 }
 
 // Assigns a numerical value to each move in a list, used for sorting.
@@ -209,11 +207,25 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     [[maybe_unused]] Bitboard threatByLesser[BISHOP + 1];
     if constexpr (Type == QUIETS)
     {
-        threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
-        threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
-          pos.attacks_by<ADVISOR>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[ADVISOR];
-        threatByLesser[ROOK] =
-          pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        if (Position::useThreatCacheMovePick)
+        {
+            // UCI option ThreatCacheMovePick: Pikafish's threats by lesser
+            // pieces, from the threats cached in the StateInfo (x-raying our
+            // king, except the cannons)
+            threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.threats_by(PAWN);
+            threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
+              pos.threats_by(ADVISOR) | pos.threats_by(BISHOP) | threatByLesser[ADVISOR];
+            threatByLesser[ROOK] =
+              pos.threats_by(KNIGHT) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        }
+        else
+        {
+            threatByLesser[ADVISOR] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
+            threatByLesser[KNIGHT]                           = threatByLesser[CANNON] =
+              pos.attacks_by<ADVISOR>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[ADVISOR];
+            threatByLesser[ROOK] =
+              pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<CANNON>(~us) | threatByLesser[KNIGHT];
+        }
     }
 
     ExtMove* it = cur;
@@ -242,7 +254,7 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
             // histories
             int value = 2 * (*mainHistory)[us][m.from_to()];
-            value += 2 * (*pawnHistory)[pawnIndex][pc][to];
+            value += 2 * (*pawnHistory)[pc][to];
             value += (*continuationHistory[0])[pc][to];
             value += (*continuationHistory[1])[pc][to];
             value += (*continuationHistory[2])[pc][to];
@@ -300,7 +312,7 @@ Move MovePicker::select(Pred filter) {
 }
 
 // This is the most important method of the MovePicker class. We emit one
-// new pseudo-legal move on every call until there are no more moves left,
+// new legal move on every call until there are no more moves left,
 // picking the move with the highest score from a list of generated moves.
 Move MovePicker::next_move() {
 

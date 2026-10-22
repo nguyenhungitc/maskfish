@@ -23,6 +23,7 @@
 #define NNUE_FEATURE_TRANSFORMER_H_INCLUDED
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <iosfwd>
@@ -32,6 +33,7 @@
 #include "nnue_accumulator.h"
 #include "nnue_architecture.h"
 #include "nnue_common.h"
+#include "nnz_helper.h"
 #include "simd.h"
 
 namespace Maskfish::Eval::NNUE {
@@ -108,8 +110,8 @@ class FeatureTransformer {
         // |   1   |   3   |   5   |   7   | // Vector 1
         // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | // Packed Result
         return {0, 2, 4, 6, 1, 3, 5, 7};
-#elif defined(USE_AVX2)
-        // _mm256_packus_epi16 after permutation:
+#elif defined(USE_AVX2) || defined(USE_LASX)
+        // _mm256_packus_epi16 (or __lasx_xvssrani_bu_h) after permutation:
         // |   0   |   2   |  |   4   |   6   | // Vector 0, 2
         // |   1   |   3   |  |   5   |   7   | // Vector 1, 3
         // | 0 | 1 | 2 | 3 |  | 4 | 5 | 6 | 7 | // Packed Result
@@ -120,6 +122,29 @@ class FeatureTransformer {
     }();
 
     static constexpr auto InversePackusEpi16Order = invert_permutation(PackusEpi16Order);
+
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+    // The threat weight rows are read a full vector (sizeof(vec_t) bytes) at a
+    // time by the threat accumulator updates: unpack{lo,hi}_epi8 interleave
+    // the bytes of two rows (or of a row and zero) and maddubs against a
+    // vector of ones sums each pair into a 16-bit lane (see
+    // vec_widen_pair_i8()). The unpacks work within 128-bit lanes, so the
+    // 16-bit results of a vector come out with its 8-byte blocks in the order
+    // {0, 2, 4, 6, ...} (lo) and {1, 3, 5, 7, ...} (hi). Storing the 8-byte
+    // blocks of every vector in this order at load time makes lo and hi two
+    // consecutive vectors of the accumulator, whose layout is unchanged. (The
+    // identity with 128-bit vectors.) The HalfKA rows are not permuted: an
+    // incremental update has mostly one row of each sign, which gain nothing.
+    static constexpr auto WideningPairOrder = []() {
+        constexpr std::size_t              NumBlocks = sizeof(SIMD::vec_t) / 8;
+        std::array<std::size_t, NumBlocks> order{};
+        for (std::size_t i = 0; i < NumBlocks; ++i)
+            order[i] = i % 2 == 0 ? i / 2 : NumBlocks / 2 + i / 2;
+        return order;
+    }();
+
+    static constexpr auto InverseWideningPairOrder = invert_permutation(WideningPairOrder);
+#endif
 
     // Hash value embedded in the evaluation file
     static constexpr std::uint32_t get_hash_value() {
@@ -144,9 +169,17 @@ class FeatureTransformer {
 #ifdef JIEQI_NNUE_THREATS
         permute<8>(threatWeights, PackusEpi16Order);
 #endif
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, WideningPairOrder);
+#endif
     }
 
     void unpermute_weights() {
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, InverseWideningPairOrder);
+#endif
         permute<16>(biases, InversePackusEpi16Order);
         permute<8>(weights, InversePackusEpi16Order);
 #ifdef JIEQI_NNUE_THREATS
@@ -215,11 +248,14 @@ class FeatureTransformer {
     }
 
     // Convert input features
-    std::int32_t transform(const Position&                           pos,
-                           AccumulatorStack&                         accumulatorStack,
-                           AccumulatorCaches::Cache<HalfDimensions>* cache,
-                           OutputType*                               output,
-                           int                                       bucket) const {
+    // Also records the non-zero 32-bit chunks of the output in nnzInfo, for
+    // the sparse input layer that follows.
+    std::int32_t transform(const Position&                             pos,
+                           AccumulatorStack&                           accumulatorStack,
+                           AccumulatorCaches::Cache<HalfDimensions>*   cache,
+                           OutputType*                                 output,
+                           int                                         bucket,
+                           [[maybe_unused]] NNZInfo<OutputDimensions>& nnzInfo) const {
 
         using namespace SIMD;
 
@@ -233,30 +269,27 @@ class FeatureTransformer {
         // The accumulators are in half units (the weights are not doubled on
         // load). The HalfKA one (and the threat one, added to it) is doubled
         // with saturation, which gives the doubled value clamped to the int16
-        // range: this clamp does not change the clipped result. The HalfKA
+        // range: this clamp does not change the clipped result (make quant=2:
+        // weights at scale 255, the sum is not doubled, see FtAccMultiplier,
+        // and clipped to 0..255). The HalfKA
         // accumulator, bounded by |bias| + 62 x 127, and the threat one,
         // bounded by 144 x 127, never wrap around if |bias| <= 24893 (checked
         // by the trainer), so this is exact.
-#ifdef JIEQI_NNUE_THREATS
-        const auto& threats = accumulatorState.threats;
-        const auto  psqt =
-          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket] + threats.psqt[perspectives[0]][bucket]
-                     - psqtAccumulation[perspectives[1]][bucket] - threats.psqt[perspectives[1]][bucket])
-                      / 2
-                  : 0;
         const BiasType* accumulations[2] = {accumulation[perspectives[0]],
                                             accumulation[perspectives[1]]};
+        std::int32_t    psqtSum[2]       = {psqtAccumulation[perspectives[0]][bucket],
+                                            psqtAccumulation[perspectives[1]][bucket]};
+
+#ifdef JIEQI_NNUE_THREATS
+        // The threat accumulator (make threats=yes) is added to the HalfKA one
+        // (which also holds the meta features with make meta=yes)
+        const auto&     threats                = accumulatorState.threats;
         const BiasType* threatAccumulations[2] = {threats.acc[perspectives[0]],
                                                   threats.acc[perspectives[1]]};
-#else
-        const auto psqt =
-          UsePSQT ? (psqtAccumulation[perspectives[0]][bucket]
-                     - psqtAccumulation[perspectives[1]][bucket])
-                      / 2
-                  : 0;
-        const BiasType* accumulations[2] = {accumulation[perspectives[0]],
-                                            accumulation[perspectives[1]]};
+        psqtSum[0] += threats.psqt[perspectives[0]][bucket];
+        psqtSum[1] += threats.psqt[perspectives[1]][bucket];
 #endif
+        const auto psqt = UsePSQT ? (psqtSum[0] - psqtSum[1]) / 2 : 0;
 
         for (IndexType p = 0; p < 2; ++p)
         {
@@ -269,7 +302,7 @@ class FeatureTransformer {
             constexpr IndexType NumOutputChunks = HalfDimensions / 2 / OutputChunkSize;
 
             const vec_t Zero = vec_zero();
-            const vec_t One  = vec_set_16(127 * 2);
+            const vec_t One  = vec_set_16(FtMaxVal);
 
             const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulations[p][0]));
             const vec_t* in1 =
@@ -279,15 +312,21 @@ class FeatureTransformer {
             const vec_t* thr0 = reinterpret_cast<const vec_t*>(&(threatAccumulations[p][0]));
             const vec_t* thr1 =
               reinterpret_cast<const vec_t*>(&(threatAccumulations[p][HalfDimensions / 2]));
-            // 2 x (HalfKA + threats), saturated (see above)
+            // 2 x (HalfKA + threats), saturated (see above; quant=2: not doubled)
             auto in = [](const vec_t* acc, const vec_t* thr, IndexType i) {
                 const vec_t sum = vec_adds_16(acc[i], thr[i]);
-                return vec_adds_16(sum, sum);
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(sum, sum);
+                else
+                    return sum;
             };
     #else
-            // 2 x HalfKA, saturated (see above)
+            // 2 x HalfKA, saturated (see above; quant=2: not doubled)
             auto in = [](const vec_t* acc, const vec_t*, IndexType i) {
-                return vec_adds_16(acc[i], acc[i]);
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(acc[i], acc[i]);
+                else
+                    return acc[i];
             };
             const vec_t* thr0 = nullptr;
             const vec_t* thr1 = nullptr;
@@ -338,7 +377,8 @@ class FeatureTransformer {
             // and net a 9 bit right shift. Since we scaled everything by
             // two, the values are clipped at 127 * 2 = 254, which occupies
             // 8 bits. Shifting it by 7 bits left will no longer occupy the
-            // signed bit, so we are safe.
+            // signed bit, so we are safe. (make quant=2: the accumulators are
+            // at scale 255 and clipped at 255, which still fits in 8 bits.)
 
             // Note that on NEON processors, we shift left by 6 instead
             // because the instruction "vqdmulhq_s16" also doubles the
@@ -347,25 +387,87 @@ class FeatureTransformer {
             // the multiplication.
 
             constexpr int shift =
-    #if defined(USE_SSE2)
+    #if defined(USE_SSE2) || defined(USE_LSX)
               7;
     #else
               6;
     #endif
 
-            for (IndexType j = 0; j < NumOutputChunks; ++j)
+            static_assert(NumOutputChunks % 2 == 0);
+
+            [[maybe_unused]] auto cursor = nnzInfo.make_cursor(p);
+
+            for (IndexType j = 0; j < NumOutputChunks; j += 2)
             {
-                const vec_t sum0a =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 0), One), Zero), shift);
-                const vec_t sum0b =
-                  vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, j * 2 + 1), One), Zero), shift);
-                const vec_t sum1a = vec_min_16(in(in1, thr1, j * 2 + 0), One);
-                const vec_t sum1b = vec_min_16(in(in1, thr1, j * 2 + 1), One);
+                vec_t packed[2];
+                for (IndexType k = 0; k < 2; ++k)
+                {
+                    const IndexType i = (j + k) * 2;
 
-                const vec_t pa = vec_mulhi_16(sum0a, sum1a);
-                const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+                    const vec_t sum0a =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 0), One), Zero), shift);
+                    const vec_t sum0b =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 1), One), Zero), shift);
+                    const vec_t sum1a = vec_min_16(in(in1, thr1, i + 0), One);
+                    const vec_t sum1b = vec_min_16(in(in1, thr1, i + 1), One);
 
-                out[j] = vec_packus_16(pa, pb);
+                    const vec_t pa = vec_mulhi_16(sum0a, sum1a);
+                    const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+
+                    packed[k] = out[j + k] = vec_packus_16(pa, pb);
+                }
+
+                cursor.record2(packed[0], packed[1]);
+            }
+
+#elif defined(USE_RVV)
+
+            // Same arithmetic as the scalar code below; also records the
+            // indices of the non-zero output bytes
+            const BiasType* in0 = accumulations[p];
+            const BiasType* in1 = accumulations[p] + HalfDimensions / 2;
+    #ifdef JIEQI_NNUE_THREATS
+            const BiasType* thr0 = threatAccumulations[p];
+            const BiasType* thr1 = threatAccumulations[p] + HalfDimensions / 2;
+    #endif
+            for (std::size_t j = 0, vl; j < HalfDimensions / 2; j += vl)
+            {
+                vl = __riscv_vsetvl_e16m2(HalfDimensions / 2 - j);
+
+                // In 32 bits (gcc 14 crashes on vsadd), which gives the clipped
+                // values of the saturating 16-bit SIMD code
+                const vint16m2_t acc0 = __riscv_vle16_v_i16m2(in0 + j, vl);
+                const vint16m2_t acc1 = __riscv_vle16_v_i16m2(in1 + j, vl);
+    #ifdef JIEQI_NNUE_THREATS
+                vint32m4_t sum0 =
+                  __riscv_vwadd_vv_i32m4(acc0, __riscv_vle16_v_i16m2(thr0 + j, vl), vl);
+                vint32m4_t sum1 =
+                  __riscv_vwadd_vv_i32m4(acc1, __riscv_vle16_v_i16m2(thr1 + j, vl), vl);
+    #else
+                vint32m4_t sum0 = __riscv_vsext_vf2_i32m4(acc0, vl);
+                vint32m4_t sum1 = __riscv_vsext_vf2_i32m4(acc1, vl);
+    #endif
+                if constexpr (FtAccMultiplier == 2)
+                {
+                    sum0 = __riscv_vsll_vx_i32m4(sum0, 1, vl);
+                    sum1 = __riscv_vsll_vx_i32m4(sum1, 1, vl);
+                }
+                sum0 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum0, FtMaxVal, vl), 0, vl);
+                sum1 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum1, FtMaxVal, vl), 0, vl);
+
+                const vuint32m4_t prod =
+                  __riscv_vreinterpret_v_i32m4_u32m4(__riscv_vmul_vv_i32m4(sum0, sum1, vl));
+                const vuint8m1_t result =
+                  __riscv_vnsrl_wx_u8m1(__riscv_vnsrl_wx_u16m2(prod, 9, vl), 0, vl);
+                __riscv_vse8_v_u8m1(&output[offset + j], result, vl);
+
+                const vbool8_t    mask = __riscv_vmsne_vx_u8m1_b8(result, 0, vl);
+                const unsigned    cnt  = unsigned(__riscv_vcpop_m_b8(mask, vl));
+                const vuint16m2_t idx =
+                  __riscv_vcompress_vm_u16m2(__riscv_vid_v_u16m2(vl), mask, vl);
+                __riscv_vse16_v_u16m2(&nnzInfo.nnz[nnzInfo.count],
+                                      __riscv_vadd_vx_u16m2(idx, u16(offset + j), cnt), cnt);
+                nnzInfo.count += cnt;
             }
 
 #else
@@ -378,10 +480,10 @@ class FeatureTransformer {
                 sum0 += threatAccumulations[p][j + 0];
                 sum1 += threatAccumulations[p][j + HalfDimensions / 2];
     #endif
-                sum0 *= 2;
-                sum1 *= 2;
-                sum0               = std::clamp(sum0, 0, 127 * 2);
-                sum1               = std::clamp(sum1, 0, 127 * 2);
+                sum0 *= FtAccMultiplier;
+                sum1 *= FtAccMultiplier;
+                sum0               = std::clamp(sum0, 0, FtMaxVal);
+                sum1               = std::clamp(sum1, 0, FtMaxVal);
                 output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);
             }
 

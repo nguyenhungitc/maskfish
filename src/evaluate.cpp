@@ -30,14 +30,67 @@
 #include <sstream>
 #include <tuple>
 
+#include "bitboard.h"
 #include "nnue/network.h"
+#include "nnue/nnue_architecture.h"
 #include "nnue/nnue_misc.h"
 #include "position.h"
 #include "types.h"
 #include "uci.h"
+#include "ucioption.h"
 #include "nnue/nnue_accumulator.h"
 
 namespace Maskfish {
+
+namespace {
+
+// Material balance from the side to move's point of view (a dark piece counts
+// as the kind of piece that starts on its square, as in major_material())
+int simple_eval(const Position& pos) {
+    const Color c = pos.side_to_move();
+    return PawnValue * (pos.count<PAWN>(c) - pos.count<PAWN>(~c))
+         + AdvisorValue * (pos.count<ADVISOR>(c) - pos.count<ADVISOR>(~c))
+         + BishopValue * (pos.count<BISHOP>(c) - pos.count<BISHOP>(~c))
+         + pos.major_material(c) - pos.major_material(~c);
+}
+
+// Material of both sides, every piece but the kings
+int total_material(const Position& pos) {
+    return PawnValue * pos.count<PAWN>() + AdvisorValue * pos.count<ADVISOR>()
+         + BishopValue * pos.count<BISHOP>() + pos.major_material();
+}
+
+// Material of the side to move minus that of the opponent (kings excluded), a
+// dark piece counting at the average value of its side's pool
+// (Position::dark_value()). As Pikafish's simple_eval(), it stands for the
+// PSQT part of the network in networks without one (make psqt=no) in
+// EvalScaling Complexity, and is used by EvalScaling Correlation.
+int simple_eval_dark(const Position& pos) {
+    int material[COLOR_NB];
+    for (Color c : {WHITE, BLACK})
+    {
+        // A dark piece counts as the kind of piece of its square here...
+        material[c] = PawnValue * pos.count<PAWN>(c) + AdvisorValue * pos.count<ADVISOR>(c)
+                    + BishopValue * pos.count<BISHOP>(c) + pos.major_material(c);
+
+        // ...and is replaced by the expected value of its side's pool
+        const Bitboard dark = pos.pieces(c, DARK);
+        for (Bitboard b = dark; b;)
+            material[c] -= PieceValue[pos.piece_on(pop_lsb(b))];
+        material[c] += popcount(dark) * pos.dark_value(c);
+    }
+
+    const Color us = pos.side_to_move();
+    return material[us] - material[~us];
+}
+
+}  // namespace
+
+Eval::EvalScaling Eval::eval_scaling(const OptionsMap& options) {
+    return options["EvalScaling"] == "Alignment"   ? EvalScaling::Alignment
+         : options["EvalScaling"] == "Correlation" ? EvalScaling::Correlation
+                                                   : EvalScaling::Complexity;
+}
 
 // Evaluate is the evaluator for the outer world. It returns a static evaluation
 // of the position from the point of view of the side to move.
@@ -46,22 +99,78 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
                      int                            optimism,
-                     bool                           jieqiMaterial) {
+                     bool                           jieqiMaterial,
+                     EvalScaling                    scaling,
+                     bool                           optimismSimple) {
 
     assert(!pos.checkers());
 
     auto [psqt, positional] = networks.big.evaluate(pos, accumulators, &caches.big);
 
     Value nnue = psqt + positional;
+    int   v;
 
-    // Blend optimism and eval with nnue complexity
-    int nnueComplexity = std::abs(psqt - positional);
-    optimism += optimism * std::int64_t(nnueComplexity) / 488;
-    nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
+    if (scaling == EvalScaling::Alignment)
+    {
+        // EvalScaling Alignment, Pikafish's "Replace nnueComplexity with
+        // simple_eval equivalent" (it does not use the psqt / positional split,
+        // so it also suits networks without PSQT, make psqt=no). Normalize the
+        // raw evaluations to [-1024, 1024] to measure their correlation: when
+        // NNUE and material agree (positive alignment) the position is
+        // straightforward, otherwise it involves complex compensation.
+        const int se        = simple_eval(pos);
+        const int se_norm   = (se * 1024) / (std::abs(se) + 1024);
+        const int nnue_norm = int(std::int64_t(nnue) * 1024 / (std::abs(nnue) + 1024));
+        const int align     = (se_norm * nnue_norm) / 512;
 
-    int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
-    int v        = (nnue * std::int64_t(18560 + material) + optimism * std::int64_t(2727 + material))
-          / 33331;
+        // When winning, we favor easy positions, and vice versa
+        const int base_eval = int(nnue + std::int64_t(nnue) * align / 65536
+                                  + std::int64_t(optimism) * align / 16384);
+
+        // Scale the combined evaluation by the total material (JieqiMaterial
+        // only applies to EvalScaling Complexity and Correlation)
+        v = int(base_eval * std::int64_t(80030 + total_material(pos)) / 80030);
+    }
+    else if (scaling == EvalScaling::Correlation)
+    {
+        // EvalScaling Correlation: the same agreement of the network with the
+        // material balance, but with dark pieces at the average value of their
+        // pool (simple_eval_dark()) and the scaling by the major material of
+        // EvalScaling Complexity. Optimism only enters through that agreement.
+        // The trainer does not model it (no train.py --eval-scaling for it).
+        const int material  = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
+        const int se        = simple_eval_dark(pos);
+        const int se_norm   = (se * 1024) / (std::abs(se) + 1024);
+        const int nnue_norm = (nnue * 1024) / (std::abs(nnue) + 1024);
+        const int correl    = (se_norm * nnue_norm) / 512;
+
+        const int base = nnue + (nnue * correl) / 65536 + (optimism * correl) / 16384;
+        v              = int(std::int64_t(base) * (18560 + material) / 33331);
+    }
+    else
+    {
+        // EvalScaling Complexity (default): blend optimism and eval with nnue
+        // complexity. Without PSQT (make psqt=no) psqt is 0 and |psqt -
+        // positional| would be |nnue|: as in Pikafish ("Replace nnueComplexity
+        // with simple_eval equivalent"), the material stands for the PSQT part
+        // then, |psqt - (nnue - psqt)| with psqt = simple_eval_dark().
+        int nnueComplexity;
+        if constexpr (Eval::NNUE::UsePSQT)
+            nnueComplexity = std::abs(psqt - positional);
+        else
+            nnueComplexity = std::abs(2 * simple_eval_dark(pos) - nnue);
+        optimism += optimism * std::int64_t(nnueComplexity) / 488;
+        nnue -= nnue * std::int64_t(nnueComplexity) / 11418;
+
+        // UCI option OptimismSimple (Pikafish "Simplify optimism scaling
+        // formula"): the weight of optimism does not depend on the material; the
+        // constant is its value at the average major material of self-play games
+        // (4990).
+        const int material = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
+        const int optimismWeight = optimismSimple ? 2727 + 4990 : 2727 + material;
+        v = int((nnue * std::int64_t(18560 + material) + optimism * std::int64_t(optimismWeight))
+                / 33331);
+    }
 
     // Damp down the evaluation linearly when shuffling. The counter is capped at
     // 80 plies (the game is drawn there): beyond 217 the factor would change the

@@ -641,6 +641,35 @@ void set_console_utf8() {
 #endif
 }
 
+namespace {
+
+// Decompress one chunk of a zstd stream into ss. False on a zstd error.
+bool decompress_chunk(ZSTD_DCtx*         dctx,
+                      ZSTD_inBuffer&     input,
+                      std::vector<char>& buffOut,
+                      std::stringstream& ss) {
+    while (input.pos < input.size)
+    {
+        ZSTD_outBuffer output = {buffOut.data(), buffOut.size(), 0};
+        usize const    ret    = ZSTD_decompressStream(dctx, &output, &input);
+        if (ZSTD_isError(ret))
+            return false;
+
+        ss.write(buffOut.data(), output.pos);
+    }
+    return true;
+}
+
+auto make_dctx() {
+    auto dctxDeleter = [](ZSTD_DCtx* p) {
+        if (p)
+            ZSTD_freeDCtx(p);
+    };
+    return std::unique_ptr<ZSTD_DCtx, decltype(dctxDeleter)>{ZSTD_createDCtx(), dctxDeleter};
+}
+
+}  // namespace
+
 std::stringstream read_compressed_nnue(const std::filesystem::path& fpath) {
     std::stringstream ss;
 
@@ -648,11 +677,7 @@ std::stringstream read_compressed_nnue(const std::filesystem::path& fpath) {
     if (!fin)
         return ss;
     std::vector<char> buffIn(ZSTD_DStreamInSize()), buffOut(ZSTD_DStreamOutSize());
-    auto              dctxDeleter = [&](auto* p) {
-        if (p)
-            ZSTD_freeDCtx(p);
-    };
-    std::unique_ptr<ZSTD_DCtx, decltype(dctxDeleter)> dctx = {ZSTD_createDCtx(), dctxDeleter};
+    auto              dctx = make_dctx();
     if (!dctx)
         return ss;
 
@@ -661,16 +686,26 @@ std::stringstream read_compressed_nnue(const std::filesystem::path& fpath) {
         usize         read  = static_cast<usize>(fin.gcount());
         ZSTD_inBuffer input = {buffIn.data(), read, 0};
 
-        while (input.pos < input.size)
-        {
-            ZSTD_outBuffer output = {buffOut.data(), buffOut.size(), 0};
-            usize const    ret    = ZSTD_decompressStream(dctx.get(), &output, &input);
-            if (ZSTD_isError(ret))
-                return ss;
-
-            ss.write(buffOut.data(), output.pos);
-        }
+        if (!decompress_chunk(dctx.get(), input, buffOut, ss))
+            return ss;
     }
+
+    return ss;
+}
+
+// The same for a network in memory (the one embedded in the binary)
+std::stringstream read_compressed_nnue(const void* data, std::size_t size) {
+    std::stringstream ss;
+
+    if (!data || !size)
+        return ss;
+    std::vector<char> buffOut(ZSTD_DStreamOutSize());
+    auto              dctx = make_dctx();
+    if (!dctx)
+        return ss;
+
+    ZSTD_inBuffer input = {data, size, 0};
+    decompress_chunk(dctx.get(), input, buffOut, ss);
 
     return ss;
 }

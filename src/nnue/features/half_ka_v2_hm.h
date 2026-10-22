@@ -58,7 +58,13 @@ class HalfKAv2_hm {
         PS_B_BISHOP  = 11 * SQUARE_NB,
         PS_WB_KING   = 12 * SQUARE_NB,
         PS_DARK      = 13 * SQUARE_NB,
+        // make meta=yes: rows of the meta features (see make_meta_indices())
+        PS_META      = 14 * SQUARE_NB,
+#ifdef JIEQI_NNUE_META
+        PS_NB        = 14 * SQUARE_NB + 88
+#else
         PS_NB        = 14 * SQUARE_NB
+#endif
         // clang-format on
     };
 
@@ -94,13 +100,37 @@ class HalfKAv2_hm {
     // side (has a rook? has a knight or a cannon?), and the board is mirrored
     // by its left/right balance when both kings are on the middle file.
     // Both ideas come from Pikafish (xiangqi), also used by AB-JChess.
-    static constexpr std::uint32_t HashValue      = 0x7a17b104;
+    static constexpr std::uint32_t BaseHashValue  = 0x7a17b104;
     static constexpr IndexType     AttackBucketNB = 4;
 #else
-    // Hash value embedded in the evaluation file
-    static constexpr std::uint32_t HashValue      = 0xd17b100;
+    static constexpr std::uint32_t BaseHashValue  = 0xd17b100;
     static constexpr IndexType     AttackBucketNB = 1;
 #endif
+
+    // make meta=yes: the meta features of AB-JChess, 9 per perspective, one in
+    // each group (offsets from PS_META, "us" is the perspective):
+    //   0 + min(7, rooks, cannons and knights in our pool)
+    //   8 + min(7, the same in the opponent's pool)
+    //  16 + min(7, pieces in our pool)
+    //  24 + min(7, pieces in the opponent's pool)
+    //  32 + number of dark pieces on the board, bucketed (0, 1-2, 3-4, 5-8,
+    //       9-12, 13-16, 17-24, more)
+    //  40 + our dark pieces captured without being identified (pool count
+    //       minus dark pieces on the board, 0..15)
+    //  56 + the same for the opponent
+    //  72 + min(7, revealed enemy pieces attacked by our revealed pieces)
+    //  80 + min(7, our revealed pieces attacked by revealed enemy pieces)
+    // They change with almost every move: they are not in the accumulator of
+    // the other features, but in one of their own (see AccumulatorStack).
+#ifdef JIEQI_NNUE_META
+    static constexpr bool UseMeta = true;
+#else
+    static constexpr bool UseMeta = false;
+#endif
+    static constexpr int MetaFeatures = 9;
+
+    // Hash value embedded in the evaluation file
+    static constexpr std::uint32_t HashValue = BaseHashValue ^ (UseMeta ? 0x3E7A0000u : 0u);
 
     // Number of feature dimensions
     static constexpr IndexType Dimensions = 6 * AttackBucketNB * static_cast<IndexType>(PS_NB);
@@ -219,8 +249,27 @@ class HalfKAv2_hm {
     template<Color Perspective>
     static IndexType make_dark_rest_index(Piece pc, int bucket);
 
-    // Get layer stack bucket
+    // Indices of the meta features of both perspectives (make meta=yes), in
+    // the feature transformer bucket of each perspective
+    static void make_meta_indices(const Position& pos,
+                                  const int       bucket[COLOR_NB],
+                                  IndexType       out[COLOR_NB][MetaFeatures]);
+
+    // Get layer stack bucket: LayerStackBuckets[piece count], or with make
+    // stacks=32, twice it plus 1 if more than half of the pieces other than
+    // the kings are dark (make lsblend=yes: the floor of the selection below)
     static IndexType make_layer_stack_bucket(const Position& pos);
+
+    // make lsblend=yes: the layer stack selection of AB-JChess. The bucket
+    // (floor) is the one of the piece count, raised by an "uncertainty phase"
+    // (numbers of dark pieces and of rooks, cannons and knights in the pools),
+    // and the evaluation is interpolated between the layer stacks floor and
+    // floor + 1 with the weight blend / 256 (blend in 0..254, 0 for bucket 15),
+    // from the position of the three counts within their intervals.
+    struct LayerStackSelection {
+        int floor, blend;
+    };
+    static LayerStackSelection make_layer_stack_selection(const Position& pos);
 
     // Get a list of indices for recently changed features
     template<Color Perspective>

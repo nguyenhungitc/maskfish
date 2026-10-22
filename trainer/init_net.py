@@ -23,6 +23,10 @@ def main():
     ap.add_argument("--arch", default="default", choices=sorted(F.ARCHS))
     args = ap.parse_args()
     F.set_arch(args.arch)
+    if not F.PSQT:
+        raise SystemExit("a material-only network needs the PSQT buckets: make one for the "
+                         "architecture without -nopsqt, then train the -nopsqt network from "
+                         "it (train.py --no-psqt --init-net, which takes its feature transformer)")
     torch.manual_seed(0)
     model = NNUE(init_psqt=True)
     with torch.no_grad():
@@ -32,6 +36,11 @@ def main():
         model.stacks.l2.bias.zero_()
         model.stacks.output.weight.zero_()
         model.stacks.output.bias.zero_()
+        # "-ctx": the context inputs of fc0 also feed its direct term
+        if model.ctx_tower is not None:
+            model.stacks.l1_ctx.weight.zero_()
+            model.ctx_tower.weight.zero_()
+            model.ctx_tower.bias.zero_()
     S.write_nnue(S.quantize(model), args.out, f"Jieqi material-only starting net ({F.ARCH})")
     torch.save({"model": model.state_dict(), "arch": F.ARCH}, args.out + ".pt")
     print(f"written {args.out} (arch {F.ARCH})")

@@ -147,6 +147,9 @@ uint64_t ThreadPool::nodes_searched() const { return accumulate(&Search::Worker:
 // Creates/destroys threads to match the requested number.
 // Created and launched threads will immediately go to sleep in idle_loop.
 // Upon resizing, threads are recreated to allow for binding if necessary.
+// The smallest power of two that is at least count
+static usize next_power_of_two(u64 count) { return count > 1 ? (2ULL << msb(count - 1)) : 1; }
+
 void ThreadPool::set(const NumaConfig&                           numaConfig,
                      Search::SharedState                         sharedState,
                      const Search::SearchManager::UpdateContext& updateContext) {
@@ -161,7 +164,8 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
     }
 
     sharedHistories.clear();
-    sharedHistoriesClaimed.clear();
+    threadsPerNode.clear();
+    threadsClaimed.clear();
 
     const size_t requested = sharedState.options["Threads"];
 
@@ -189,17 +193,21 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
                                 ? numaConfig.distribute_threads_among_numa_nodes(requested)
                                 : std::vector<NumaIndex>{};
 
-        // Allocate the shared histories of each NUMA node used, on that node
+        // Allocate the shared histories of each NUMA node used, on that node,
+        // sized for the number of its threads (rounded up to a power of two)
         if (bool(sharedState.options["SharedHistory"]))
         {
-            std::set<NumaIndex> nodes(boundThreadToNumaNode.begin(), boundThreadToNumaNode.end());
-            if (nodes.empty())
-                nodes.insert(0);
+            if (boundThreadToNumaNode.empty())
+                threadsPerNode[0] = requested;  // All threads are on NUMA node 0
+            else
+                for (NumaIndex n : boundThreadToNumaNode)
+                    threadsPerNode[n]++;
 
-            for (NumaIndex n : nodes)
+            for (const auto& [n, count] : threadsPerNode)
             {
-                auto alloc = [&]() {
-                    sharedHistories[n] = make_unique_large_page<Search::HistoryTables>();
+                auto alloc = [&, n = n, count = count]() {
+                    sharedHistories[n] =
+                      std::make_unique<SharedHistories>(next_power_of_two(count));
                 };
                 if (doBindThreads)
                     numaConfig.execute_on_numa_node(n, alloc);
@@ -295,9 +303,10 @@ void ThreadPool::start_thinking(Position&          pos,
     // A board that cannot be played (see Position::pool_is_consistent()), or a
     // position set up with an invalid move (searchable is false, see
     // Engine::set_position()), is not searched: no root moves, "bestmove (none)"
-    if (searchable && pos.is_playable())
+    searchable = searchable && pos.is_playable();
+    if (searchable)
     {
-        const auto legalmoves = MoveList<LEGAL>(pos);
+        const auto legalmoves = MoveList<ALL>(pos);
 
         for (const auto& uciMove : limits.searchmoves)
         {
@@ -331,6 +340,7 @@ void ThreadPool::start_thinking(Position&          pos,
             th->worker->nodes = th->worker->nmpMinPly = th->worker->bestMoveChanges = 0;
             th->worker->rootDepth = th->worker->completedDepth = 0;
             th->worker->rootMoves                              = rootMoves;
+            th->worker->rootSearchable                         = searchable;
             th->worker->rootPos.set(pos, &th->worker->rootState);
             th->worker->rootState = setupStates->back();
         });
@@ -342,7 +352,10 @@ void ThreadPool::start_thinking(Position&          pos,
     main_thread()->start_searching();
 }
 
-Thread* ThreadPool::get_best_thread() const {
+// simpleVote (UCI option SimpleThreadVote, Pikafish "Simplify thread
+// selection"): the votes do not depend on the depth, and equal votes are
+// decided by the longer PV.
+Thread* ThreadPool::get_best_thread(bool simpleVote) const {
 
     Thread* bestThread = threads.front().get();
     Value   minScore   = VALUE_NONE;
@@ -355,8 +368,9 @@ Thread* ThreadPool::get_best_thread() const {
         minScore = std::min(minScore, th->worker->rootMoves[0].score);
 
     // Vote according to score and depth, and select the best thread
-    auto thread_voting_value = [minScore](Thread* th) {
-        return (th->worker->rootMoves[0].score - minScore + 14) * int(th->worker->completedDepth);
+    auto thread_voting_value = [minScore, simpleVote](Thread* th) {
+        return (th->worker->rootMoves[0].score - minScore + 14)
+             * (simpleVote ? 1 : int(th->worker->completedDepth));
     };
 
     for (auto&& th : threads)
@@ -385,8 +399,9 @@ Thread* ThreadPool::get_best_thread() const {
 
         // We make sure not to pick a thread with truncated principal variation
         const bool betterVotingValue =
-          thread_voting_value(th.get()) * int(newThreadPV.size() > 2)
-          > thread_voting_value(bestThread) * int(bestThreadPV.size() > 2);
+          simpleVote ? newThreadPV.size() > bestThreadPV.size()
+                     : thread_voting_value(th.get()) * int(newThreadPV.size() > 2)
+                         > thread_voting_value(bestThread) * int(bestThreadPV.size() > 2);
 
         if (bestThreadInProvenWin)
         {
@@ -452,15 +467,16 @@ std::vector<size_t> ThreadPool::get_bound_thread_count_by_numa_node() const {
     return counts;
 }
 
-Search::HistoryTables* ThreadPool::claim_shared_histories(NumaIndex n, bool& owner) {
+SharedHistories*
+ThreadPool::claim_shared_histories(NumaIndex n, usize& numaThreadIdx, usize& numaTotal) {
     auto it = sharedHistories.find(n);
     if (it == sharedHistories.end())
-    {
-        owner = false;
         return nullptr;
-    }
+
     // Workers are created one after the other, so this needs no lock
-    owner = sharedHistoriesClaimed.insert(n).second;
+    numaThreadIdx = threadsClaimed[n]++;
+    numaTotal     = threadsPerNode[n];
+    assert(numaThreadIdx < numaTotal);
     return it->second.get();
 }
 

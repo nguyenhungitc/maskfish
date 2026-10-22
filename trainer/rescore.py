@@ -4,7 +4,8 @@
         --engine AB-JChess/src/AB-JChess --net abjchess-20260911.nnue \
         --opt ChasingRule=github --nodes 20000 --workers 15
 
-Input and output are the text format of gen_data.py (fen | score | result).
+Input and output are the text format of gen_data.py (fen | score | result);
+the input can be compressed (.zst, .gz, see textio.py), the output is plain.
 Each position keeps its game result and gets the teacher's search score for
 the side to move, in the TEACHER's units: convert them when preparing the
 data (prepare_data.py --score-scale 361/s, s fitted with fit_scaling.py on
@@ -24,6 +25,7 @@ import multiprocessing as mp
 import os
 
 import jieqi_uci as U
+from textio import is_compressed, open_text
 
 CHUNK = 256
 
@@ -74,6 +76,9 @@ def main():
     args.opt = dict(o.split("=", 1) for o in args.opt)
 
     progress_path = args.out + ".progress"
+    if is_compressed(args.out):
+        raise SystemExit(f"{args.out}: write a plain .txt (it is appended to by --resume), "
+                         "compress it afterwards")
     skip = 0
     if args.resume and os.path.exists(progress_path):
         with open(progress_path) as f:
@@ -89,7 +94,7 @@ def main():
             yield lines
 
     done, written = skip, 0
-    with open(args.input) as fin, open(args.out, "a" if args.resume else "w") as fout, \
+    with open_text(args.input) as fin, open(args.out, "a" if args.resume else "w") as fout, \
             mp.Pool(args.workers, initializer=worker_init, initargs=(args,)) as pool:
         for _ in itertools.islice(fin, skip):
             pass

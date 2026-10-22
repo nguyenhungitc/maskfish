@@ -672,6 +672,7 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
 void set_console_utf8();
 
 std::stringstream read_compressed_nnue(const std::filesystem::path& fpath);
+std::stringstream read_compressed_nnue(const void* data, std::size_t size);
 }  // namespace Maskfish
 
 template<std::size_t N>

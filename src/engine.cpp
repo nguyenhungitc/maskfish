@@ -137,6 +137,17 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("TTPenalize", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
     options.add("ChanceBranchDepth", Option(false));
+    // Reset the correction histories at the start of every search (they are
+    // otherwise kept until ucinewgame).
+    options.add("CorrHistReset", Option(false));
+    // Check the time every 64 nodes instead of 512.
+    options.add("FrequentTimeCheck", Option(false));
+    // Let the threads vote for the best move only when MultiPV is 1: in
+    // MultiPV analysis the main thread's lines are kept.
+    options.add("VoteSinglePVOnly", Option(false));
+    // Also give the safe reveal bonus to quiet moves of dark pieces that
+    // evade a check in the quiescence search.
+    options.add("RevealQsearchEvasions", Option(false));
 
     // Experimental search ideas ported from Pikafish, off by default: test
     // with SPRT (trainer/match.py --opt-a Name=true).
@@ -149,7 +160,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // when the previous continuation histories already agree.
     options.add("CMHC", Option(false));
     // When the root score suggests a forced mate, futility-prune only at low
-    // depth and skip singular extensions, to find the mate faster.
+    // depth, skip singular extensions and the small ProbCut, reduce null moves
+    // less, and reduce checks less and other moves more, to find the mate faster.
     options.add("SeekMate", Option(false));
     // Small pruning changes: razoring only at expected ALL nodes, more null
     // move pruning when improving and a reduction growing with the static eval
@@ -178,6 +190,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pruning at shallow depth: divide the history of quiet moves by a
     // depth dependent value (instead of a constant) when reducing lmrDepth.
     options.add("LMRHistoryDivisor", Option(false));
+    // Simplifications of Pikafish's search (Aug-Oct 2026): razoring margin
+    // linear in depth, LMR not depending on the window but smaller at PV nodes,
+    // no continuation history update 5 plies back, bonus of a quiet TT move
+    // linear in depth, a futility margin that does not depend on the best move,
+    // the same negative extension at cut nodes as for TT values above beta.
+    options.add("Simplifications", Option(false));
     // Add a constant offset to the continuation history updates of the move
     // one ply back.
     options.add("ContHistOffset", Option(false));
@@ -214,9 +232,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
     // always has the size for 10), with stronger updates
     options.add("BigPawnHistory", Option(false));
-    // Share the continuation, pawn and correction histories between the
-    // threads of a NUMA node (only matters with Threads > 1). Changing it
-    // recreates the threads.
+    // Share the continuation, pawn and correction histories (not the
+    // continuation correction history) between the threads of a NUMA node, as
+    // Pikafish does; the pawn and correction histories then grow with the
+    // number of threads (only matters with Threads > 1). Changing it recreates
+    // the threads.
     options.add("SharedHistory", Option(false, [this](const Option&) {
                     resize_threads();
                     return std::nullopt;
@@ -224,6 +244,51 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
+    // Scaling of the network output in the evaluation: Complexity (default,
+    // |psqt - positional| and the major material), Alignment (Pikafish's
+    // since September 2026: agreement of the network with the material
+    // balance, and the total material; suits networks without PSQT) or
+    // Correlation (Pikafish's "Replace nnueComplexity with simple_eval
+    // equivalent" with dark pieces at the average value of their pool, and
+    // the major material). The trainer must use the same (train.py
+    // --eval-scaling); it does not model Correlation.
+    options.add("EvalScaling", Option("Complexity var Complexity var Alignment var Correlation",
+                                      "Complexity"));
+    // Pikafish "Simplify mtg in time management": the move horizon in whole
+    // moves, at most 50 (instead of centi-moves, at most 60).
+    options.add("SimpleMtg", Option(false));
+    // Pikafish "Simplify optimism scaling formula": the weight of optimism in
+    // the evaluation does not depend on the material (EvalScaling Complexity).
+    options.add("OptimismSimple", Option(false));
+    // Pikafish's futility pruning (margin, depth limit, returned value).
+    options.add("PikaFutility", Option(false));
+    // Pikafish "Simplify thread selection": votes by score only (Threads > 1).
+    options.add("SimpleThreadVote", Option(false));
+    // Pikafish "Only generate legal moves in movegen" (the part not ported
+    // yet): the squares attacked by the opponent are cached in the StateInfo
+    // and used to generate and test king moves. No functional change (bench
+    // identical): compare the speed with and without.
+    options.add("ThreatCache", Option(false, [](const Option& o) {
+                    Position::useThreatCache = bool(o);
+                    return std::nullopt;
+                }));
+    // Threats by lesser pieces of the quiet move ordering from the cached
+    // threats, as Pikafish (x-raying our king): changes the move ordering.
+    options.add("ThreatCacheMovePick", Option(false, [](const Option& o) {
+                    Position::useThreatCacheMovePick = bool(o);
+                    return std::nullopt;
+                }));
+#ifdef JIEQI_NNUE_THREATS
+    // Pikafish's incremental threat features ("Full threats" DirtyThreats,
+    // "Update NNUE perspectives together"): the moves record the threats
+    // they add and remove, and the threat accumulator is updated from them
+    // instead of from the difference of the lists of threats of the two
+    // positions. No functional change (bench identical): compare the speed.
+    options.add("ThreatsIncremental", Option(false, [](const Option& o) {
+                    Eval::NNUE::AccumulatorStack::incrementalThreats = bool(o);
+                    return std::nullopt;
+                }));
+#endif
     // Score -> win rate scale used to average chance nodes (0 = built-in
     // 360.83524). trainer/fit_scaling.py fits it from self-play data.
     options.add("ChanceScaling", Option(0, 0, 3000));
@@ -231,6 +296,16 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // standard deviation of the outcomes' win rates: > 0 avoids uncertain
     // reveals and captures, < 0 seeks them.
     options.add("ChanceRiskAversion", Option(0, -100, 100));
+    // How the outcomes of a chance node are averaged (from AB-JChess): Winrate
+    // (default), Tables (score <-> mass tables of ChanceTables) or Linear
+    // (average of the scores, AggressiveLevel 10 of AB-JChess). Tables
+    // without loaded tables falls back to Winrate.
+    options.add("ChanceModel", Option("Winrate var Winrate var Tables var Linear", "Winrate"));
+    // Directory of the tables of ChanceModel Tables (made by
+    // trainer/chance_tables.py)
+    options.add("ChanceTables", Option("", [](const Option& o) {
+                    return std::optional<std::string>(Search::load_chance_tables(std::string(o)));
+                }));
 
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
@@ -542,13 +617,15 @@ void Engine::eval_raw() const {
     auto [psqt, positional] = networks->big.evaluate(p, *accumulators, &caches->big);
 
     // Static evaluation after the scaling of Eval::evaluate() (optimism 0, the
-    // JieqiMaterial option as set): what the search scores, and so the training
+    // JieqiMaterial and EvalScaling options as set): what the search scores, and so the training
     // data, are made of. The trainer applies the same scaling to the network
     // output when it computes the loss (trainer/eval_scale.py).
     std::string finalEval = "none";  // evaluate() is not defined in check
     if (!p.checkers())
         finalEval = std::to_string(int(Eval::evaluate(*networks, p, *accumulators, *caches,
-                                                      VALUE_ZERO, bool(options["JieqiMaterial"]))));
+                                                      VALUE_ZERO, bool(options["JieqiMaterial"]),
+                                                      Eval::eval_scaling(options),
+                                                      bool(options["OptimismSimple"]))));
 
     sync_cout << "evalraw psqt " << int(psqt) << " positional " << int(positional) << " bucket "
               << Eval::NNUE::FeatureSet::make_layer_stack_bucket(p) << " final " << finalEval
@@ -560,7 +637,18 @@ OptionsMap&       Engine::get_options() { return options; }
 
 std::string Engine::fen() const { return pos.fen(); }
 
-void Engine::flip() { pos.flip(); }
+// Position::flip() sets up the flipped position, which must be one that the
+// engine can handle (one king per side, ...): a position that is not (see
+// Engine::set_position()) is left as it is
+void Engine::flip() {
+    if (std::string reason; !pos.pool_is_consistent(&reason))
+    {
+        sync_cout << "info string Invalid position: " << reason << ", not flipped" << sync_endl;
+        return;
+    }
+
+    pos.flip();
+}
 
 std::string Engine::visualize() const {
     std::stringstream ss;
