@@ -6,10 +6,10 @@
   <h1>{{ run.new_ref }} <small class="muted">vs {{ run.base_ref }} · #{{ run.id }}</small></h1>
   <div class="buttons">
     {% if run.status in ('pending', 'building', 'running') %}
-      <form method="post" action="{{ url_for('stop', rid=run.id) }}"><button class="btn danger">Stop</button></form>
+      <form method="post" action="{{ url_for('stop', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">Stop</button></form>
     {% endif %}
     {% if run.status in ('stopped', 'failed') or (run.status == 'finished' and run.test_type == 'numgames') %}
-      <form method="post" action="{{ url_for('resume', rid=run.id) }}"><button class="btn primary">Resume</button></form>
+      <form method="post" action="{{ url_for('resume', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn primary">Resume</button></form>
     {% endif %}
     <a class="btn" href="{{ url_for('run_form', clone=run.id) }}">Rerun</a>
     <a class="btn" href="{{ url_for('diff', rid=run.id) }}">Diff</a>
@@ -17,7 +17,7 @@
     {% if games_file %}<a class="btn" href="{{ url_for('games', rid=run.id) }}">Games</a>{% endif %}
     {% if run.status not in ('building', 'running') %}
       <form method="post" action="{{ url_for('delete', rid=run.id) }}"
-            onsubmit="return confirm('Delete test #{{ run.id }} and its games?')"><button class="btn danger ghost">Delete</button></form>
+            onsubmit="return confirm('Delete test #{{ run.id }} and its games?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger ghost">Delete</button></form>
     {% endif %}
   </div>
 </div>
@@ -65,7 +65,7 @@
 
 <section class="block">
   <h2>Modify</h2>
-  <form method="post" action="{{ url_for('modify', rid=run.id) }}" class="modify">
+  <form method="post" action="{{ url_for('modify', rid=run.id) }}" class="modify"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Priority <input type="number" name="priority" value="{{ run.priority }}" min="-100" max="100"></label>
     <label>{{ 'Maximum games (0: no limit)' if run.test_type == 'sprt' else 'Games' }}
       <input type="number" name="num_games" value="{{ run.num_games }}" min="0" step="2"></label>

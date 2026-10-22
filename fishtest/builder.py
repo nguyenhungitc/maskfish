@@ -34,6 +34,46 @@ def normalize_repo(url: str) -> str:
     return url
 
 
+# Repositories git is allowed to fetch from: URLs of the usual transports,
+# scp-like "user@host:path", and existing local directories. Anything else is
+# refused before it reaches git: in particular a value starting with "-" would
+# be read as an option of git (e.g. --upload-pack=<command> runs a command),
+# and the "ext::" transport runs a command as well.
+_URL_SCHEMES = ("https://", "http://", "ssh://", "git://", "file://")
+_SCP_LIKE = re.compile(r"[\w.-]+@[\w.-]+:[\w./~-]+")
+
+
+def check_repo(url: str) -> str:
+    """Returns the (normalized) repository, or raises BuildError."""
+    url = normalize_repo(url or "")
+    if not url:
+        raise BuildError("the repository is required")
+    if url.startswith("-") or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+        raise BuildError(f"invalid repository {url!r}")
+    if url.startswith(_URL_SCHEMES):
+        if not re.fullmatch(r"[a-z]+://[^\s'\"`;|&$<>\\]+", url):
+            raise BuildError(f"invalid repository URL {url!r}")
+        return url
+    if "::" in url:
+        raise BuildError(f"unsupported git transport in {url!r}")
+    if _SCP_LIKE.fullmatch(url):
+        return url
+    if os.path.isdir(url):
+        return url
+    raise BuildError(f"{url!r} is not a URL (https://...), owner/repo or an existing local directory")
+
+
+_ARCH = re.compile(r"[A-Za-z0-9_.+-]+")
+
+
+def check_arch(arch: str) -> str:
+    """ARCH of the builds: a plain word (a make variable given on the command
+    line is expanded by make, so "$(shell ...)" would run a command)."""
+    if not _ARCH.fullmatch(arch or ""):
+        raise BuildError(f"invalid ARCH {arch!r}")
+    return arch
+
+
 def github_web(url: str) -> str | None:
     m = re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+", url)
     return url if m else None
@@ -63,9 +103,10 @@ class Repo:
         return hashlib.sha1(url.encode()).hexdigest()[:10]
 
     def fetch(self, url: str):
+        url = check_repo(url)
         k = self.key(url)
         with self._lock:
-            self.git("fetch", "--force", "--prune", "--no-tags", url,
+            self.git("fetch", "--force", "--prune", "--no-tags", "--end-of-options", url,
                      f"+refs/heads/*:refs/ft/{k}/heads/*",
                      f"+refs/tags/*:refs/ft/{k}/tags/*")
 
@@ -76,8 +117,9 @@ class Repo:
     def resolve(self, url: str, ref: str) -> str:
         """Branch, tag or commit of the repository -> full SHA."""
         ref = ref.strip()
-        if not ref or ref.startswith("-") or " " in ref:
+        if not ref or ref.startswith("-") or any(c.isspace() or ord(c) < 32 for c in ref):
             raise BuildError(f"invalid branch or commit {ref!r}")
+        url = check_repo(url)
         self.fetch(url)
         k = self.key(url)
         for cand in (f"refs/ft/{k}/heads/{ref}", f"refs/ft/{k}/tags/{ref}"):
@@ -88,7 +130,7 @@ class Repo:
             sha = self._verify(ref)
             if not sha and len(ref) == 40:   # a commit that is on no branch (e.g. a PR)
                 with self._lock:
-                    self.git("fetch", "--no-tags", url, ref, check=False)
+                    self.git("fetch", "--no-tags", "--end-of-options", url, ref, check=False)
                 sha = self._verify(ref)
             if sha:
                 return sha
@@ -152,10 +194,10 @@ def fetch_default_net(repo: Repo, nets_dir: Path, url: str | None = None,
     dest = Path(nets_dir) / NET_NAME
     if is_network(dest) and not replace:
         return dest
-    url = net_repo(url)
+    url = check_repo(net_repo(url))
     local = f"refs/ft/{Repo.key(url)}/assets/net"
     with repo._lock:
-        repo.git("fetch", "--force", "--no-tags", url, f"+{NET_REF}:{local}")
+        repo.git("fetch", "--force", "--no-tags", "--end-of-options", url, f"+{NET_REF}:{local}")
     data = repo.git("cat-file", "blob", f"{local}:{NET_NAME}", binary=True).stdout
     Path(nets_dir).mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".download")
@@ -174,6 +216,7 @@ def binary_name() -> str:
 def build(repo: Repo, sha: str, make_args: str, arch: str, jobs: int, builds_dir: Path,
           nets_dir: Path, log) -> Path:
     """Compiles the commit (cached). log(text) receives the progress."""
+    arch = check_arch(arch)
     args = shlex.split(make_args or "")
     for a in args:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.+-]*", a):

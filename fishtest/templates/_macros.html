@@ -21,9 +21,9 @@
       <tr>
         <td class="actions">
           {% if run.status in ('pending', 'building', 'running') %}
-          <form method="post" action="{{ url_for('stop', rid=run.id) }}"><button class="btn small danger" title="Stop">Stop</button></form>
+          <form method="post" action="{{ url_for('stop', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" title="Stop">Stop</button></form>
           {% elif run.status in ('stopped', 'failed') %}
-          <form method="post" action="{{ url_for('resume', rid=run.id) }}"><button class="btn small" title="Put back in the queue">Resume</button></form>
+          <form method="post" action="{{ url_for('resume', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small" title="Put back in the queue">Resume</button></form>
           {% endif %}
         </td>
         <td class="who">

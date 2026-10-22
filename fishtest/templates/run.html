@@ -5,7 +5,7 @@
 {% if errors %}
 <div class="flash error">{% for e in errors %}<div>{{ e }}</div>{% endfor %}</div>
 {% endif %}
-<form method="post" action="{{ url_for('run_submit') }}" class="runform">
+<form method="post" action="{{ url_for('run_submit') }}" class="runform"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <section class="block">
     <h2>Engines</h2>
     <div class="grid">

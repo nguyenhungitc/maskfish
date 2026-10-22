@@ -55,6 +55,15 @@ values (`python fishtest.py --help`):
 With `--host 0.0.0.0` the page is reachable from the local network: set a
 password, since anyone could otherwise queue builds of any repository.
 
+Queuing a test builds and runs the code of a repository, so every change is
+protected against requests sent by other web sites (cross-site request
+forgery): a form is only accepted with the token of the browser session and
+from the page's own origin. On a loopback address (the default `127.0.0.1`)
+the server also answers only to the host names `localhost`, `127.0.0.1` and
+`::1`, which blocks DNS rebinding. Repositories must be `https://` (or
+`http://`, `ssh://`, `git://`, `file://`) URLs, `owner/repo`, `user@host:path`
+or an existing local directory, and `ARCH` a plain word.
+
 ## How a test is run
 
 1. **Submit.** The branches are fetched into a cache (`data/repo.git`) and

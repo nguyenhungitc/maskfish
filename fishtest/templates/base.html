@@ -21,7 +21,7 @@
   {% if runner.mode == 'paused' and request.endpoint != 'settings_page' %}
   <div class="banner">
     <span>The runner is paused: no test is played until you resume it.</span>
-    <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><button class="btn small primary">Resume testing</button></form>
+    <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small primary">Resume testing</button></form>
   </div>
   {% endif %}
   {% with messages = get_flashed_messages() %}

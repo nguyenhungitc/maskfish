@@ -13,20 +13,20 @@
     {% if runner.run %}<a href="{{ url_for('view', rid=runner.run) }}">current test #{{ runner.run }}</a>{% endif %}
     <div class="buttons">
       {% if runner.mode != 'running' %}
-        <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><button class="btn primary">Resume testing</button></form>
+        <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn primary">Resume testing</button></form>
       {% endif %}
       {% if runner.mode == 'running' %}
-        <form method="post" action="{{ url_for('settings_runner', mode='pause_after') }}"><button class="btn">Pause after the current test</button></form>
+        <form method="post" action="{{ url_for('settings_runner', mode='pause_after') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">Pause after the current test</button></form>
       {% endif %}
       {% if runner.mode != 'paused' %}
-        <form method="post" action="{{ url_for('settings_runner', mode='paused') }}"><button class="btn danger">Pause now</button></form>
+        <form method="post" action="{{ url_for('settings_runner', mode='paused') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">Pause now</button></form>
       {% endif %}
     </div>
   </div>
   <p class="muted small">Pause now puts the current test back in the queue (its games are kept) and starts nothing until you resume. Tests can still be submitted while the runner is paused.</p>
 </section>
 
-<form method="post" action="{{ url_for('settings_save') }}">
+<form method="post" action="{{ url_for('settings_save') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <div class="cols">
   <section class="block">
     <h2>Games and builds</h2>
@@ -86,7 +86,7 @@
       {% elif password_cli %}The password of the --password option is used.
       {% else %}No password: anyone who can open this page can change everything. Set one before opening the server to the network.{% endif %}
     </p>
-    <form method="post" action="{{ url_for('settings_password') }}" class="grid one">
+    <form method="post" action="{{ url_for('settings_password') }}" class="grid one"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>New password <input type="password" name="password" autocomplete="new-password"></label>
       <label>Again <input type="password" name="password2" autocomplete="new-password"></label>
       <div class="buttons">
@@ -104,7 +104,7 @@
       <tr><th>Games</th><td>{{ games_size|size }}</td></tr>
       {% if cur.host %}<tr><th>Listening on</th><td class="mono">{{ cur.host }}:{{ cur.port }} <span class="muted">(command line only)</span></td></tr>{% endif %}
     </table>
-    <form method="post" action="{{ url_for('settings_clear_builds') }}" onsubmit="return confirm('Delete all cached builds? They are rebuilt when needed.')">
+    <form method="post" action="{{ url_for('settings_clear_builds') }}" onsubmit="return confirm('Delete all cached builds? They are rebuilt when needed.')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn danger ghost">Delete cached builds</button>
     </form>
   </section>

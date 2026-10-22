@@ -43,6 +43,10 @@ def parse_options(text: str) -> dict:
         if "=" not in item:
             raise ValueError(f"bad option {item!r}: expected Name=Value")
         k, v = item.split("=", 1)
+        # Each option is sent as one "setoption" line: a line break (or any
+        # control character) would add other UCI commands
+        if not k or any(ord(c) < 32 or ord(c) == 127 for c in item):
+            raise ValueError(f"bad option {item!r}")
         opts[k] = v
     return opts
 

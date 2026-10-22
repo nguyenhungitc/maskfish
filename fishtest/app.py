@@ -7,16 +7,20 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import hmac
 import html
+import ipaddress
 import math
 import os
 import re
+import secrets
 import shutil
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template, request,
-                   send_file, url_for)
+                   send_file, session, url_for)
 from markupsafe import Markup
 
 import builder as B
@@ -47,6 +51,7 @@ def create_app(settings: dict) -> Flask:
     app.secret_key = settings.get("secret") or hashlib.sha256(
         str(Path(settings["data_dir"]).resolve()).encode()).hexdigest()
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
     data = Path(settings["data_dir"])
     db = DB(str(data / "fishtest.db"))
     repo = B.Repo(data / "repo.git")
@@ -58,6 +63,51 @@ def create_app(settings: dict) -> Flask:
     def eff() -> dict:
         """Command-line settings with the values saved on the Settings page."""
         return C.effective(db, settings)
+
+    # ------------------------------------------------------------ request checks
+
+    # Every change is a POST, which a page of any other site can send to this
+    # server from the browser of its user (cross-site request forgery): a test
+    # queued that way builds and runs the code of any repository. So a POST
+    # needs the token of the session (a hidden field of every form), and must
+    # not come from another origin. Served on a loopback address, the server
+    # also refuses requests for any other host name, so that a site whose name
+    # resolves to 127.0.0.1 (DNS rebinding) cannot read the pages either.
+    LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
+
+    def is_loopback(host: str) -> bool:
+        if host in LOOPBACK_NAMES or host.endswith(".localhost"):
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    loopback_only = is_loopback(str(settings.get("host") or "127.0.0.1"))
+
+    def csrf_token() -> str:
+        token = session.get("csrf")
+        if not token:
+            token = session["csrf"] = secrets.token_urlsafe(32)
+        return token
+
+    app.jinja_env.globals["csrf_token"] = csrf_token
+
+    @app.before_request
+    def check_request():
+        if loopback_only and not is_loopback((urlsplit("//" + request.host).hostname or "")):
+            return Response("Unknown host", 400, mimetype="text/plain")
+        if request.method != "POST":
+            return None
+        source = request.headers.get("Origin") or request.headers.get("Referer")
+        if source is not None and urlsplit(source).netloc != request.host:
+            return Response("Cross-origin request refused", 403, mimetype="text/plain")
+        sent = request.form.get("csrf_token", "")
+        expected = session.get("csrf", "")
+        if not expected or not hmac.compare_digest(sent.encode(), expected.encode()):
+            return Response("Missing or invalid form token: reload the page and try again", 400,
+                            mimetype="text/plain")
+        return None
 
     # ------------------------------------------------------------ helpers
 
@@ -410,7 +460,11 @@ def create_app(settings: dict) -> Flask:
         if not v["new_ref"]:
             errors.append("the test branch / commit is required")
 
-        url = B.normalize_repo(v["repo"] or eff()["repo"])
+        url = ""
+        try:
+            url = B.check_repo(v["repo"] or eff()["repo"])
+        except B.BuildError as e:
+            errors.append(str(e))
         shas = {}
         if not errors:
             for side in ("new", "base"):
@@ -585,7 +639,13 @@ def create_app(settings: dict) -> Flask:
             for e in errors:
                 flash(e)
             return redirect(url_for("settings_page"))
-        values["repo"] = B.normalize_repo(values["repo"])
+        try:
+            values["repo"] = B.check_repo(values["repo"])
+            B.check_repo(B.net_repo(values["net_url"]))
+            B.check_arch(values["arch"])
+        except B.BuildError as e:
+            flash(str(e))
+            return redirect(url_for("settings_page"))
         if os.path.exists(values["repo"]):
             values["repo"] = str(Path(values["repo"]).resolve())
         # Only keep the values that differ from the command line
