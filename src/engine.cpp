@@ -632,6 +632,32 @@ void Engine::eval_raw() const {
               << " fen " << p.fen() << sync_endl;
 }
 
+// Prints "info string rule <verdict>", what the rules of the search
+// (Position::rule_judge()) decide in the current position, for the side to
+// move: "none" (the game goes on), "draw", "win" or "loss". Covers the third
+// occurrence of a position (draw, perpetual check or perpetual chase) and the
+// 40-move rule (a draw, or a loss for a side that has no legal move). Referees
+// (fishtest, trainer/match.py) ask it to apply the same rules as the engine.
+void Engine::rule() {
+    wait_for_search_finished();
+
+    if (!positionValid)
+    {
+        sync_cout << "info string rule invalid" << sync_endl;
+        return;
+    }
+
+    Value      result = VALUE_NONE;
+    const bool ended  = pos.rule_judge(result, 0);
+
+    sync_cout << "info string rule "
+              << (!ended                  ? "none"
+                  : result == VALUE_DRAW  ? "draw"
+                  : result > VALUE_DRAW   ? "win"
+                                          : "loss")
+              << sync_endl;
+}
+
 const OptionsMap& Engine::get_options() const { return options; }
 OptionsMap&       Engine::get_options() { return options; }
 

@@ -23,10 +23,13 @@ Information model: each engine only gets what its side knows. Reveals are
 public; when a dark piece is captured, the capturer is told its identity but
 its owner is not (use --full-info to tell both).
 
-Games end by mate / no legal move, by adjudication (mate score, or both
-sides agreeing that |score| >= --adjudicate for 4 moves each), on the third
-occurrence of a position (perpetual check loses, otherwise a draw), or as a
-draw after 80 plies without capture (the 40-move rule) or --max-plies.
+Games end by mate / no legal move, by adjudication (the side to move
+reports that it is mated, or both sides agree that |score| >= --adjudicate for
+4 moves each; a mate claimed by the winning side alone is played out), by the
+rules of the engine (third occurrence of a position: a draw, or a loss for
+perpetual check or chase; 40-move rule: a draw after 80 plies without capture,
+or a loss for a side without legal move), as judged by B with the engine
+command "rule", or as a draw after --max-plies.
 """
 
 from __future__ import annotations
@@ -62,8 +65,9 @@ def make_opening(engine: U.Engine, rng: random.Random, plies: int):
 
 
 def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening: list[str],
-              args) -> int:
-    """Returns +1 white wins, 0 draw, -1 black wins."""
+              args, referee: U.Engine | None = None) -> int:
+    """Returns +1 white wins, 0 draw, -1 black wins. referee: the engine that
+    judges the rules (see U.RuleJudge), by default the engine to move."""
     ids = copy.deepcopy(ids)
     views = ([], [])                 # move lists sent to the white / black engine
     engines = (white, black)
@@ -75,15 +79,17 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
     # Clocks in ms (--tc), white and black
     clock = [args.tc_base, args.tc_base] if args.tc else None
     no_capture = 0
-    repetitions = U.RepetitionTracker()
+    judge = U.RuleJudge()
     for ply in range(args.max_plies):
         stm = ply % 2
         eng = engines[stm]
         eng.set_position(views[stm])
         fen, in_check = eng.board_info()
-        result = repetitions.push(fen, in_check)
-        if result is not None:
-            return result
+        verdict = U.referee_verdict(referee, engines, views, stm)
+        ended = judge.result(fen, in_check, no_capture, verdict,
+                             lambda: bool(eng.legal_moves()))
+        if ended is not None:
+            return ended[0]
         if ply < len(opening):
             move = opening[ply]
             score, mate = None, False
@@ -108,8 +114,12 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
 
         if score is not None:
             sign = 1 if stm == F.WHITE else -1
-            if mate:
-                return sign if score > 0 else -sign
+            # Only the side that is mated ends the game with its score (it
+            # resigns): a mate claimed by the winning side is played out, or
+            # adjudicated below if the other side agrees, since a wrong mate
+            # score (e.g. a bug of the version tested) would win the game.
+            if mate and score < 0:
+                return -sign
             last_scores[stm] = (last_scores[stm] + [sign * score])[-4:]
             sw, sb = last_scores[F.WHITE], last_scores[F.BLACK]
             if len(sw) == 4 and len(sb) == 4:
@@ -117,9 +127,9 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
                     return 1
                 if max(sw + sb) <= -args.adjudicate:
                     return -1
+        # The 40-move rule is judged before the next move (a side without a
+        # legal move then loses, as in the engine)
         no_capture = 0 if capture else no_capture + 1
-        if no_capture >= U.NO_CAPTURE_DRAW_PLIES:
-            return 0
     return 0
 
 
@@ -145,8 +155,8 @@ def play_pair(seed: int) -> tuple[int, int]:
     a, b = _ENGINES
     rng = random.Random(seed)
     ids, opening = make_opening(a, rng, rng.randint(_ARGS.random_plies_min, _ARGS.random_plies))
-    r1 = play_game(a, b, ids, opening, _ARGS)        # A white
-    r2 = -play_game(b, a, ids, opening, _ARGS)       # A black
+    r1 = play_game(a, b, ids, opening, _ARGS, referee=b)        # A white
+    r2 = -play_game(b, a, ids, opening, _ARGS, referee=b)       # A black
     return r1, r2
 
 

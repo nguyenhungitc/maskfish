@@ -158,6 +158,8 @@ void UCIEngine::loop() {
             engine.trace_eval();
         else if (token == "evalraw")
             engine.eval_raw();
+        else if (token == "rule")
+            engine.rule();
         else if (token == "compiler")
             sync_cout << compiler_info() << sync_endl;
         else if (token == "export_net")

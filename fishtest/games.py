@@ -7,9 +7,13 @@ trainer/match.py (whose helpers are reused):
   opening, with colors swapped, which removes most of the luck of the reveals;
 * each engine only gets what its side knows: reveals are public, the identity
   of a captured dark piece is only told to the capturer (unless full_info);
-* games end by mate / no legal move, adjudication, threefold repetition
-  (perpetual check loses), the 40-move rule (80 plies without capture), or
-  the maximum number of plies.
+* games end by mate / no legal move, adjudication (the side to move reports
+  that it is mated, or both sides agree on a large score; a mate claimed by
+  the winning side alone is played out), the rules of the engine as judged by
+  the base engine with the command "rule" (third occurrence of a position: a
+  draw, or a loss for perpetual check or chase; 40-move rule: a draw after 80
+  plies without capture, or a loss for a side without legal move), or the
+  maximum number of plies.
 
 In addition, the referee runs real clocks for time controls such as "10+0.1"
 (a loss on time when an engine exceeds its time by more than the margin), and
@@ -137,6 +141,17 @@ class Engine:
             raise EngineError(f"{self.name}: no FEN in the output of 'd'")
         return fen, in_check
 
+    def rule(self) -> str | None:
+        """Verdict of the engine's rules in the current position, or None if the
+        engine does not have the command "rule" (see U.RuleJudge)."""
+        if getattr(self, "rule_supported", True) is False:
+            return None
+        self.send("rule")
+        self.send("isready")
+        verdict = U.parse_rule(self.wait_for("readyok", 30))
+        self.rule_supported = verdict is not None
+        return verdict
+
     def legal_moves(self) -> list[str]:
         self.send("go perft 1")
         moves = []
@@ -232,10 +247,12 @@ def make_opening(engine: Engine, rng: random.Random, plies: int):
     return ids, [m[:4] for m in moves]
 
 
-def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict) -> dict:
+def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict,
+              referee: Engine | None = None) -> dict:
     """Plays one game. Returns {'result': +1/0/-1 for white, 'reason',
     'moves' (full information), 'plies', 'fault': color of a crash / time
-    loss or None, 'fault_kind'}."""
+    loss or None, 'fault_kind'}. referee: the engine that judges the rules
+    (see U.RuleJudge), by default the engine to move."""
     ids = copy.deepcopy(ids)
     engines = (white, black)
     views = ([], [])
@@ -257,15 +274,24 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict) 
             e.isready(60)
         last_scores = {0: [], 1: []}
         no_capture = 0
-        repetitions = U.RepetitionTracker()
+        judge = U.RuleJudge()
         for ply in range(cfg["max_plies"]):
             stm = ply % 2
             eng = engines[stm]
             eng.set_position(views[stm])
             fen, in_check = eng.board_info()
-            r = repetitions.push(fen, in_check)
-            if r is not None:
-                return finish(r, "repetition" if r == 0 else "perpetual check")
+            try:
+                verdict = U.referee_verdict(referee, engines, views, stm)
+            except EngineError as e:
+                # The fault is the one of the engine that failed (its name
+                # starts the message), which may be the referee
+                stm = next((i for i, x in enumerate(engines) if str(e).startswith(f"{x.name}:")),
+                           stm)
+                raise
+            ended = judge.result(fen, in_check, no_capture, verdict,
+                                 lambda: bool(eng.legal_moves()))
+            if ended is not None:
+                return finish(*ended)
             score, mate = None, False
             if ply < len(opening):
                 move = opening[ply]
@@ -301,8 +327,12 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict) 
 
             if score is not None:
                 sign = 1 if stm == 0 else -1
-                if mate:
-                    return finish(sign if score > 0 else -sign, "mate")
+                # Only the side that is mated ends the game with its score (it
+                # resigns): a mate claimed by the winning side is played out,
+                # or adjudicated below if the other side agrees, since a wrong
+                # mate score (e.g. a bug of the patch tested) would win the game.
+                if mate and score < 0:
+                    return finish(-sign, "mate")
                 last_scores[stm] = (last_scores[stm] + [sign * score])[-4:]
                 sw, sb = last_scores[0], last_scores[1]
                 if len(sw) == 4 and len(sb) == 4:
@@ -310,9 +340,9 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict) 
                         return finish(1, "adjudication")
                     if max(sw + sb) <= -cfg["adjudicate"]:
                         return finish(-1, "adjudication")
+            # The 40-move rule is judged before the next move (a side without
+            # a legal move then loses, as in the engine)
             no_capture = 0 if capture else no_capture + 1
-            if no_capture >= U.NO_CAPTURE_DRAW_PLIES:
-                return finish(0, "40-move rule")
         return finish(0, "max plies")
     except EngineError as e:
         # The engine of the side being asked crashed (or did not answer)
@@ -378,8 +408,10 @@ def play_pair(index: int, seed: int, opts_new: dict | None = None,
     except EngineError:
         new.restart()
         ids, opening = make_opening(new, rng, plies)
-    g1 = play_game(new, base, ids, opening, cfg)      # new has white
-    g2 = play_game(base, new, ids, opening, cfg)      # new has black
+    # The base engine judges the rules: the patch tested does not judge its
+    # own games
+    g1 = play_game(new, base, ids, opening, cfg, referee=base)      # new has white
+    g2 = play_game(base, new, ids, opening, cfg, referee=base)      # new has black
     g1["white"], g1["black"] = "new", "base"
     g2["white"], g2["black"] = "base", "new"
     scores = (g1["result"], -g2["result"])

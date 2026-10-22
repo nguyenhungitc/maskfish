@@ -84,10 +84,16 @@ or an existing local directory, and `ARCH` a plain word.
    * each engine only knows what its side knows: reveals are public, a
      captured dark piece is only told to the capturer (option *full
      information* to tell both);
-   * games end by mate / no legal move, adjudication (mate score, or both
-     sides agreeing on |score| ≥ 3000 internal units for 4 moves each),
-     threefold repetition (perpetual check loses), the 40-move rule, or 400
-     plies;
+   * games end by mate / no legal move, adjudication (the side to move
+     reports that it is mated, or both sides agree on |score| ≥ 3000
+     internal units for 4 moves each; a mate claimed by the winning side
+     alone is played out), the rules of the engine, or 400 plies. The rules
+     are judged by the base engine (command `rule`, so that the patch
+     tested does not judge its own games): third occurrence of a position (a
+     draw, or a loss for perpetual check or perpetual chase), 40-move rule (a
+     draw after 80 plies without capture, or a loss for a side without legal
+     move). Engines built before the command get the same rules from the
+     referee, except that a perpetual chase is a draw;
    * time controls: `10+0.1` (seconds + increment), `nodes=N`, `depth=N`,
      `movetime=MS`. A crash, a timeout or a loss on time loses the game and is
      counted on the test page.

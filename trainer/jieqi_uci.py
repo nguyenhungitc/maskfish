@@ -15,6 +15,19 @@ START_FEN = ("xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w "
 # (Position::rule_judge()); reveals do not reset the counter.
 NO_CAPTURE_DRAW_PLIES = 80
 
+# Verdicts of the engine command "rule", for the side to move
+RULE_VERDICTS = ("none", "draw", "win", "loss", "invalid")
+
+
+def parse_rule(lines: list[str]) -> str | None:
+    """Verdict in the output of "rule" (followed by "isready"), or None for an
+    engine without the command (older binaries print "Unknown command")."""
+    for line in lines:
+        t = line.split()
+        if t[:3] == ["info", "string", "rule"] and len(t) > 3 and t[3] in RULE_VERDICTS:
+            return t[3]
+    return None
+
 
 def square_from_uci(s: str) -> int:
     return F.make_square(ord(s[0]) - ord('a'), int(s[1]))
@@ -90,6 +103,17 @@ class Engine:
             if line.startswith("Checkers:"):
                 in_check = bool(line[len("Checkers:"):].strip())
         return fen, in_check
+
+    def rule(self) -> str | None:
+        """The verdict of the engine's rules in the current position (see
+        RuleJudge), or None if the engine does not have the command."""
+        if getattr(self, "rule_supported", True) is False:
+            return None
+        self.send("rule")
+        self.send("isready")
+        verdict = parse_rule(self.wait_for("readyok"))
+        self.rule_supported = verdict is not None
+        return verdict
 
     def legal_moves(self) -> list[str]:
         self.send("go perft 1")
@@ -182,6 +206,62 @@ def annotate_views(ids: HiddenIdentities, move: str, full_info: bool = False) ->
         return with_id, with_id
     capturer = F.WHITE if captured.islower() else F.BLACK
     return (with_id, base) if capturer == F.WHITE else (base, with_id)
+
+
+class RuleJudge:
+    """Ends games with the rules of the engine. Before each move, the referee
+    asks an engine (the command "rule", Position::rule_judge() of the search)
+    what the rules decide in the position: the third occurrence of a position
+    (a draw, or a loss for perpetual check or perpetual chase) and the 40-move
+    rule (a draw, or a loss for a side without legal move). With engines that
+    do not have the command, the same rules are applied here, except that a
+    perpetual chase is a draw.
+
+    result() returns None (the game goes on) or the result for white
+    (+1 / 0 / -1) with the reason."""
+
+    def __init__(self):
+        self.tracker = RepetitionTracker()
+
+    def result(self, fen: str, in_check: bool, no_capture: int, verdict: str | None,
+               has_legal_moves) -> tuple[int, str] | None:
+        """fen / in_check: the position before the move; verdict: what "rule"
+        printed for it (None: not available); has_legal_moves(): whether the
+        side to move has a legal move (only called when needed)."""
+        white_to_move = fen.split()[1] != "b"
+        stm_sign = 1 if white_to_move else -1
+        rule40 = no_capture >= NO_CAPTURE_DRAW_PLIES
+        if verdict is not None:
+            if verdict in ("none", "invalid"):
+                return None
+            if verdict == "draw":
+                return 0, ("40-move rule" if rule40 else "repetition")
+            reason = "40-move rule" if rule40 else "perpetual check or chase"
+            return (stm_sign if verdict == "win" else -stm_sign), reason
+        r = self.tracker.push(fen, in_check)
+        if r is not None:
+            return r, ("repetition" if r == 0 else "perpetual check")
+        if rule40:
+            return (0, "40-move rule") if has_legal_moves() else (-stm_sign, "40-move rule")
+        return None
+
+
+def referee_verdict(referee, engines, views, stm: int) -> str | None:
+    """Verdict of "rule" for the position before the move of side stm (0 white,
+    1 black). The referee (an engine of the game, normally the reference one,
+    so that a patch under test does not judge its own games) is asked with
+    its own view of the game; if it does not have the command, the engine to
+    move, whose position is already set; None if neither has it."""
+    mover = engines[stm]
+    for e in ([referee] if referee is not None else []) + [mover]:
+        if getattr(e, "rule_supported", True) is False:
+            continue
+        if e is not mover:
+            e.set_position(views[engines.index(e)])
+        verdict = e.rule()
+        if verdict is not None:
+            return verdict
+    return None
 
 
 class RepetitionTracker:

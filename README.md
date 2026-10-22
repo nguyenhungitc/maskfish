@@ -222,6 +222,11 @@ units), the layer stack used, and `final`: the static evaluation after the
 scaling of `evaluate()` (optimism 0; `none` in check). The option `RawScore`
 makes `info ... score cp` report internal units instead of normalized
 centipawns. Both are used by the [trainer](trainer/).
+`rule` prints `info string rule <verdict>`: what the rules of the search
+decide in the current position for the side to move, `none` (the game goes
+on), `draw`, `win` or `loss` (third occurrence of a position with perpetual
+check or chase, 40-move rule). The referees of [fishtest](fishtest/) and
+`trainer/match.py` use it to end games with the engine's rules.
 
 ## Network
 

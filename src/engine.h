@@ -103,6 +103,8 @@ class Engine {
 
     void trace_eval() const;
     void eval_raw() const;
+    // Prints what the rules decide in the current position (see Engine::rule())
+    void rule();
 
     const OptionsMap& get_options() const;
     OptionsMap&       get_options();
