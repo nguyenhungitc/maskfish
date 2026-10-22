@@ -296,6 +296,7 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--loss-power` | 2.5 | Exponent of the loss (AB-JChess: 2) |
 | `--layers`, `--ctx`, `--no-psqt` | | Architecture options of the model (sections 7.4 to 7.6) |
 | `--init-net` | | Start from a `.nnue` file (new optimizer) |
+| `--init-ft-only` | | With `--init-net`, take only its feature transformer and train the layer stacks from scratch (to compare layer stack architectures fairly from the same feature transformer) |
 | `--resume` | | Continue an interrupted run from a checkpoint (optimizer and epoch count included) |
 | `--device` | `cuda` if available | `cpu` to force the CPU |
 | `--threads` | 0 | Number of CPU threads for PyTorch (0 = default) |

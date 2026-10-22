@@ -450,6 +450,9 @@ def main():
                     help="exponent of the loss (AB-JChess: 2)")
     ap.add_argument("--resume", help="checkpoint to resume from (model + optimizer)")
     ap.add_argument("--init-net", help=".nnue file to start from")
+    ap.add_argument("--init-ft-only", action="store_true",
+                    help="take only the feature transformer of --init-net, train the layer "
+                         "stacks from scratch (to compare layer stack architectures fairly)")
     ap.add_argument("--layers", type=int, choices=(1, 2), default=1,
                     help="layer stacks: 1 (default) or 2 (make layers=2, architecture *-l2)")
     ap.add_argument("--ctx", action="store_true",
@@ -556,7 +559,7 @@ def main():
         init_q = S.read_nnue(args.init_net)
         ib, ifl = F.split_arch(init_arch)
         tb, tfl = F.split_arch(target)
-        if S.convertible(init_arch, target, requantize=True) is None:
+        if not args.init_ft_only and S.convertible(init_arch, target, requantize=True) is None:
             # (with another quantization, load_into_model() dequantizes it
             # with its own scales and the weights are clipped into this one's)
             init_q = S.convert(init_q, init_arch, target, requantize=True)
