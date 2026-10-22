@@ -213,9 +213,7 @@ PACKAGE_FORMATS = {(b"ABJCHESSV11" + b"\0" * 5, 110), (b"ABJCHESSV82" + b"\0" * 
 
 
 def cmd_extract(args):
-    """Copies the tables of a network package (port of
-    scripts/extract_v11_probability_tables.py of AB-JChess, GPL-3.0, without
-    the SHA-256 pin)."""
+    """Copies the tables of a network package."""
     with open(args.source, "rb") as f:
         data = f.read()
     version, length = struct.unpack_from("<II", data, 16)

@@ -1,8 +1,7 @@
 # Ranger21 optimizer (train.py --optimizer ranger21).
 #
-# Copied from AB-JChess (https://github.com/lxsgx23/AB-JChess, GPL-3.0,
-# abjchess-nnue-pytorch/ranger21.py), a local copy of the public Ranger21
-# implementation by Less Wright and Nestor Demeure
+# A local copy of the public Ranger21 implementation by Less Wright and
+# Nestor Demeure
 # (https://github.com/lessw2020/Ranger21, Apache-2.0) keeping the AdamW /
 # positive-negative momentum path used by nnue-pytorch, without
 # the optional plotting and Chebyshev dependencies. Change: the settings are

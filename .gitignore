@@ -31,7 +31,6 @@ trainer/.venv/
 trainer/data/
 trainer/runs/
 trainer/nets/
-trainer/AB-JChess/
 trainer/autotune/
 trainer/archive-*/
 # reference engines (binary and network)

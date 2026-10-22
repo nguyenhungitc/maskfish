@@ -1,8 +1,7 @@
 /*
   Maskfish: Jieqi reveal heuristics.
 
-  Ported (subset) from AB-JChess (https://github.com/lxsgx23/AB-JChess),
-  GPL-3.0, by Huorongrong and Laoxu (Kouza).
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by

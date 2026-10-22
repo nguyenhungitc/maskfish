@@ -1,7 +1,6 @@
 /*
   Maskfish, a UCI jieqi engine
   Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
-  Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
 
   Maskfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
