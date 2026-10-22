@@ -1,10 +1,14 @@
-# Builds the engine and runs the tests that need no network: perft
-# (regression values of the move generator) and invalid inputs. The release
-# job builds the published binary, x86-64-universal, and also runs perft with
-# its baseline builds (forced with MASKFISH_UNIVERSAL_ARCH). The sanitizer
-# job also checks gives_check() for every move of a dark piece (debug build).
+# Builds the engine and runs its tests: perft (regression values of the move
+# generator), invalid inputs, and the search. The release job builds the
+# published binary, x86-64-universal, also runs perft with its baseline builds
+# (forced with MASKFISH_UNIVERSAL_ARCH), and checks that the search is
+# reproducible (same node counts after ucinewgame). The sanitizer job checks
+# gives_check() for every move of a dark piece (debug build), and runs the
+# search with the assertions and the sanitizers: bench, and random games with
+# reveals and captures of dark pieces (chance nodes). The search needs the
+# network of refs/assets/net, fetched by the build (`make net`).
 # Runs only for the pro branch (pushes to it and pull requests into it), and
-# only when the change touches src/, trainer/, tests/ or this file.
+# only when the change touches src/, trainer/, fishtest/, tests/ or this file.
 # The runner image is pinned (not ubuntu-latest), so that a new compiler or
 # sanitizer runtime only comes with a deliberate change of this file.
 name: CI
@@ -15,6 +19,7 @@ on:
     paths:
       - "src/**"
       - "trainer/**"
+      - "fishtest/**"
       - "tests/**"
       - ".github/workflows/ci.yml"
   pull_request:
@@ -22,15 +27,20 @@ on:
     paths:
       - "src/**"
       - "trainer/**"
+      - "fishtest/**"
       - "tests/**"
       - ".github/workflows/ci.yml"
 
 jobs:
   release:
-    name: Release binary (x86-64-universal), perft, invalid input
+    name: Release binary (x86-64-universal), perft, invalid input, search
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      # The search tests need the network (fail here rather than build without it)
+      - name: Network
+        working-directory: src
+        run: sh ../scripts/net.sh --require
       # The binary that is published (see binaries.yml): every x86-64 build,
       # the best one selected at startup
       - name: Build
@@ -54,6 +64,14 @@ jobs:
       - name: Invalid input
         working-directory: src
         run: ../tests/invalid_input.sh
+      - name: Bench
+        working-directory: src
+        run: ../tests/signature.sh
+      - name: Reproducible search
+        working-directory: src
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq expect
+          ../tests/reprosearch.sh
 
   sanitizers:
     name: Debug build with ASan and UBSan
@@ -63,6 +81,9 @@ jobs:
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
       - uses: actions/checkout@v7
+      - name: Network
+        working-directory: src
+        run: sh ../scripts/net.sh --require
       - name: Build
         working-directory: src
         run: make -j"$(nproc)" build ARCH=x86-64-avx2 debug=yes sanitize="address undefined"
@@ -72,9 +93,23 @@ jobs:
       - name: Invalid input
         working-directory: src
         run: ../tests/invalid_input.sh
+      # The search with the assertions and the sanitizers (halt_on_error):
+      # one thread, then two (shared TT and histories)
+      - name: Search (bench)
+        working-directory: src
+        shell: bash
+        run: |
+          for threads_depth in "1 8" "2 7"; do
+            ./maskfish bench 16 $threads_depth > bench.log 2>&1 || { cat bench.log; exit 1; }
+            ! grep -E "runtime error|AddressSanitizer|Assertion" bench.log
+            grep "Nodes searched" bench.log
+          done
+      - name: Search (random games with reveals and captures)
+        working-directory: src
+        run: python3 ../tests/random_games.py --games 8 --seed "${{ github.run_number }}"
 
   trainer:
-    name: Trainer scripts compile
+    name: Python scripts compile
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -82,4 +117,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Byte-compile
-        run: python -m py_compile trainer/*.py
+        run: python -m py_compile trainer/*.py fishtest/*.py tests/*.py
