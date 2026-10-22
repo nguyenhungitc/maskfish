@@ -60,11 +60,8 @@ constexpr Bitboard Rank8BB = Rank0BB << (FILE_NB * 8);
 constexpr Bitboard Rank9BB = Rank0BB << (FILE_NB * 9);
 
 
-constexpr Bitboard PawnFileBB = FileABB | FileCBB | FileEBB | FileGBB | FileIBB;
-constexpr Bitboard HalfBB[2]  = {Rank0BB | Rank1BB | Rank2BB | Rank3BB | Rank4BB,
-                                 Rank5BB | Rank6BB | Rank7BB | Rank8BB | Rank9BB};
-constexpr Bitboard PawnBB[2]  = {HalfBB[BLACK] | ((Rank3BB | Rank4BB) & PawnFileBB),
-                                 HalfBB[WHITE] | ((Rank6BB | Rank5BB) & PawnFileBB)};
+constexpr Bitboard HalfBB[2] = {Rank0BB | Rank1BB | Rank2BB | Rank3BB | Rank4BB,
+                                Rank5BB | Rank6BB | Rank7BB | Rank8BB | Rank9BB};
 
 constexpr auto SquareBB = [] {
     std::array<Bitboard, SQUARE_NB> table{};
