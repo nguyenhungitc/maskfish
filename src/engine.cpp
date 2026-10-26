@@ -120,7 +120,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
 
     // Jieqi: chance node over the identity of a dark piece captured by the
     // side the engine searches for (see Search::Worker::hiddenCaptureModel).
-    options.add("HiddenCaptureModel", Option(true));
+    options.add("HiddenCaptureModel", Option(false));
 
     // Jieqi: bonus for safe reveals (quiet moves of dark pieces). Set them all
     // to 0 to disable.
