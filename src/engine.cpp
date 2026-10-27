@@ -134,7 +134,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // ProbCut asks a larger margin (+64) and one ply less for dark captures.
     options.add("ProbCutDarkCapture", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
-    options.add("ChanceBranchDepth", Option(false));
+    options.add("ChanceBranchDepth", Option(true));
     // Reset the correction histories at the start of every search (they are
     // otherwise kept until ucinewgame).
     options.add("CorrHistReset", Option(false));
