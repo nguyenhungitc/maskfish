@@ -135,9 +135,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("ProbCutDarkCapture", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
     options.add("ChanceBranchDepth", Option(true));
-    // Reset the correction histories at the start of every search (they are
-    // otherwise kept until ucinewgame).
-    options.add("CorrHistReset", Option(false));
     // Check the time every 64 nodes instead of 512.
     options.add("FrequentTimeCheck", Option(false));
     // Let the threads vote for the best move only when MultiPV is 1: in

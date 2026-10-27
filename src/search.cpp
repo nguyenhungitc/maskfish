@@ -254,7 +254,7 @@ void Search::Worker::start_searching() {
 
     // UCI option CorrHistReset: forget the correction histories of earlier
     // searches. Each thread resets its part of the shared ones.
-    if (bool(options["CorrHistReset"]))
+    if (false)
         reset_correction_histories();
 
     // Non-main threads go directly to iterative_deepening()
