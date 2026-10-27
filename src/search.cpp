@@ -374,7 +374,6 @@ bool Search::Worker::iterative_deepening() {
     rootObserver       = us;  // also when pondering: the root is then after the expected reply
     hiddenCaptureModel = bool(options["HiddenCaptureModel"]);
     probCutDarkCapture = bool(options["ProbCutDarkCapture"]);
-    ttPenalize         = bool(options["TTPenalize"]);
     chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
     contCorr4Ply       = bool(options["ContCorr4Ply"]);
     multiCutHistory    = bool(options["MultiCutHistory"]);
@@ -1260,12 +1259,6 @@ Value Search::Worker::search(
         // the wrong way: make it easier to replace (UCI option TTPenalize).
         // The bound can also be BOUND_NONE
         // here (the estimate of a chance node, see search()), which is left alone.
-        else if (ttPenalize && depth > 5 && ttData.bound != BOUND_NONE)
-        {
-            assert(!(ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER)));
-
-            ttWriter.penalize(1);
-        }
     }
 
     if (ss->inCheck)

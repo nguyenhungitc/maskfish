@@ -133,8 +133,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Experimental, off by default: test with SPRT.
     // ProbCut asks a larger margin (+64) and one ply less for dark captures.
     options.add("ProbCutDarkCapture", Option(false));
-    // Lower the depth of TT entries that are deep enough but cannot cut.
-    options.add("TTPenalize", Option(false));
     // Search the less likely outcomes of a reveal one ply shallower.
     options.add("ChanceBranchDepth", Option(false));
     // Reset the correction histories at the start of every search (they are

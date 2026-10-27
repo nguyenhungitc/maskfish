@@ -486,7 +486,6 @@ class Worker {
 
     // Experimental search options (see engine.cpp), all off by default
     bool   probCutDarkCapture = false;
-    bool   ttPenalize         = false;
     bool   chanceBranchDepth  = false;
     bool   seekMateOption     = false;
     bool   seekMatePrevScore  = false;
