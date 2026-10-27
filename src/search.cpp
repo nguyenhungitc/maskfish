@@ -254,8 +254,6 @@ void Search::Worker::start_searching() {
 
     // UCI option CorrHistReset: forget the correction histories of earlier
     // searches. Each thread resets its part of the shared ones.
-    if (false)
-        reset_correction_histories();
 
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
@@ -400,7 +398,6 @@ bool Search::Worker::iterative_deepening() {
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
     frequentTimeCheck = bool(options["FrequentTimeCheck"]);
-    revealQsearchEvasions = bool(options["RevealQsearchEvasions"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
@@ -2392,7 +2389,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // a check gets the safe reveal bonus here too, as in search() (in
         // check, the quiescence search tries quiet moves).
         const int revealBonus =
-          revealQsearchEvasions && ss->inCheck ? Reveal::move_bonus(pos, move, revealQuiet) : 0;
+          0;
 
         ss->capturedDark = pos.is_dark(move.to_sq());
         prefetch_correction_histories(ss, pos, move);
