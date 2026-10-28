@@ -377,7 +377,6 @@ bool Search::Worker::iterative_deepening() {
     multiCutHistory    = bool(options["MultiCutHistory"]);
     seekMateOption     = bool(options["SeekMate"]);
     seekMatePrevScore  = bool(options["SeekMatePrevScore"]);
-    pruningTweaks      = bool(options["PruningTweaks"]);
     lmrTweaks          = bool(options["LMRTweaks"]);
     aspirationTweaks = bool(options["AspirationTweaks"]);
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
@@ -1286,9 +1285,9 @@ Value Search::Worker::search(
     // If eval is really low, skip search entirely and return the qsearch value.
     // For PvNodes, we must have a guard against mates being returned.
     // (With Simplifications, the margin is linear in depth.)
-    if ((pruningTweaks ? allNode : !PvNode)
+    if (!PvNode
         && eval < alpha
-                    - (simplifications ? (pruningTweaks ? 511 : 720) * depth
+                    - (simplifications ? 720 * depth
                                        : 1130 + 252 * depth * depth))
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
@@ -1335,15 +1334,14 @@ Value Search::Worker::search(
     // Step 8. Null move search with verification search
     if (cutNode && (ss - 1)->currentMove != Move::null() && eval >= beta
         && ss->staticEval + (nmpFailHighCount ? 50 * ss->priorNMPFailHigh : 0)
-             >= beta - 9 * depth - 50 * (pruningTweaks && improving) + 201
+             >= beta - 9 * depth + 201
         && !excludedMove && pos.major_material(us) && ss->ply >= thisThread->nmpMinPly
-        && (pruningTweaks ? beta >= -2000 : !is_loss(beta)))
+        && !is_loss(beta))
     {
         assert(eval - beta >= 0);
 
-        // Null move dynamic reduction based on depth (and on the static
-        // evaluation with PruningTweaks)
-        Depth R = 7 + depth / 3 + (pruningTweaks ? std::max((ss->staticEval - beta) / 256, 0) : 0);
+        // Null move dynamic reduction based on depth
+        Depth R = 7 + depth / 3;
 
         // UCI option NMPOddThreads: threads with an odd index reduce one ply
         // less, which diversifies the trees searched by the threads
@@ -1416,7 +1414,7 @@ Value Search::Worker::search(
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &thisThread->captureHistory);
         // UCI option ProbCutImprovingDepth: depth - 5 when improving, depth - 3 otherwise
         Depth probCutDepth = probCutImprovingDepth ? std::max(depth - (improving ? 5 : 3), 0)
-                                                   : std::max(depth - 5 - (pruningTweaks && improving), 0);
+                                                   : std::max(depth - 5, 0);
 
         while ((move = mp.next_move()) != Move::none())
         {
@@ -1560,8 +1558,7 @@ moves_loop:  // When in check, search starts here
                 if (!givesCheck && lmrDepth < 18 && (captureFutilityInCheck || !ss->inCheck))
                 {
                     Value futilityValue = ss->staticEval + 307 + 365 * lmrDepth
-                                        + pos.piece_value(move.to_sq()) + 105 * captHist / 491
-                                        + 275 * (pruningTweaks && move.to_sq() == prevSq);
+                                        + pos.piece_value(move.to_sq()) + 105 * captHist / 491;
                     if (futilityValue <= alpha)
                         continue;
                 }

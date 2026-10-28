@@ -157,11 +157,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // of at every node from the current score of the root move (which is
     // -VALUE_INFINITE for the MultiPV lines after the first until searched).
     options.add("SeekMatePrevScore", Option(false));
-    // Small pruning changes: razoring only at expected ALL nodes, more null
-    // move pruning when improving and a reduction growing with the static eval
-    // margin, deeper probcut reduction when improving, and a larger capture
-    // futility margin when recapturing the piece that just moved.
-    options.add("PruningTweaks", Option(false));
     // LMR: reduce quiet moves depending on the static eval vs alpha, and scale
     // up reductions at expected ALL nodes.
     options.add("LMRTweaks", Option(false));

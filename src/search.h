@@ -490,7 +490,6 @@ class Worker {
     // With SeekMatePrevScore: SeekMate active for the line being searched
     // (set in iterative_deepening())
     bool   seekMateLine       = false;
-    bool   pruningTweaks      = false;
     bool   lmrTweaks          = false;
     bool   aspirationTweaks = false;
     bool   mainHistoryDecay = false;
