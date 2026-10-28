@@ -375,7 +375,6 @@ bool Search::Worker::iterative_deepening() {
     chanceBranchDepth  = bool(options["ChanceBranchDepth"]);
     contCorr4Ply       = bool(options["ContCorr4Ply"]);
     multiCutHistory    = bool(options["MultiCutHistory"]);
-    cmhc               = bool(options["CMHC"]);
     seekMateOption     = bool(options["SeekMate"]);
     seekMatePrevScore  = bool(options["SeekMatePrevScore"]);
     pruningTweaks      = bool(options["PruningTweaks"]);
@@ -3684,12 +3683,6 @@ void update_continuation_histories(
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1028}, {2, 583}, {3, 282}, {4, 529}, {5, 130}, {6, 501}}};
 
-    // Counter-Move History Continuity (UCI option CMHC): scale the update
-    // up when the continuation histories updated so far already agree
-    // (are positive), in 1/128 units.
-    static constexpr int CMHCMultipliers[] = {96, 100, 100, 100, 115, 118, 129};
-    int                  positiveCount     = 0;
-
     for (const auto [i, weight] : conthist_bonuses)
     {
         // Only update the first 2 continuation histories if we are in check
@@ -3703,15 +3696,7 @@ void update_continuation_histories(
             auto& entry = (*(ss - i)->continuationHistory)[pc][to];
             // UCI option ContHistOffset: offset for the move one ply back
             const int offset = w.contHistOffset && i == 1 ? 88 : 0;
-            if (w.cmhc)
-            {
-                positiveCount += entry > 0;
-                entry << int(std::int64_t(bonus) * weight * CMHCMultipliers[positiveCount]
-                             / (1024 * 128))
-                           + offset;
-            }
-            else
-                entry << bonus * weight / 1024 + offset;
+            entry << bonus * weight / 1024 + offset;
         }
     }
 }

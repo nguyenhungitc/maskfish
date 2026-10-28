@@ -148,9 +148,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // On a multi-cut, penalize the ttMove in ttMoveHistory and use the cut
     // value to update the correction histories.
     options.add("MultiCutHistory", Option(false));
-    // Counter-Move History Continuity: larger continuation history updates
-    // when the previous continuation histories already agree.
-    options.add("CMHC", Option(false));
     // When the root score suggests a forced mate, futility-prune only at low
     // depth, skip singular extensions and the small ProbCut, reduce null moves
     // less, and reduce checks less and other moves more, to find the mate faster.
