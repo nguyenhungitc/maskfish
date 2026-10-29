@@ -372,6 +372,7 @@ bool Search::Worker::iterative_deepening() {
     multiCutHistory    = bool(options["MultiCutHistory"]);
     cmhc               = bool(options["CMHC"]);
     seekMateOption     = bool(options["SeekMate"]);
+    seekMatePrevScore  = bool(options["SeekMatePrevScore"]);
     pruningTweaks      = bool(options["PruningTweaks"]);
     lmrTweaks          = bool(options["LMRTweaks"]);
     failHighRecoveryOption = bool(options["FailHighRecovery"]);
@@ -471,6 +472,11 @@ bool Search::Worker::iterative_deepening() {
     {
         rootDepth++;
 
+        // UCI option SeekMate: score from which the search looks for a forced
+        // mate. Do not tune these values; they are not intended for playing
+        // strength.
+        const int seekMateThreshold = 750 + 220000 / (rootDepth * rootDepth);
+
         // Age out PV variability metric and signal the start of a new iteration
         if (mainThread)
         {
@@ -508,6 +514,17 @@ bool Search::Worker::iterative_deepening() {
             Value avg = rootMoves[pvIdx].averageScore;
             alpha     = std::max(avg - delta, -VALUE_INFINITE);
             beta      = std::min(avg + delta, VALUE_INFINITE);
+
+            // UCI options SeekMate and SeekMatePrevScore: when the score of this
+            // line in the previous iteration suggests a forced mate, prune and
+            // extend less to find it. Decided once per line and iteration from
+            // the previous score: the current score of a root move is
+            // -VALUE_INFINITE until the move has been searched in this
+            // iteration (always the case for the lines after the first in
+            // MultiPV), which would look like a mate score.
+            seekMateLine = seekMateOption && seekMatePrevScore
+                        && rootMoves[pvIdx].previousScore != -VALUE_INFINITE
+                        && std::abs(rootMoves[pvIdx].previousScore) >= seekMateThreshold;
 
             // Adjust optimism based on root move's averageScore
             optimism[us]  = 74 * avg / (std::abs(avg) + 79);
@@ -892,9 +909,13 @@ Value Search::Worker::search(
     // UCI option SeekMate: when the root score is high enough (relative to the
     // root depth) to suggest a forced mate, prune and extend less to find it.
     // Do not tune these values; they are not intended for playing strength.
-    const bool seekMate = seekMateOption && rootDepth > 0
-                       && std::abs(rootMoves[pvIdx].score)
-                            >= 750 + 220000 / (rootDepth * rootDepth);
+    // With SeekMatePrevScore, decided once per line in iterative_deepening();
+    // otherwise from the current score of the root move of the line.
+    const bool seekMate = seekMatePrevScore
+                          ? seekMateLine
+                          : seekMateOption && rootDepth > 0
+                              && std::abs(rootMoves[pvIdx].score)
+                                   >= 750 + 220000 / (rootDepth * rootDepth);
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)

@@ -162,6 +162,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // depth, skip singular extensions and the small ProbCut, reduce null moves
     // less, and reduce checks less and other moves more, to find the mate faster.
     options.add("SeekMate", Option(false));
+    // With SeekMate: decide whether to seek a mate once per PV line and
+    // iteration, from the score of the line in the previous iteration, instead
+    // of at every node from the current score of the root move (which is
+    // -VALUE_INFINITE for the MultiPV lines after the first until searched).
+    options.add("SeekMatePrevScore", Option(false));
     // Small pruning changes: razoring only at expected ALL nodes, more null
     // move pruning when improving and a reduction growing with the static eval
     // margin, deeper probcut reduction when improving, and a larger capture

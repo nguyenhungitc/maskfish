@@ -481,6 +481,10 @@ class Worker {
     bool   ttPenalize         = false;
     bool   chanceBranchDepth  = false;
     bool   seekMateOption     = false;
+    bool   seekMatePrevScore  = false;
+    // With SeekMatePrevScore: SeekMate active for the line being searched
+    // (set in iterative_deepening())
+    bool   seekMateLine       = false;
     bool   pruningTweaks      = false;
     bool   lmrTweaks          = false;
     bool   failHighRecoveryOption = false;
