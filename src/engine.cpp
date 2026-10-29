@@ -285,6 +285,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // SEE pruning of captures and checks: the capture history term of the
     // margin is not clamped
     options.add("SimpleSeeMargin", Option(false));
+    // The node is also considered improving when the static evaluation is at
+    // least beta (instead of beta + 108)
+    options.add("ImprovingAtBeta", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

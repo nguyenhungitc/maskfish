@@ -515,6 +515,7 @@ class Worker {
     bool   tripleMarginPly = false;
     bool   captureFutilityInCheck = false;
     bool   simpleSeeMargin = false;
+    bool   improvingAtBeta = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

@@ -407,6 +407,7 @@ bool Search::Worker::iterative_deepening() {
     tripleMarginPly = bool(options["TripleMarginPly"]);
     captureFutilityInCheck = bool(options["CaptureFutilityInCheck"]);
     simpleSeeMargin = bool(options["SimpleSeeMargin"]);
+    improvingAtBeta = bool(options["ImprovingAtBeta"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1323,7 +1324,8 @@ Value Search::Worker::search(
         }
     }
 
-    improving |= ss->staticEval >= beta + 108;
+    // UCI option ImprovingAtBeta: from beta itself instead of beta + 108
+    improving |= ss->staticEval >= beta + (improvingAtBeta ? 0 : 108);
 
     // Step 9. Internal iterative reductions
     // For PV nodes without a ttMove as well as for deep enough cutNodes, we decrease depth.
