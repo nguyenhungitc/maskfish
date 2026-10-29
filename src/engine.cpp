@@ -280,6 +280,8 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Singular extensions: the triple extension margin is lowered beyond the
     // root depth (instead of 1.5 times the root depth), like the double margin
     options.add("TripleMarginPly", Option(false));
+    // Futility pruning of captures also when the side to move is in check
+    options.add("CaptureFutilityInCheck", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

@@ -405,6 +405,7 @@ bool Search::Worker::iterative_deepening() {
     simpleLMRResearch = bool(options["SimpleLMRResearch"]);
     seNoCompletedDepth = bool(options["SENoCompletedDepth"]);
     tripleMarginPly = bool(options["TripleMarginPly"]);
+    captureFutilityInCheck = bool(options["CaptureFutilityInCheck"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1483,7 +1484,7 @@ moves_loop:  // When in check, search starts here
                   thisThread->captureHistory[movedPiece][move.to_sq()][pos.capture_type(move.to_sq())];
 
                 // Futility pruning for captures
-                if (!givesCheck && lmrDepth < 18 && !ss->inCheck)
+                if (!givesCheck && lmrDepth < 18 && (captureFutilityInCheck || !ss->inCheck))
                 {
                     Value futilityValue = ss->staticEval + 307 + 365 * lmrDepth
                                         + pos.piece_value(move.to_sq()) + 105 * captHist / 491
