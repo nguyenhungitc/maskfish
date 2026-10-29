@@ -341,6 +341,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes: when every outcome is beyond +10000 (resp. -10000), the side
     // to move counts on the worst (resp. best) one instead of the average
     options.add("ChanceFarMin", Option(false));
+    // Chance nodes: the window of each outcome is narrowed to the values that can
+    // still change the result, given the bounds of the other outcomes (Star1)
+    options.add("ChanceChildWindow", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

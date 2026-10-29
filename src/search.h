@@ -526,6 +526,7 @@ class Worker {
     bool   tmReductionInterp = false;
     bool   simpleEvalDiffBonus = false;
     bool   chanceFarMin = false;
+    bool   chanceChildWindow = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
@@ -558,6 +559,18 @@ class Worker {
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
     Value aggregate_tables(
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+
+    // Window of one outcome of a chance node (UCI option ChanceChildWindow)
+    void chance_child_window(Value*     lo,
+                             Value*     hi,
+                             const int* counts,
+                             int        n,
+                             int        total,
+                             int        i,
+                             Value      alpha,
+                             Value      beta,
+                             Value&     a,
+                             Value&     b) const;
 
     // Searches the outcomes of a chance node, see search.cpp
     template<typename SearchOutcome>

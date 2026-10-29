@@ -418,6 +418,7 @@ bool Search::Worker::iterative_deepening() {
     tmReductionInterp = bool(options["TMReductionInterp"]);
     simpleEvalDiffBonus = bool(options["SimpleEvalDiffBonus"]);
     chanceFarMin = bool(options["ChanceFarMin"]);
+    chanceChildWindow = bool(options["ChanceChildWindow"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -2631,9 +2632,10 @@ Value Search::Worker::aggregate_tables(
 // the side to move at the chance node. The outcomes are sorted from the most
 // to the least likely.
 //
-// Every outcome is searched with the window of the node, so a value returned
-// by an outcome is only a lower bound if it failed high, an upper bound if it
-// failed low. The proven bounds of every outcome are kept, and the node fails
+// Every outcome is searched with the window of the node (with the UCI option
+// ChanceChildWindow, a part of it, see chance_child_window()), so a value
+// returned by an outcome is only a lower bound if it failed high, an upper
+// bound if it failed low. The proven bounds of every outcome are kept, and the node fails
 // high (low) as soon as the aggregate of the lower (upper) bounds, where an
 // outcome not searched yet counts as a loss (win), proves it (Star1, Ballard
 // 1983). This also skips the remaining outcomes when the first ones are
@@ -2668,7 +2670,14 @@ Value Search::Worker::chance_node(Stack*          ss,
 
     for (int i = 0; i < n; ++i)
     {
-        const Value v = values[i] = searchOutcome(i, alpha, beta);
+        // UCI option ChanceChildWindow: the window of the outcome is narrowed
+        // to the values that can still change the result (see
+        // chance_child_window()). Only with a window wider than a null window.
+        Value a = alpha, b = beta;
+        if (chanceChildWindow && beta - alpha > 1)
+            chance_child_window(lo.data(), hi.data(), counts, n, total, i, alpha, beta, a, b);
+
+        const Value v = values[i] = searchOutcome(i, a, b);
 
         // The search was stopped: the remaining outcomes would only return
         // meaningless values, and the caller discards this result anyway.
@@ -2678,9 +2687,9 @@ Value Search::Worker::chance_node(Stack*          ss,
             return VALUE_ZERO;
         }
 
-        if (v <= alpha)
+        if (v <= a)
             hi[i] = v;
-        else if (v >= beta)
+        else if (v >= b)
             lo[i] = v;
         else
         {
@@ -2716,6 +2725,74 @@ Value Search::Worker::chance_node(Stack*          ss,
     }
 
     return VALUE_ZERO;  // Unreachable
+}
+
+
+// Narrows the window (alpha, beta) of outcome i of a chance node to (a, b) with
+// alpha <= a < b <= beta (Star1, Ballard 1983): a is the largest value such that
+// a fail low of the outcome at or below a proves, with the upper bounds hi[] of
+// the other outcomes, that the node fails low; b the smallest value such that
+// a fail high at or above b proves that it fails high. Both are found by
+// bisection, the aggregate of bounds being non-decreasing in every outcome. The
+// window is only narrowed, never widened beyond (alpha, beta), so the search of
+// an outcome never costs more than without it. lo[] and hi[] are restored.
+void Search::Worker::chance_child_window(Value*     lo,
+                                         Value*     hi,
+                                         const int* counts,
+                                         int        n,
+                                         int        total,
+                                         int        i,
+                                         Value      alpha,
+                                         Value      beta,
+                                         Value&     a,
+                                         Value&     b) const {
+
+    const Value savedLo = lo[i], savedHi = hi[i];
+
+    auto upperWith = [&](Value v) {
+        hi[i] = v;
+        return aggregate_chance(hi, counts, n, total, ChanceBound::Upper);
+    };
+    auto lowerWith = [&](Value v) {
+        lo[i] = v;
+        return aggregate_chance(lo, counts, n, total, ChanceBound::Lower);
+    };
+
+    a = alpha;
+    if (upperWith(alpha) <= alpha)
+    {
+        Value l = alpha, r = beta - 1;  // upperWith(l) <= alpha
+        while (l < r)
+        {
+            const Value m = l + (r - l + 1) / 2;
+            if (upperWith(m) <= alpha)
+                l = m;
+            else
+                r = m - 1;
+        }
+        a = l;
+    }
+    hi[i] = savedHi;
+
+    b = beta;
+    if (lowerWith(beta) >= beta)
+    {
+        Value l = alpha + 1, r = beta;  // lowerWith(r) >= beta
+        while (l < r)
+        {
+            const Value m = l + (r - l) / 2;
+            if (lowerWith(m) >= beta)
+                r = m;
+            else
+                l = m + 1;
+        }
+        b = r;
+    }
+    lo[i] = savedLo;
+
+    // At a, the lower bound of the node is at most its upper bound, at most
+    // alpha < beta: b > a
+    assert(alpha <= a && a < b && b <= beta);
 }
 
 
