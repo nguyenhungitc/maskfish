@@ -271,6 +271,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR: the reduction decrease of the TT move is not applied when the next
     // ply has many fail highs, and does not take the reduction below 0
     options.add("TTMoveReductionFloor", Option(false));
+    // LMR re-search: the same branch for every fail high of the reduced search
+    // (also when it was not reduced), searching deeper above bestValue + 60
+    options.add("SimpleLMRResearch", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

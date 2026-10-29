@@ -402,6 +402,7 @@ bool Search::Worker::iterative_deepening() {
     lmrPvNodeSelf = bool(options["LMRPvNodeSelf"]);
     noQuietMoveStreak = bool(options["NoQuietMoveStreak"]);
     ttMoveReductionFloor = bool(options["TTMoveReductionFloor"]);
+    simpleLMRResearch = bool(options["SimpleLMRResearch"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1735,7 +1736,9 @@ moves_loop:  // When in check, search starts here
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Usually doing more shallower searches
             // doesn't scale well to longer TCs
-            if (value > alpha && d < newDepth)
+            // UCI option SimpleLMRResearch: one branch for every fail high of
+            // the reduced search, and a constant margin for searching deeper
+            if (value > alpha && (simpleLMRResearch || d < newDepth))
             {
                 // Adjust full-depth search based on LMR results - if the result was
                 // good enough search deeper, if it was bad enough search shallower.
@@ -1744,7 +1747,8 @@ moves_loop:  // When in check, search starts here
                 // re-searches (one per ply, frequent with the noisy values of the
                 // chance nodes) do not reduce the depth at all.
                 const bool doDeeperSearch =
-                  notTooDeep && value > (bestValue + 52 + 2 * newDepth);
+                  simpleLMRResearch ? notTooDeep && d < newDepth && value > bestValue + 60
+                                    : notTooDeep && value > (bestValue + 52 + 2 * newDepth);
                 const bool doShallowerSearch = value < bestValue + 9;
 
                 newDepth += doDeeperSearch - doShallowerSearch;
@@ -1756,7 +1760,7 @@ moves_loop:  // When in check, search starts here
                 // Post LMR continuation history updates
                 update_continuation_histories(*this, ss, movedPiece, move.to_sq(), 1533);
             }
-            else if (value > alpha && value < bestValue + 9)
+            else if (!simpleLMRResearch && value > alpha && value < bestValue + 9)
                 newDepth--;
         }
 
