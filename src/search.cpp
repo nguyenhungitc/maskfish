@@ -400,6 +400,7 @@ bool Search::Worker::iterative_deepening() {
     statScoreNoOffset = bool(options["StatScoreNoOffset"]);
     noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
     lmrPvNodeSelf = bool(options["LMRPvNodeSelf"]);
+    noQuietMoveStreak = bool(options["NoQuietMoveStreak"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1659,7 +1660,12 @@ moves_loop:  // When in check, search starts here
         else if ((ss + 1)->cutoffCnt > 2)
             r += 1449 + allNode * 968;
 
-        r += (ss + 1)->quietMoveStreak * 49;
+        // UCI option NoQuietMoveStreak: no term for the streak of quiet moves,
+        // a larger base reduction instead
+        if (noQuietMoveStreak)
+            r += 286;
+        else
+            r += (ss + 1)->quietMoveStreak * 49;
 
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)

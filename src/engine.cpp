@@ -265,6 +265,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR: the extra ply of the reduced search is given at PV nodes (instead of
     // at nodes whose parent is a PV node)
     options.add("LMRPvNodeSelf", Option(false));
+    // LMR: no reduction term for the number of consecutive quiet moves leading
+    // to the node; the base reduction is raised by 286 instead
+    options.add("NoQuietMoveStreak", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

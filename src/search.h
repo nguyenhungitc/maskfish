@@ -508,6 +508,7 @@ class Worker {
     bool   statScoreNoOffset = false;
     bool   noTTMoveHistoryLMR = false;
     bool   lmrPvNodeSelf = false;
+    bool   noQuietMoveStreak = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
