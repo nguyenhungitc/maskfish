@@ -189,9 +189,11 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
     assert(!pos.checkers());
 
     firstStage = PROBCUT;
-    stage      = ttm && pos.legal(ttm) && pos.capture(ttm) && pos.see_ge(ttm, threshold)
-                 ? TT
-                 : INIT_FIRST_STAGE;
+    // With the UCI option ProbCutTTNoSee, a TT capture is tried whatever its SEE
+    stage = ttm && pos.capture(ttm) && pos.legal(ttm)
+                && (probCutTTNoSee || pos.see_ge(ttm, threshold))
+            ? TT
+            : INIT_FIRST_STAGE;
 }
 
 // Assigns a numerical value to each move in a list, used for sorting.

@@ -54,6 +54,8 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+    static inline bool probCutTTNoSee = false;  // UCI option ProbCutTTNoSee
+
     static inline bool noEvasionLowPly = false;  // UCI option NoEvasionLowPly
 
     static inline bool threatByLesserValue = false;  // UCI option ThreatByLesserValue

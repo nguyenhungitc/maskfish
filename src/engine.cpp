@@ -323,6 +323,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     MovePicker::noEvasionLowPly = bool(o);
                     return std::nullopt;
                 }));
+    // ProbCut tries the TT move first when it is a capture, without testing its
+    // SEE against the ProbCut threshold
+    options.add("ProbCutTTNoSee", Option(false, [](const Option& o) {
+                    MovePicker::probCutTTNoSee = bool(o);
+                    return std::nullopt;
+                }));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
