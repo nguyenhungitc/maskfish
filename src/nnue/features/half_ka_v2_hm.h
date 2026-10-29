@@ -205,6 +205,45 @@ class HalfKAv2_hm {
 
     static constexpr std::uint64_t BalanceEncoding = 0xa4a92a74e989d3a7ULL;
 
+    // MidMirrorEncoding adds up the squares of the pawns of a flank, so two
+    // different pairs of pawns with the same sum (e.g. squares 35 + 15 and
+    // 13 + 37) leave it at BalanceEncoding although the position is not
+    // symmetric: neither the position nor its mirror image is then mirrored,
+    // and their evaluations differ. MidPawnEncoding breaks such ties: it
+    // encodes the base square x (0..39) of a pawn as 82 * x + x * x % 41,
+    // which keeps the order of the sums (the first term) while different
+    // pairs with the same sum get different quadratic residues (41 is prime
+    // and x < 41). With balanced pawn counts a flank has at most two pawns,
+    // so the difference between the flanks stays within +-6327 around
+    // PawnBalanceEncoding. It is only compared when MidMirrorEncoding is
+    // balanced.
+    static constexpr auto MidPawnEncoding = [] {
+        std::array<std::array<std::uint64_t, SQUARE_NB>, PIECE_NB> enc{};
+        for (int c = WHITE; c <= BLACK; ++c)
+            for (int r = RANK_0; r < RANK_NB; ++r)
+                for (int f = FILE_A; f < FILE_NB; ++f)
+                {
+                    std::uint64_t e = 0;
+                    if (f != FILE_E)
+                    {
+                        const int           r_ = c == WHITE ? r : RANK_9 - r;
+                        const int           f_ = f < FILE_E ? f : FILE_I - f;
+                        const std::uint64_t x  = std::uint64_t((FILE_D - f_) * 10 + r_);
+                        e = 82 * x + x * x % 41;
+                        e = f < FILE_E ? e : std::uint64_t(-std::int64_t(e));
+                    }
+                    enc[make_piece(Color(c), PAWN)][make_square(File(f), Rank(r))] = e;
+                }
+        return enc;
+    }();
+
+    static constexpr std::uint64_t PawnBalanceEncoding = 1ULL << 32;
+
+    // UCI option MidMirrorPawnTieBreak: compare MidPawnEncoding when
+    // MidMirrorEncoding is balanced (the network must be trained the same way:
+    // trainer option --mid-pawn-tiebreak)
+    static inline bool midPawnTieBreak = false;
+
     static bool requires_mid_mirror(const Position& pos, Color c);
     static int  make_attack_bucket(const Position& pos, Color c);
 #endif

@@ -72,9 +72,11 @@ META_DTYPE_BLEND = np.dtype(META_DTYPE.descr + [("blend", np.uint8)])
 CHUNK_LINES = 16384
 
 
-def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: bool):
+def _init_worker(arch: str, max_score: int, score_scale: float, jieqi_material: bool,
+                 mid_mirror: dict | None = None):
     global _MAX_SCORE, _SCORE_SCALE, _JIEQI_MATERIAL
     F.set_arch(arch)
+    F.set_mid_mirror_options(**(mid_mirror or {}))
     _MAX_SCORE = max_score
     _SCORE_SCALE = score_scale
     _JIEQI_MATERIAL = jieqi_material
@@ -235,12 +237,15 @@ def main():
     ap.add_argument("--jieqi-material", action="store_true",
                     help="the data was generated with the engine option JieqiMaterial=true: "
                          "store the material evaluate() then uses (default: major_material)")
+    F.add_mid_mirror_args(ap)
     ap.add_argument("--max-dups", type=int, default=0, metavar="N",
                     help="keep at most N copies of each position (default: all)")
     args = ap.parse_args()
     if args.max_dups < 0:
         ap.error("--max-dups must be positive")
     F.set_arch(args.arch)
+    F.apply_mid_mirror_args(args)
+    mid_mirror = {"pawn_tiebreak": args.mid_pawn_tiebreak}
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
@@ -250,7 +255,7 @@ def main():
     examples = []
     with mp.Pool(args.workers, initializer=_init_worker,
                  initargs=(args.arch, args.max_score, args.score_scale,
-                           args.jieqi_material)) as pool:
+                           args.jieqi_material, mid_mirror)) as pool:
         chunks = read_chunks(args.inputs)
         if args.max_dups:
             # first pass: the positions to keep, chunk by chunk

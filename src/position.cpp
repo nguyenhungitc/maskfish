@@ -167,6 +167,7 @@ Position& Position::set(const string& fenStr, StateInfo* si) {
     std::memset(this, 0, sizeof(Position));
 #ifdef JIEQI_NNUE_ATT
     midEncoding[WHITE] = midEncoding[BLACK] = Eval::NNUE::FeatureSet::BalanceEncoding;
+    midPawnEncoding[WHITE] = midPawnEncoding[BLACK] = Eval::NNUE::FeatureSet::PawnBalanceEncoding;
 #endif
 
     std::memset(si, 0, sizeof(StateInfo));

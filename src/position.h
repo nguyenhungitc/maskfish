@@ -203,6 +203,7 @@ class Position {
     PieceType captured_type() const;
 #ifdef JIEQI_NNUE_ATT
     uint64_t mid_encoding(Color c) const { return midEncoding[c]; }
+    uint64_t mid_pawn_encoding(Color c) const { return midPawnEncoding[c]; }
 #endif
 
     const int&                         rest_piece(Piece pc) const;
@@ -267,7 +268,8 @@ class Position {
     Color      sideToMove;
     int        restPieces[PIECE_NB];
 #ifdef JIEQI_NNUE_ATT
-    uint64_t   midEncoding[COLOR_NB];  // see HalfKAv2_hm::MidMirrorEncoding
+    uint64_t   midEncoding[COLOR_NB];      // see HalfKAv2_hm::MidMirrorEncoding
+    uint64_t   midPawnEncoding[COLOR_NB];  // see HalfKAv2_hm::MidPawnEncoding
 #endif
 
     // Bloom filter for fast repetition filtering
@@ -506,6 +508,7 @@ inline void Position::put_piece(Piece pc, Square s) {
     pieceCount[make_piece(color_of(pc), ALL_PIECES)]++;
 #ifdef JIEQI_NNUE_ATT
     midEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][s];
+    midPawnEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidPawnEncoding[pc][s];
 #endif
 }
 
@@ -520,6 +523,7 @@ inline void Position::remove_piece(Square s) {
     pieceCount[make_piece(color_of(pc), ALL_PIECES)]--;
 #ifdef JIEQI_NNUE_ATT
     midEncoding[color_of(pc)] -= Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][s];
+    midPawnEncoding[color_of(pc)] -= Eval::NNUE::Features::HalfKAv2_hm::MidPawnEncoding[pc][s];
 #endif
 }
 
@@ -537,6 +541,8 @@ inline void Position::move_piece(Square from, Square to) {
 #ifdef JIEQI_NNUE_ATT
     midEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][to]
                                - Eval::NNUE::Features::HalfKAv2_hm::MidMirrorEncoding[pc][from];
+    midPawnEncoding[color_of(pc)] += Eval::NNUE::Features::HalfKAv2_hm::MidPawnEncoding[pc][to]
+                                   - Eval::NNUE::Features::HalfKAv2_hm::MidPawnEncoding[pc][from];
 #endif
 }
 

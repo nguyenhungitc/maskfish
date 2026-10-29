@@ -67,11 +67,13 @@ def main():
                     help="architecture of the random test network (ignored with --net)")
     ap.add_argument("--jieqi-material", action="store_true",
                     help="check the evaluate() scaling with the engine option JieqiMaterial=true")
+    F.add_mid_mirror_args(ap)
     ap.add_argument("--eval-scaling", choices=E.SCALINGS, default="complexity",
                     help="check the evaluate() scaling with the engine option EvalScaling "
                          "(train.py --eval-scaling)")
     args = ap.parse_args()
     F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
+    mid_mirror_opts = F.apply_mid_mirror_args(args)
     print(f"arch {F.ARCH}" + (f", EvalScaling {args.eval_scaling}"
                               if args.eval_scaling != "complexity" else ""))
 
@@ -113,6 +115,7 @@ def main():
     opts = {"EvalFile": os.path.abspath(net), "JieqiMaterial": str(args.jieqi_material).lower()}
     if args.eval_scaling != "complexity":       # (older engines do not have the option)
         opts["EvalScaling"] = args.eval_scaling.capitalize()
+    opts.update(mid_mirror_opts)                # (only set when used)
     engine = U.Engine(args.engine, opts)
     fens = random_positions(engine, args.positions, args.seed)
 

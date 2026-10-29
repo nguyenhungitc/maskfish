@@ -54,9 +54,21 @@ template IndexType HalfKAv2_hm::make_dark_rest_index<BLACK>(Piece pc, int bucket
 
 #ifdef JIEQI_NNUE_ATT
 bool HalfKAv2_hm::requires_mid_mirror(const Position& pos, Color c) {
+    // Encodings compared in order: MidMirrorEncoding, then (UCI option
+    // MidMirrorPawnTieBreak) MidPawnEncoding, for the pawn pairs with the same
+    // sum of squares
+    const bool tieBreak = midPawnTieBreak;
+    const auto below    = [&](Color side) {
+        return pos.mid_encoding(side) < BalanceEncoding
+            || (tieBreak && pos.mid_encoding(side) == BalanceEncoding
+                && pos.mid_pawn_encoding(side) < PawnBalanceEncoding);
+    };
+    const auto balanced = [&](Color side) {
+        return pos.mid_encoding(side) == BalanceEncoding
+            && (!tieBreak || pos.mid_pawn_encoding(side) == PawnBalanceEncoding);
+    };
     return ((1ULL << 63) & pos.mid_encoding(c) & pos.mid_encoding(~c))
-        && (pos.mid_encoding(c) < BalanceEncoding
-            || (pos.mid_encoding(c) == BalanceEncoding && pos.mid_encoding(~c) < BalanceEncoding));
+        && (below(c) || (balanced(c) && below(~c)));
 }
 
 // Visible (revealed) attacking material of one side

@@ -285,6 +285,15 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // The squares attacked by the opponent are cached in the StateInfo
     // and used to generate and test king moves. No functional change (bench
     // identical): compare the speed with and without.
+#ifdef JIEQI_NNUE_ATT
+    // Mid mirror (make nnue=att): tell apart the pawn pairs with the same sum
+    // of squares. The network and the prepared training data must use the
+    // same setting (trainer option --mid-pawn-tiebreak).
+    options.add("MidMirrorPawnTieBreak", Option(false, [](const Option& o) {
+                    Eval::NNUE::FeatureSet::midPawnTieBreak = bool(o);
+                    return std::nullopt;
+                }));
+#endif
     options.add("ThreatCache", Option(false, [](const Option& o) {
                     Position::useThreatCache = bool(o);
                     return std::nullopt;

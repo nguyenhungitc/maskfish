@@ -317,22 +317,72 @@ def _mid_mirror_encoding(pc: int, s: int) -> int:
 MID_MIRROR_ENCODING = [[_mid_mirror_encoding(pc, s) if 0 < (pc & 7) <= KING else 0
                         for s in range(SQUARE_NB)] for pc in range(16)]
 
+# Tie-break of the pawns (engine: HalfKAv2_hm::MidPawnEncoding): 82 * x + x * x % 41
+# for the base square x of a pawn, so that two pairs of pawns with the same
+# sum of squares are told apart. Compared only when MID_MIRROR_ENCODING is
+# balanced, and only with MID_PAWN_TIEBREAK (engine option MidMirrorPawnTieBreak).
+PAWN_BALANCE_ENCODING = 1 << 32
+MID_PAWN_TIEBREAK = False
 
-def mid_encodings(pos) -> list[int]:
-    """Sum of the encodings of the pieces of each side (dark pieces count as
-    the kind of their square), like Position::midEncoding in the engine."""
+
+def set_mid_mirror_options(pawn_tiebreak: bool | None = None):
+    """Mid mirror variants (the "att" architectures). They must match the
+    engine options of the same name and are not recorded in the network file:
+    pawn_tiebreak = MidMirrorPawnTieBreak."""
+    global MID_PAWN_TIEBREAK
+    if pawn_tiebreak is not None:
+        MID_PAWN_TIEBREAK = pawn_tiebreak
+
+
+def add_mid_mirror_args(ap):
+    """Command line options of set_mid_mirror_options()."""
+    ap.add_argument("--mid-pawn-tiebreak", action="store_true",
+                    help="att architectures: tell apart the pawn pairs with the same sum of "
+                         "squares in the mid mirror (engine option MidMirrorPawnTieBreak=true)")
+
+
+def apply_mid_mirror_args(args) -> dict:
+    """Sets the options from parsed arguments; returns the matching engine options."""
+    set_mid_mirror_options(pawn_tiebreak=args.mid_pawn_tiebreak)
+    return {"MidMirrorPawnTieBreak": "true"} if args.mid_pawn_tiebreak else {}
+
+
+def _mid_pawn_encoding(pc: int, s: int) -> int:
+    c, pt = pc >> 3, pc & 7
+    f, r = s % FILE_NB, s // FILE_NB
+    if pt != PAWN or f == 4:
+        return 0
+    r_ = r if c == WHITE else 9 - r
+    f_ = f if f < 4 else 8 - f
+    x = (3 - f_) * 10 + r_
+    e = 82 * x + x * x % 41
+    return e if f < 4 else (-e) & MASK64
+
+
+MID_PAWN_ENCODING = [[_mid_pawn_encoding(pc, s) for s in range(SQUARE_NB)] for pc in range(16)]
+
+
+def mid_encodings(pos) -> list[tuple[int, int]]:
+    """(MID_MIRROR_ENCODING sum, MID_PAWN_ENCODING sum) of the pieces of each
+    side (dark pieces count as the kind of their square), like
+    Position::midEncoding and Position::midPawnEncoding in the engine."""
     enc = [BALANCE_ENCODING, BALANCE_ENCODING]
+    pawn = [PAWN_BALANCE_ENCODING, PAWN_BALANCE_ENCODING]
     for s in range(SQUARE_NB):
         pc = pos.board[s]
         if pc:
             enc[pc >> 3] = (enc[pc >> 3] + MID_MIRROR_ENCODING[pc][s]) & MASK64
-    return enc
+            pawn[pc >> 3] = (pawn[pc >> 3] + MID_PAWN_ENCODING[pc][s]) & MASK64
+    return [(enc[0], pawn[0]), (enc[1], pawn[1])]
 
 
-def requires_mid_mirror(enc: list[int], c: int) -> bool:
+def requires_mid_mirror(enc: list[tuple[int, int]], c: int) -> bool:
+    balance = (BALANCE_ENCODING, PAWN_BALANCE_ENCODING)
     e, o = enc[c], enc[1 - c]
-    return bool((1 << 63) & e & o) and (e < BALANCE_ENCODING
-                                       or (e == BALANCE_ENCODING and o < BALANCE_ENCODING))
+    if not MID_PAWN_TIEBREAK:       # the main encoding only
+        balance, e, o = balance[:1], e[:1], o[:1]
+    # tuples compare in order: the main encoding, then the pawn tie-break
+    return bool((1 << 63) & e[0] & o[0]) and (e < balance or (e == balance and o < balance))
 
 
 def attack_bucket(pos, c: int) -> int:

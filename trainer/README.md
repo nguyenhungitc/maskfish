@@ -731,6 +731,12 @@ holds no mirrored copies (section 4, step 3). About 1 GB of GPU memory and
 750 MB per checkpoint; virtual features (step 4) matter more with its 24
 buckets.
 
+Variants of the mid mirror, to be tested with an SPRT: `prepare_data.py
+--mid-pawn-tiebreak` (engine option `MidMirrorPawnTieBreak=true`) also tells
+apart pairs of pawns with the same sum of squares. The prepared data, the
+network and the engine must use the same setting, which the network file
+does not record; `verify.py` takes the same option.
+
 ### 7.3. Threat features (`threats`, `att-threats`)
 
 A second feature transformer reads 92,711 threat features (a piece attacking
