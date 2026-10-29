@@ -408,6 +408,7 @@ bool Search::Worker::iterative_deepening() {
     captureFutilityInCheck = bool(options["CaptureFutilityInCheck"]);
     simpleSeeMargin = bool(options["SimpleSeeMargin"]);
     improvingAtBeta = bool(options["ImprovingAtBeta"]);
+    probCutImprovingDepth = bool(options["ProbCutImprovingDepth"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1346,7 +1347,9 @@ Value Search::Worker::search(
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &thisThread->captureHistory);
-        Depth      probCutDepth = std::max(depth - 5 - (pruningTweaks && improving), 0);
+        // UCI option ProbCutImprovingDepth: depth - 5 when improving, depth - 3 otherwise
+        Depth probCutDepth = probCutImprovingDepth ? std::max(depth - (improving ? 5 : 3), 0)
+                                                   : std::max(depth - 5 - (pruningTweaks && improving), 0);
 
         while ((move = mp.next_move()) != Move::none())
         {

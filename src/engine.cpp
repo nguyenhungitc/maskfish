@@ -288,6 +288,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // The node is also considered improving when the static evaluation is at
     // least beta (instead of beta + 108)
     options.add("ImprovingAtBeta", Option(false));
+    // ProbCut verifies captures at depth - 3, or at depth - 5 when the node is
+    // improving (instead of depth - 5)
+    options.add("ProbCutImprovingDepth", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

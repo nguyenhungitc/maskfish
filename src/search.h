@@ -516,6 +516,7 @@ class Worker {
     bool   captureFutilityInCheck = false;
     bool   simpleSeeMargin = false;
     bool   improvingAtBeta = false;
+    bool   probCutImprovingDepth = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
