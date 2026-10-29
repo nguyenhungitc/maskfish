@@ -522,6 +522,7 @@ class Worker {
     bool   bonusScaleNoCap = false;
     bool   evalDiffOnTTHit = false;
     bool   corrHistBestMoveSign = false;
+    bool   tmEffortFactor = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

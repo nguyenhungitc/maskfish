@@ -414,6 +414,7 @@ bool Search::Worker::iterative_deepening() {
     contHistSingleScale = bool(options["ContHistSingleScale"]);
     evalDiffOnTTHit = bool(options["EvalDiffOnTTHit"]);
     corrHistBestMoveSign = bool(options["CorrHistBestMoveSign"]);
+    tmEffortFactor = bool(options["TMEffortFactor"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -771,10 +772,18 @@ bool Search::Worker::iterative_deepening() {
             double totalTime =
               mainThread->tm.optimum() * fallingEval * reduction * bestMoveInstability;
 
+            // UCI option TMEffortFactor: when most of the nodes went to the best
+            // move, scale the time down smoothly (by 0.96 at 78% of the nodes
+            // to 0.74 at 94%) instead of stopping at 65% of the time
+            if (tmEffortFactor)
+                totalTime *= std::clamp(
+                  interpolate(i64(nodesEffort), i64(78000), i64(94000), 0.960, 0.740), 0.740,
+                  0.960);
+
             auto elapsedTime = elapsed();
 
-            if (completedDepth >= 9 && nodesEffort >= 81808 && elapsedTime > totalTime * 0.6519
-                && !mainThread->ponder)
+            if (!tmEffortFactor && completedDepth >= 9 && nodesEffort >= 81808
+                && elapsedTime > totalTime * 0.6519 && !mainThread->ponder)
                 threads.stop = true;
 
             // Stop the search if we have exceeded the totalTime or maximum, or with

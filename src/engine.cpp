@@ -329,6 +329,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     MovePicker::probCutTTNoSee = bool(o);
                     return std::nullopt;
                 }));
+    // Time management: the share of the nodes spent on the best move scales the
+    // time of the move smoothly instead of stopping the search early
+    options.add("TMEffortFactor", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
