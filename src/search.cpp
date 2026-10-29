@@ -404,6 +404,7 @@ bool Search::Worker::iterative_deepening() {
     ttMoveReductionFloor = bool(options["TTMoveReductionFloor"]);
     simpleLMRResearch = bool(options["SimpleLMRResearch"]);
     seNoCompletedDepth = bool(options["SENoCompletedDepth"]);
+    tripleMarginPly = bool(options["TripleMarginPly"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1564,7 +1565,9 @@ moves_loop:  // When in check, search starts here
                                  - 1091 * ttMoveHistory / 144928
                                  - (ss->ply > thisThread->rootDepth) * 49;
                 int tripleMargin = 85 + 303 * PvNode - 228 * !ttCapture + 88 * ss->ttPv - corrValAdj
-                                 - (ss->ply * 2 > thisThread->rootDepth * 3) * 61;
+                                 - (tripleMarginPly ? ss->ply > thisThread->rootDepth
+                                                    : ss->ply * 2 > thisThread->rootDepth * 3)
+                                     * 61;
 
                 extension =
                   1 + (value < singularBeta - doubleMargin) + (value < singularBeta - tripleMargin);
