@@ -406,6 +406,7 @@ bool Search::Worker::iterative_deepening() {
     seNoCompletedDepth = bool(options["SENoCompletedDepth"]);
     tripleMarginPly = bool(options["TripleMarginPly"]);
     captureFutilityInCheck = bool(options["CaptureFutilityInCheck"]);
+    simpleSeeMargin = bool(options["SimpleSeeMargin"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1493,9 +1494,13 @@ moves_loop:  // When in check, search starts here
                         continue;
                 }
 
-                // SEE based pruning for captures and checks
-                int seeHist = std::clamp(captHist / 30, -204 * depth, 186 * depth);
-                if (!pos.see_ge(move, -225 * depth - seeHist))
+                // SEE based pruning for captures and checks. UCI option
+                // SimpleSeeMargin: the history term is not clamped.
+                int seeMargin =
+                  simpleSeeMargin
+                    ? 225 * depth + captHist / 30
+                    : 225 * depth + std::clamp(captHist / 30, -204 * depth, 186 * depth);
+                if (!pos.see_ge(move, -seeMargin))
                     continue;
             }
             else if (!ss->followPV || !PvNode)

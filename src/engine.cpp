@@ -282,6 +282,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("TripleMarginPly", Option(false));
     // Futility pruning of captures also when the side to move is in check
     options.add("CaptureFutilityInCheck", Option(false));
+    // SEE pruning of captures and checks: the capture history term of the
+    // margin is not clamped
+    options.add("SimpleSeeMargin", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
