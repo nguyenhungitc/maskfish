@@ -498,6 +498,7 @@ class Worker {
     std::vector<Move> followPVLine;
     bool   cutoffCntTweak = false;
     bool   nmpFailHighCount = false;
+    bool   nmpOddThreads    = false;
     bool   mateTTExtension = false;
     bool   stopEarly = false;
     bool   frequentTimeCheck = false;

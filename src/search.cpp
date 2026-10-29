@@ -389,6 +389,7 @@ bool Search::Worker::iterative_deepening() {
     followPVOption = bool(options["FollowPV"]);
     cutoffCntTweak = bool(options["CutoffCntTweak"]);
     nmpFailHighCount = bool(options["NMPFailHighCount"]);
+    nmpOddThreads    = bool(options["NMPOddThreads"]);
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
     frequentTimeCheck = bool(options["FrequentTimeCheck"]);
@@ -1263,6 +1264,11 @@ Value Search::Worker::search(
         // Null move dynamic reduction based on depth (and on the static
         // evaluation with PruningTweaks)
         Depth R = 7 + depth / 3 + (pruningTweaks ? std::max((ss->staticEval - beta) / 256, 0) : 0);
+
+        // UCI option NMPOddThreads: threads with an odd index reduce one ply
+        // less, which diversifies the trees searched by the threads
+        if (nmpOddThreads)
+            R -= int(threadIdx & 1);
 
         // When seeking a mate (UCI option SeekMate), reduce less
         R -= seekMate * R / 2;
