@@ -297,6 +297,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // The history bonus of the best move also depends on the statScore of the
     // previous move (statScore / 32)
     options.add("BonusPrevStatScore", Option(false));
+    // Continuation histories of quiet moves are updated with one scale (944/1024)
+    // for bonuses and maluses instead of 1064/1024 and 824/1024
+    options.add("ContHistSingleScale", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

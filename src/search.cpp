@@ -411,6 +411,7 @@ bool Search::Worker::iterative_deepening() {
     probCutImprovingDepth = bool(options["ProbCutImprovingDepth"]);
     bonusScaleNoCap = bool(options["BonusScaleNoCap"]);
     bonusPrevStatScore = bool(options["BonusPrevStatScore"]);
+    contHistSingleScale = bool(options["ContHistSingleScale"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -3030,8 +3031,10 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.from_to()] << bonus * 839 / 1024;
 
-    update_continuation_histories(workerThread, ss, pos.moved_piece(move), move.to_sq(),
-                                  bonus * (bonus > 0 ? 1064 : 824) / 1024);
+    // UCI option ContHistSingleScale: one scale for bonuses and maluses
+    update_continuation_histories(
+      workerThread, ss, pos.moved_piece(move), move.to_sq(),
+      bonus * (workerThread.contHistSingleScale ? 944 : bonus > 0 ? 1064 : 824) / 1024);
 
     // With BigPawnHistory, stronger updates, scaled like upstream's (691 / 468
     // -> 800 / 500)
