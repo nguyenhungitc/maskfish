@@ -399,6 +399,7 @@ bool Search::Worker::iterative_deepening() {
     bigPawnHistory = bool(options["BigPawnHistory"]);
     statScoreNoOffset = bool(options["StatScoreNoOffset"]);
     noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
+    lmrPvNodeSelf = bool(options["LMRPvNodeSelf"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1711,7 +1712,7 @@ moves_loop:  // When in check, search starts here
             const bool notTooDeep   = ss->ply < 2 * thisThread->rootDepth;
             const int  maxExtension = notTooDeep ? !allNode + (PvNode && !bestMove) : 0;
             Depth d = std::max(1, newDepth + std::min(-r / 1090, maxExtension))
-                    + (ss - 1)->isPvNode;
+                    + (lmrPvNodeSelf ? PvNode : (ss - 1)->isPvNode);
 
             ss->reduction = newDepth - d;
             value         = search_child<NonPV>(pos, ss + 1, alpha, alpha + 1, d, true, revealBonus);

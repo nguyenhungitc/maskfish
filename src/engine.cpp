@@ -262,6 +262,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // reduction, and lower thresholds for reducing the depth (3744 and 5150
     // instead of 4170 and 5563)
     options.add("NoTTMoveHistoryLMR", Option(false));
+    // LMR: the extra ply of the reduced search is given at PV nodes (instead of
+    // at nodes whose parent is a PV node)
+    options.add("LMRPvNodeSelf", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
