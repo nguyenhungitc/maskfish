@@ -153,18 +153,18 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 114 / 128;
+    // Branchless: after a null move (or at the root) the bonus is masked to
+    // zero, which leaves the entry unchanged
+    const int    mask = int(m.is_ok());
+    const Square to   = m.to_sq_unchecked();
+    const Piece  pc   = pos.piece_on(to);
+    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 114 / 128 * mask;
 
-        if (workerThread.contCorr4Ply)
-            (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 64 / 128;
+    if (workerThread.contCorr4Ply)
+        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 64 / 128 * mask;
 
-        if (workerThread.contCorr6Ply)
-            (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus * 35 / 128;
-    }
+    if (workerThread.contCorr6Ply)
+        (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus * 35 / 128 * mask;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness

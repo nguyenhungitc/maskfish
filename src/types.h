@@ -435,6 +435,10 @@ class Move {
         return Square(data & 0x7F);
     }
 
+    // Same as to_sq() without the assertion, for branchless code where the
+    // result is ignored (masked) when the move is not ok
+    constexpr Square to_sq_unchecked() const { return Square(data & 0x7F); }
+
     constexpr bool is_ok() const { return none().data != data && null().data != data; }
 
     static constexpr Move null() { return Move(129); }
