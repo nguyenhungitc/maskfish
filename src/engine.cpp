@@ -268,6 +268,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Simpler optimism scaling: the weight of optimism in
     // the evaluation does not depend on the material (EvalScaling Complexity).
     options.add("OptimismSimple", Option(false));
+    // EvalScaling Alignment and Correlation: the evaluation and optimism terms
+    // of the agreement boost in one division, (nnue + 4 * optimism) * a / 65536,
+    // instead of two (only the rounding differs)
+    options.add("OptimismMerged", Option(false));
     // Alternative futility pruning (margin, depth limit, returned value).
     options.add("AltFutility", Option(false));
     // Simpler thread selection: votes by score only (Threads > 1).

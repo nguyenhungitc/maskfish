@@ -100,7 +100,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      int                            optimism,
                      bool                           jieqiMaterial,
                      EvalScaling                    scaling,
-                     bool                           optimismSimple) {
+                     bool                           optimismSimple,
+                     bool                           optimismMerged) {
 
     assert(!pos.checkers());
 
@@ -121,9 +122,13 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         const int nnue_norm = int(std::int64_t(nnue) * 1024 / (std::abs(nnue) + 1024));
         const int align     = (se_norm * nnue_norm) / 512;
 
-        // When winning, we favor easy positions, and vice versa
-        const int base_eval = int(nnue + std::int64_t(nnue) * align / 65536
-                                  + std::int64_t(optimism) * align / 16384);
+        // When winning, we favor easy positions, and vice versa. Optimism
+        // has four times the weight of the evaluation in this term (UCI option
+        // OptimismMerged: one division for both)
+        const int base_eval =
+          optimismMerged ? int(nnue + (std::int64_t(nnue) + 4 * optimism) * align / 65536)
+                         : int(nnue + std::int64_t(nnue) * align / 65536
+                               + std::int64_t(optimism) * align / 16384);
 
         // Scale the combined evaluation by the total material (JieqiMaterial
         // only applies to EvalScaling Complexity and Correlation)
@@ -142,7 +147,9 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         const int nnue_norm = (nnue * 1024) / (std::abs(nnue) + 1024);
         const int correl    = (se_norm * nnue_norm) / 512;
 
-        const int base = nnue + (nnue * correl) / 65536 + (optimism * correl) / 16384;
+        const int base = optimismMerged
+                         ? int(nnue + (std::int64_t(nnue) + 4 * optimism) * correl / 65536)
+                         : nnue + (nnue * correl) / 65536 + (optimism * correl) / 16384;
         v              = int(std::int64_t(base) * (18560 + material) / 33331);
     }
     else

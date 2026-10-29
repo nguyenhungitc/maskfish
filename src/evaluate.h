@@ -61,7 +61,8 @@ Value evaluate(const NNUE::Networks&          networks,
                int                            optimism,
                bool                           jieqiMaterial  = false,
                EvalScaling                    scaling        = EvalScaling::Complexity,
-               bool                           optimismSimple = false);
+               bool                           optimismSimple = false,
+               bool                           optimismMerged = false);
 }  // namespace Eval
 
 }  // namespace Maskfish

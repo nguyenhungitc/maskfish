@@ -400,6 +400,7 @@ bool Search::Worker::iterative_deepening() {
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
+    optimismMerged     = bool(options["OptimismMerged"]);
     altFutility        = bool(options["AltFutility"]);
     simpleThreadVote   = bool(options["SimpleThreadVote"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
@@ -2814,7 +2815,7 @@ TimePoint Search::Worker::elapsed_time() const { return main_manager()->tm.elaps
 Value Search::Worker::evaluate(const Position& pos) {
     return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
                           optimism[pos.side_to_move()], jieqiMaterial, evalScaling,
-                          optimismSimple);
+                          optimismSimple, optimismMerged);
 }
 
 namespace {
