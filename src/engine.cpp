@@ -332,6 +332,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Time management: the share of the nodes spent on the best move scales the
     // time of the move smoothly instead of stopping the search early
     options.add("TMEffortFactor", Option(false));
+    // Time management: the time reduction for a stable best move is linear in
+    // the number of iterations it has been stable, between 0.67 and 1.44
+    options.add("TMReductionInterp", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

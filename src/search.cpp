@@ -415,6 +415,7 @@ bool Search::Worker::iterative_deepening() {
     evalDiffOnTTHit = bool(options["EvalDiffOnTTHit"]);
     corrHistBestMoveSign = bool(options["CorrHistBestMoveSign"]);
     tmEffortFactor = bool(options["TMEffortFactor"]);
+    tmReductionInterp = bool(options["TMReductionInterp"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -762,9 +763,19 @@ bool Search::Worker::iterative_deepening() {
             fallingEval = std::clamp(fallingEval, 0.6378, 1.8394);
 
             // If the bestMove is stable over several iterations, reduce time accordingly
-            double k      = 0.516;
-            double center = lastBestMoveDepth + 15;
-            timeReduction = 0.8 + 0.85 / (1.089 + std::exp(-k * (completedDepth - center)));
+            // (UCI option TMReductionInterp: linear from 0.67 when the best move
+            // changed 8 iterations ago or less to 1.44 when 17 or more, instead
+            // of a logistic curve)
+            if (tmReductionInterp)
+                timeReduction = std::clamp(interpolate(double(completedDepth - lastBestMoveDepth),
+                                                       8.00, 17.00, 0.670, 1.440),
+                                           0.670, 1.440);
+            else
+            {
+                double k      = 0.516;
+                double center = lastBestMoveDepth + 15;
+                timeReduction = 0.8 + 0.85 / (1.089 + std::exp(-k * (completedDepth - center)));
+            }
             double reduction =
               (2.0380 + mainThread->previousTimeReduction) / (2.5240 * timeReduction);
             double bestMoveInstability = 0.9381 + 1.6401 * totBestMoveChanges / threads.size();

@@ -523,6 +523,7 @@ class Worker {
     bool   evalDiffOnTTHit = false;
     bool   corrHistBestMoveSign = false;
     bool   tmEffortFactor = false;
+    bool   tmReductionInterp = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
