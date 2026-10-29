@@ -67,8 +67,13 @@ bool HalfKAv2_hm::requires_mid_mirror(const Position& pos, Color c) {
         return pos.mid_encoding(side) == BalanceEncoding
             && (!tieBreak || pos.mid_pawn_encoding(side) == PawnBalanceEncoding);
     };
-    return ((1ULL << 63) & pos.mid_encoding(c) & pos.mid_encoding(~c))
-        && (below(c) || (balanced(c) && below(~c)));
+    // Only used when both kings are on the middle file (see king_mirror()).
+    // Bit 63 flags a king off the middle file, but it is also the top of the
+    // advisor count field, which the borrows of an unbalanced position can
+    // change: with the UCI option MidMirrorNoKingFlag it is not tested.
+    const bool kingFlag =
+      midNoKingFlag || ((1ULL << 63) & pos.mid_encoding(c) & pos.mid_encoding(~c));
+    return kingFlag && (below(c) || (balanced(c) && below(~c)));
 }
 
 // Visible (revealed) attacking material of one side

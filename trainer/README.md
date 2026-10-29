@@ -733,9 +733,11 @@ buckets.
 
 Variants of the mid mirror, to be tested with an SPRT: `prepare_data.py
 --mid-pawn-tiebreak` (engine option `MidMirrorPawnTieBreak=true`) also tells
-apart pairs of pawns with the same sum of squares. The prepared data, the
-network and the engine must use the same setting, which the network file
-does not record; `verify.py` takes the same option.
+apart pairs of pawns with the same sum of squares, and `--mid-no-king-flag`
+(`MidMirrorNoKingFlag=true`) does not test the king flag of the balance
+encodings, which unbalanced positions can corrupt. The prepared data, the
+network and the engine must use the same settings, which the network file
+does not record; `verify.py` takes the same options.
 
 ### 7.3. Threat features (`threats`, `att-threats`)
 

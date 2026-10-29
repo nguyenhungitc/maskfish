@@ -245,7 +245,7 @@ def main():
         ap.error("--max-dups must be positive")
     F.set_arch(args.arch)
     F.apply_mid_mirror_args(args)
-    mid_mirror = {"pawn_tiebreak": args.mid_pawn_tiebreak}
+    mid_mirror = {"pawn_tiebreak": args.mid_pawn_tiebreak, "no_king_flag": args.mid_no_king_flag}
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 
     rng = np.random.default_rng(args.seed)

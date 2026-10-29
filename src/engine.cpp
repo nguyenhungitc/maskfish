@@ -293,6 +293,13 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     Eval::NNUE::FeatureSet::midPawnTieBreak = bool(o);
                     return std::nullopt;
                 }));
+    // Mid mirror: do not test the king flag (bit 63) of the balance encodings,
+    // which the borrows of unbalanced positions can change (trainer option
+    // --mid-no-king-flag).
+    options.add("MidMirrorNoKingFlag", Option(false, [](const Option& o) {
+                    Eval::NNUE::FeatureSet::midNoKingFlag = bool(o);
+                    return std::nullopt;
+                }));
 #endif
     options.add("ThreatCache", Option(false, [](const Option& o) {
                     Position::useThreatCache = bool(o);

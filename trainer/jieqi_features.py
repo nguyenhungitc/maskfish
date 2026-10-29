@@ -323,15 +323,18 @@ MID_MIRROR_ENCODING = [[_mid_mirror_encoding(pc, s) if 0 < (pc & 7) <= KING else
 # balanced, and only with MID_PAWN_TIEBREAK (engine option MidMirrorPawnTieBreak).
 PAWN_BALANCE_ENCODING = 1 << 32
 MID_PAWN_TIEBREAK = False
+MID_NO_KING_FLAG = False
 
 
-def set_mid_mirror_options(pawn_tiebreak: bool | None = None):
+def set_mid_mirror_options(pawn_tiebreak: bool | None = None, no_king_flag: bool | None = None):
     """Mid mirror variants (the "att" architectures). They must match the
     engine options of the same name and are not recorded in the network file:
-    pawn_tiebreak = MidMirrorPawnTieBreak."""
-    global MID_PAWN_TIEBREAK
+    pawn_tiebreak = MidMirrorPawnTieBreak, no_king_flag = MidMirrorNoKingFlag."""
+    global MID_PAWN_TIEBREAK, MID_NO_KING_FLAG
     if pawn_tiebreak is not None:
         MID_PAWN_TIEBREAK = pawn_tiebreak
+    if no_king_flag is not None:
+        MID_NO_KING_FLAG = no_king_flag
 
 
 def add_mid_mirror_args(ap):
@@ -339,12 +342,21 @@ def add_mid_mirror_args(ap):
     ap.add_argument("--mid-pawn-tiebreak", action="store_true",
                     help="att architectures: tell apart the pawn pairs with the same sum of "
                          "squares in the mid mirror (engine option MidMirrorPawnTieBreak=true)")
+    ap.add_argument("--mid-no-king-flag", action="store_true",
+                    help="att architectures: do not test the king flag (bit 63) of the mid "
+                         "mirror encodings (engine option MidMirrorNoKingFlag=true)")
 
 
 def apply_mid_mirror_args(args) -> dict:
     """Sets the options from parsed arguments; returns the matching engine options."""
-    set_mid_mirror_options(pawn_tiebreak=args.mid_pawn_tiebreak)
-    return {"MidMirrorPawnTieBreak": "true"} if args.mid_pawn_tiebreak else {}
+    set_mid_mirror_options(pawn_tiebreak=args.mid_pawn_tiebreak,
+                           no_king_flag=args.mid_no_king_flag)
+    opts = {}
+    if args.mid_pawn_tiebreak:
+        opts["MidMirrorPawnTieBreak"] = "true"
+    if args.mid_no_king_flag:
+        opts["MidMirrorNoKingFlag"] = "true"
+    return opts
 
 
 def _mid_pawn_encoding(pc: int, s: int) -> int:
@@ -381,8 +393,13 @@ def requires_mid_mirror(enc: list[tuple[int, int]], c: int) -> bool:
     e, o = enc[c], enc[1 - c]
     if not MID_PAWN_TIEBREAK:       # the main encoding only
         balance, e, o = balance[:1], e[:1], o[:1]
+    # Only used when both kings are on the middle file (feature_bucket()). Bit 63
+    # flags a king off the middle file, but borrows of an unbalanced position can
+    # change it too: MID_NO_KING_FLAG (engine option MidMirrorNoKingFlag) does
+    # not test it.
+    king_flag = MID_NO_KING_FLAG or bool((1 << 63) & e[0] & o[0])
     # tuples compare in order: the main encoding, then the pawn tie-break
-    return bool((1 << 63) & e[0] & o[0]) and (e < balance or (e == balance and o < balance))
+    return king_flag and (e < balance or (e == balance and o < balance))
 
 
 def attack_bucket(pos, c: int) -> int:

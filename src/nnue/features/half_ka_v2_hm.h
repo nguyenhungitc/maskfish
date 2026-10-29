@@ -244,6 +244,10 @@ class HalfKAv2_hm {
     // trainer option --mid-pawn-tiebreak)
     static inline bool midPawnTieBreak = false;
 
+    // UCI option MidMirrorNoKingFlag: do not test bit 63 of the encodings
+    // (trainer option --mid-no-king-flag)
+    static inline bool midNoKingFlag = false;
+
     static bool requires_mid_mirror(const Position& pos, Color c);
     static int  make_attack_bucket(const Position& pos, Color c);
 #endif
