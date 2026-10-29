@@ -493,7 +493,6 @@ class Worker {
     bool   seekMateLine       = false;
     bool   pruningTweaks      = false;
     bool   lmrTweaks          = false;
-    bool   failHighRecoveryOption = false;
     bool   aspirationTweaks = false;
     bool   mainHistoryDecay = false;
     bool   lmrHistoryDivisor = false;

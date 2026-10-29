@@ -165,9 +165,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR: reduce quiet moves depending on the static eval vs alpha, and scale
     // up reductions at expected ALL nodes.
     options.add("LMRTweaks", Option(false));
-    // After the root search failed high (and was re-searched at a reduced
-    // depth), increase the depth back gradually in the next iterations.
-    options.add("FailHighRecovery", Option(false));
     // Aspiration windows: after a fail low the new beta is alpha, after a fail
     // high the new alpha is beta - delta, and helper threads start with
     // slightly different windows.

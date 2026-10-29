@@ -379,7 +379,6 @@ bool Search::Worker::iterative_deepening() {
     seekMatePrevScore  = bool(options["SeekMatePrevScore"]);
     pruningTweaks      = bool(options["PruningTweaks"]);
     lmrTweaks          = bool(options["LMRTweaks"]);
-    failHighRecoveryOption = bool(options["FailHighRecovery"]);
     aspirationTweaks = bool(options["AspirationTweaks"]);
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
     malusDecay = bool(options["MalusDecay"]);
@@ -652,8 +651,6 @@ bool Search::Worker::iterative_deepening() {
             // After a search that needed a reduced depth to resolve fail highs,
             // keep the depth reduced in the next iterations and increase it back
             // gradually (UCI option FailHighRecovery)
-            if (failHighRecoveryOption && failedHighCnt > 0 && !pvIdx)
-                failHighRecovery = (failedHighCnt + 1) / 2 + 2;
 
             if (threads.stop && pvIdx)
             {
