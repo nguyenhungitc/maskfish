@@ -237,6 +237,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     tt.set_decisive_aging(bool(o));
                     return std::nullopt;
                 }));
+    // Compare 21 bits of the keys inside a TT cluster instead of 16 (fewer
+    // false matches, same memory). Set it before the search (or clear the hash).
+    options.add("TTKey21", Option(false, [this](const Option& o) {
+                    tt.set_key_bits(bool(o) ? 21 : 16);
+                    return std::nullopt;
+                }));
     // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
     // always has the size for 10), with stronger updates
     options.add("BigPawnHistory", Option(false));

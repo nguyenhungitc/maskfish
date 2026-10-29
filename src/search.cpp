@@ -820,7 +820,7 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
     // Prefetch the TT entry of the next position as soon as the move is known
     // (a move of a dark piece is completed by the reveal: no prefetch)
     if (!pos.move_dark(move))
-        prefetch(tt.first_entry(observer_tt_key(pos.prefetch_key(move), rootObserver)));
+        prefetch(tt.get_cluster(observer_tt_key(pos.prefetch_key(move), rootObserver)));
 
     // UCI option ThreatsIncremental (make threats=yes): do_move() records the
     // threats it adds and removes for the threat accumulator
@@ -840,7 +840,7 @@ void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, cons
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st) {
     pos.do_null_move(st);
-    prefetch(tt.first_entry(observer_tt_key(pos.key(), rootObserver)));
+    prefetch(tt.get_cluster(observer_tt_key(pos.key(), rootObserver)));
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -2750,7 +2750,7 @@ Value Search::Worker::flip_search(
         branchReduction.restore();
         // Prefetch the TT entry of the outcome as early as possible
         const Key flipKey = pos.flip_key(flipSq, piece);
-        prefetch(tt.first_entry(observer_tt_key(flipKey, rootObserver)));
+        prefetch(tt.get_cluster(observer_tt_key(flipKey, rootObserver)));
 
         DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();

@@ -29,7 +29,6 @@
 namespace Maskfish {
 
 class ThreadPool;
-struct TTEntry;
 struct Cluster;
 
 // There is only one global hash table for the engine and all its threads. For chess in particular, we even allow racy
@@ -72,9 +71,11 @@ struct TTWriter {
 
    private:
     friend class TranspositionTable;
-    TTEntry* entry;
+    Cluster* cluster;
+    int      index;
     bool     decisiveAging;
-    TTWriter(TTEntry* tte, bool decisiveAging);
+    uint64_t keyMask;
+    TTWriter(Cluster* cl, int idx, bool decisiveAging, uint64_t keyMask);
 };
 
 
@@ -93,22 +94,25 @@ class TranspositionTable {
     uint8_t generation() const;  // The current age, used when writing new data to the TT
     std::tuple<bool, TTData, TTWriter>
     probe(const Key key) const;  // The main method, whose retvals separate local vs global objects
-    TTEntry* first_entry(const Key key)
+    Cluster* get_cluster(const Key key)
       const;  // This is the hash function; its only external use is memory prefetching.
 
     // Restrict the secondary aging of entries to decisive values (UCI option
     // DecisiveTTAging)
     void set_decisive_aging(bool b) { decisiveAging = b; }
 
-   private:
-    friend struct TTEntry;
+    // Key bits compared inside a cluster: 21 with the UCI option TTKey21,
+    // otherwise 16 (the entries keep 21-bit fields either way)
+    void set_key_bits(int bits) { keyMask = (uint64_t(1) << bits) - 1; }
 
+   private:
     size_t   clusterCount;
     Cluster* table = nullptr;
 
     uint8_t generation8 = 0;  // Size must be not bigger than TTEntry::genBound8
 
-    bool decisiveAging = false;
+    bool     decisiveAging = false;
+    uint64_t keyMask       = 0xFFFF;
 };
 
 }  // namespace Maskfish
