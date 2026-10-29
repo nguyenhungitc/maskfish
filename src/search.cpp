@@ -398,6 +398,7 @@ bool Search::Worker::iterative_deepening() {
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
     statScoreNoOffset = bool(options["StatScoreNoOffset"]);
+    noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1751,11 +1752,18 @@ moves_loop:  // When in check, search starts here
             if (!ttData.move)
                 r += 875;
 
-            r -= ttMoveHistory / 8;
+            // UCI option NoTTMoveHistoryLMR: no ttMoveHistory term, with
+            // thresholds lowered in proportion
+            if (!noTTMoveHistoryLMR)
+                r -= ttMoveHistory / 8;
+
+            const int threshold1 = noTTMoveHistoryLMR ? 3744 : 4170;
+            const int threshold2 = noTTMoveHistoryLMR ? 5150 : 5563;
 
             // Note that if expected reduction is high, we reduce search depth here
             value = search_child<NonPV>(pos, ss + 1, alpha, alpha + 1,
-                                        newDepth - (r > 4170) - (r > 5563 && newDepth > 2),
+                                        newDepth - (r > threshold1)
+                                          - (r > threshold2 && newDepth > 2),
                                         !cutNode, revealBonus);
         }
 

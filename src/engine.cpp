@@ -258,6 +258,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR: statScore without the constant subtracted from it (the base reduction
     // is raised to compensate for quiet moves)
     options.add("StatScoreNoOffset", Option(false));
+    // Full-depth search when LMR is skipped: no ttMoveHistory term in the
+    // reduction, and lower thresholds for reducing the depth (3744 and 5150
+    // instead of 4170 and 5563)
+    options.add("NoTTMoveHistoryLMR", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
