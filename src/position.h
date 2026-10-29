@@ -58,7 +58,6 @@ struct StateInfo {
     Bitboard   blockersForKing[COLOR_NB];
     Bitboard   pinners[COLOR_NB];
     Bitboard   checkSquares[PIECE_TYPE_NB];
-    bool       needFullCheck;
     Piece      capturedPiece;
     Move       move;
     bool       captureDark;
@@ -69,7 +68,7 @@ struct StateInfo {
     mutable bool     threatsComputed;
 #ifndef NDEBUG
     // A dark piece has moved and do_flip() has not revealed it yet: the check
-    // info (checkersBB, blockersForKing, pinners, checkSquares, needFullCheck)
+    // info (checkersBB, blockersForKing, pinners, checkSquares)
     // is not valid. Debug builds only, see Position::check_info_valid().
     bool revealPending;
 #endif

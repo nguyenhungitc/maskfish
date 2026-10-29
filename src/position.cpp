@@ -271,10 +271,6 @@ void Position::set_check_info() const {
 
     Square ksq = king_square(~sideToMove);
 
-    // We have to take special cares about the cannon and checks
-    st->needFullCheck =
-      checkers() || (attacks_bb(ROOK, king_square(sideToMove)) & pieces(~sideToMove, CANNON));
-
     st->checkSquares[PAWN]    = attacks_bb(PAWN_TO, ksq, sideToMove);
     st->checkSquares[KNIGHT]  = attacks_bb(KNIGHT_TO, ksq, pieces());
     st->checkSquares[CANNON]  = attacks_bb(CANNON, ksq, pieces());
@@ -552,14 +548,18 @@ bool Position::legal(Move m) const {
         return useThreatCache ? !(to & threats_by(ALL_PIECES)) : !(checkers_to(~us, to, occupied));
     }
 
-    // If we don't need slow check. A non-king move is always legal when either:
-    // 1. Not moving a pinned piece.
-    // 2. Moving a pinned non-cannon piece and aligned with king.
-    // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
-    if (!st->needFullCheck
-        && (!(blockers_for_king(us) & from)
-            || (((type_of(pc) != CANNON) || !capture(m)) && aligned(from, to, king_square(us)))))
-        return true;
+    // Not in check, moving a piece that does not block an attack on the king:
+    // leaving 'from' cannot expose the king. A capture leaves the occupancy
+    // of 'to' unchanged, and a quiet move off the files and ranks of the king
+    // cannot screen a cannon, so both are legal. A quiet move onto a file or
+    // rank of the king adds a screen, which can complete a cannon attack.
+    if (!checkers() && !(blockers_for_king(us) & from))
+    {
+        if (capture(m) || !(attacks_bb(ROOK, king_square(us)) & to))
+            return true;
+
+        return !(attacks_bb(CANNON, king_square(us), occupied) & pieces(~us, CANNON));
+    }
 
     // A non-king move is legal if the king is not under attack after the move.
     return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
