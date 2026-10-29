@@ -31,6 +31,7 @@
 
 #include "evaluate.h"
 #include "misc.h"
+#include "movepick.h"
 #include "nnue/features/half_ka_v2_hm.h"
 #include "nnue/network.h"
 #include "nnue/nnue_accumulator.h"
@@ -306,6 +307,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // The correction history is updated upwards only when a best move was found
     // and downwards only when none was
     options.add("CorrHistBestMoveSign", Option(false));
+    // Captures are ordered without the bonus for captures giving check
+    options.add("NoCaptureCheckBonus", Option(false, [](const Option& o) {
+                    MovePicker::noCaptureCheckBonus = bool(o);
+                    return std::nullopt;
+                }));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

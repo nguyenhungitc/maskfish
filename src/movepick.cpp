@@ -244,7 +244,7 @@ ExtMove* MovePicker::generate_and_score() {
         if constexpr (Type == CAPTURES)
             m.value = (*captureHistory)[pc][to][pos.capture_type(to)]
                     + 7 * int(pos.piece_value(to))
-                    + 1024
+                    + (noCaptureCheckBonus ? 0 : 1024)
                         * bool((pt == CANNON
                                   ? pos.check_squares(pt) & ~line_bb(from, pos.king_square(~us))
                                   : pos.check_squares(pt))
