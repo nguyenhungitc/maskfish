@@ -347,6 +347,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes (non-PV): the TT entries of all the outcomes are looked up
     // before any is searched, and their bounds can decide the node at once
     options.add("ChanceTTProbe", Option(false));
+    // Correction history of the static evaluation indexed by the pools of
+    // unrevealed pieces of both sides (weight 5000, update 96/128)
+    options.add("PoolCorrHist", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

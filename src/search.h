@@ -361,6 +361,8 @@ class Worker {
 
     TTMoveHistory ttMoveHistory;
 
+    PoolCorrectionHistory poolCorrectionHistory;  // UCI option PoolCorrHist
+
     // Experimental search options (see engine.cpp), off by
     // default. Public because the free history update functions read them.
     bool contCorr4Ply    = false;
@@ -374,6 +376,7 @@ class Worker {
     bool bigPawnHistory = false;
     bool bonusPrevStatScore = false;
     bool contHistSingleScale = false;
+    bool poolCorrHist = false;
 
     // Entry of the pawn history for the position (UCI option BigPawnHistory)
     auto& pawn_history_entry(const Position& pos) {

@@ -211,6 +211,12 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Correction history indexed by the pools of unrevealed pieces of both sides
+// (Position::pool_key()) and the side to move (UCI option PoolCorrHist)
+constexpr int POOL_CORRECTION_SIZE = 16384;  // has to be a power of 2
+using PoolCorrectionHistory =
+  Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, POOL_CORRECTION_SIZE, COLOR_NB>;
+
 struct ContinuationHistoryBlock {
     ContinuationHistory table[2][2];
 };

@@ -47,6 +47,7 @@ struct StateInfo {
     Key   pawnKey;
     Key   minorPieceKey;
     Key   nonPawnKey[COLOR_NB];
+    Key   poolKey;  // the pools of unrevealed pieces of both sides
     Value majorMaterial[COLOR_NB];
     int   rule40;
     int   pliesFromNull;
@@ -177,6 +178,10 @@ class Position {
     Key flip_key(Square s, Piece pc) const;
     Key pawn_key() const;
     Key minor_piece_key() const;
+    Key pool_key() const;
+#ifndef NDEBUG
+    Key pool_key_from_scratch() const;
+#endif
     Key non_pawn_key(Color c) const;
 
     // Other properties of the position
@@ -397,6 +402,8 @@ inline Key Position::adjust_key40(Key k) const {
 inline Key Position::pawn_key() const { return st->pawnKey; }
 
 inline Key Position::minor_piece_key() const { return st->minorPieceKey; }
+
+inline Key Position::pool_key() const { return st->poolKey; }
 
 inline Key Position::non_pawn_key(Color c) const { return st->nonPawnKey[c]; }
 

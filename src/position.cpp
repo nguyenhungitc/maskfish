@@ -332,6 +332,7 @@ void Position::set_threats() const {
 void Position::set_state() const {
 
     st->key               = 0;
+    st->poolKey           = 0;
     st->minorPieceKey     = 0;
     st->nonPawnKey[WHITE] = st->nonPawnKey[BLACK] = 0;
     st->pawnKey                                   = Zobrist::noPawns;
@@ -379,7 +380,10 @@ void Position::set_state() const {
     for (const auto& color : {WHITE, BLACK})
         for (const auto& [piece, count] : rest_pieces(color))
             for (int i = 0; i < count; ++i)
+            {
                 st->key ^= Zobrist::rest[piece][i];
+                st->poolKey ^= Zobrist::rest[piece][i];
+            }
 
     if (sideToMove == BLACK)
         st->key ^= Zobrist::side;
@@ -664,6 +668,8 @@ Piece Position::do_flip(Square s, Piece pc, DirtyPiece* dp, DirtyThreats* dts) {
 
     // Update hash key
     st->key ^= Zobrist::psq[pc][s] ^ Zobrist::rest[pc][restPieces[pc]];
+    st->poolKey ^= Zobrist::rest[pc][restPieces[pc]];
+    assert(st->poolKey == pool_key_from_scratch());
     // If the moving piece is a pawn, update pawn hash key.
     if (type_of(pc) == PAWN)
         st->pawnKey ^= Zobrist::psq[pc][s];
@@ -705,8 +711,10 @@ void Position::undo_flip(Square s, Piece fromPc) {
     // of index restPieces[pc] *after* decrementing it, so toggle it *before*
     // incrementing it back.
     st->key ^= Zobrist::psq[pc][s] ^ Zobrist::rest[pc][restPieces[pc]];
+    st->poolKey ^= Zobrist::rest[pc][restPieces[pc]];
 
     restPieces[pc]++;
+    assert(st->poolKey == pool_key_from_scratch());
     remove_piece(s);
     put_piece(fromPc, s);
     byTypeBB[DARK] ^= s;
@@ -736,6 +744,18 @@ void Position::undo_flip(Square s, Piece fromPc) {
 }
 
 
+#ifndef NDEBUG
+// The pool key computed from scratch, as set_state() does (debug builds)
+Key Position::pool_key_from_scratch() const {
+    Key k = 0;
+    for (const auto& color : {WHITE, BLACK})
+        for (const auto& [piece, count] : rest_pieces(color))
+            for (int i = 0; i < count; ++i)
+                k ^= Zobrist::rest[piece][i];
+    return k;
+}
+#endif
+
 // Removes one piece from the pool of unrevealed pieces. Keeps the hash key
 // consistent with set_state().
 void Position::remove_rest_piece(Piece pc) {
@@ -744,6 +764,8 @@ void Position::remove_rest_piece(Piece pc) {
 
     restPieces[pc]--;
     st->key ^= Zobrist::rest[pc][restPieces[pc]];
+    st->poolKey ^= Zobrist::rest[pc][restPieces[pc]];
+    assert(st->poolKey == pool_key_from_scratch());
 }
 
 void Position::restore_rest_piece(Piece pc) {
@@ -752,7 +774,9 @@ void Position::restore_rest_piece(Piece pc) {
 
     // Mirror of remove_rest_piece(): toggle the same pool slot, then increment.
     st->key ^= Zobrist::rest[pc][restPieces[pc]];
+    st->poolKey ^= Zobrist::rest[pc][restPieces[pc]];
     restPieces[pc]++;
+    assert(st->poolKey == pool_key_from_scratch());
 }
 
 

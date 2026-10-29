@@ -129,7 +129,12 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
         ? 6657 * (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
         : 0;
 
-    return 4897 * pcv + 4190 * micv + 8120 * (wnpcv + bnpcv) + 8324 * cntcv + cntcv6;
+    // Pools of unrevealed pieces (UCI option PoolCorrHist)
+    const int pocv =
+      w.poolCorrHist ? w.poolCorrectionHistory[pos.pool_key() & (POOL_CORRECTION_SIZE - 1)][us] : 0;
+
+    return 4897 * pcv + 4190 * micv + 8120 * (wnpcv + bnpcv) + 8324 * cntcv + cntcv6
+         + 5000 * pocv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -150,6 +155,9 @@ void update_correction_history(const Position& pos,
 
     shared.pawn_correction_entry(pos)[us].pawn << bonus * 136 / 128;
     shared.minor_piece_correction_entry(pos)[us].minor << bonus * 88 / 128;
+    if (workerThread.poolCorrHist)
+        workerThread.poolCorrectionHistory[pos.pool_key() & (POOL_CORRECTION_SIZE - 1)][us]
+          << bonus * 96 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
@@ -420,6 +428,7 @@ bool Search::Worker::iterative_deepening() {
     chanceFarMin = bool(options["ChanceFarMin"]);
     chanceChildWindow = bool(options["ChanceChildWindow"]);
     chanceTTProbe = bool(options["ChanceTTProbe"]);
+    poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -922,6 +931,8 @@ void Search::Worker::reset_correction_histories() {
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
             h.fill(7);
+
+    poolCorrectionHistory.fill(0);
 
     // The part of this thread of the correction histories it shares (all of
     // them if not shared)
