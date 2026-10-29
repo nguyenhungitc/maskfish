@@ -525,6 +525,7 @@ class Worker {
     bool   tmEffortFactor = false;
     bool   tmReductionInterp = false;
     bool   simpleEvalDiffBonus = false;
+    bool   chanceFarMin = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
@@ -545,6 +546,13 @@ class Worker {
     };
     Value aggregate_chance(
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;
+    Value aggregate_mixed(const Value* values,
+                          const int*   counts,
+                          int          n,
+                          int          total,
+                          ChanceBound  kind,
+                          Value        vmin,
+                          Value        vmax) const;
     // ChanceModel Linear and Tables (see aggregate_chance())
     Value aggregate_linear(
       const Value* values, const int* counts, int n, int total, ChanceBound kind) const;

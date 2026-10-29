@@ -417,6 +417,7 @@ bool Search::Worker::iterative_deepening() {
     tmEffortFactor = bool(options["TMEffortFactor"]);
     tmReductionInterp = bool(options["TMReductionInterp"]);
     simpleEvalDiffBonus = bool(options["SimpleEvalDiffBonus"]);
+    chanceFarMin = bool(options["ChanceFarMin"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -2453,6 +2454,30 @@ Value Search::Worker::aggregate_chance(
         return vmin;
     if (allLoss)
         return vmax;
+
+    const Value v = aggregate_mixed(values, counts, n, total, kind, vmin, vmax);
+    if (!chanceFarMin)
+        return v;
+
+    // UCI option ChanceFarMin: when every outcome is beyond +10000, the side to
+    // move only counts on the worst one (minimum), and symmetrically below
+    // -10000. Written as caps, min(v, max(vmin, 10000)) and
+    // max(v, min(vmax, -10000)), the aggregate stays non-decreasing in every
+    // outcome, which the bounds of chance_node() need: as a side effect, a
+    // single outcome below +10000 caps the aggregate at +10000.
+    constexpr Value Far = 10000;
+    return std::max(std::min(v, std::max(vmin, Far)), std::min(vmax, Value(-Far)));
+}
+
+// The aggregate of outcomes that are not all decisive for the same side (see
+// aggregate_chance()), between vmin and vmax
+Value Search::Worker::aggregate_mixed(const Value* values,
+                                      const int*   counts,
+                                      int          n,
+                                      int          total,
+                                      ChanceBound  kind,
+                                      Value        vmin,
+                                      Value        vmax) const {
 
     if (chanceModel == ChanceModel::Tables)
         return std::clamp(aggregate_tables(values, counts, n, total, kind), vmin, vmax);
