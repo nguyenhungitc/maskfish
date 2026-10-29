@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Networks{% endblock %}
+{% block content %}
+<h1>Networks</h1>
+<section class="block">
+  <table class="list">
+    <thead><tr><th>Name</th><th>Size</th><th>Added</th><th></th></tr></thead>
+    <tbody>
+    {% for n in nets %}
+      <tr>
+        <td class="mono"><a href="{{ url_for('nets_download', name=n.name) }}">{{ n.name }}</a>
+          {% if n.name == 'maskfish.nnue' %}<span class="badge">default</span>{% endif %}
+          {% if not n.valid %}<span class="badge st-failed">invalid</span>{% endif %}</td>
+        <td>{{ n.size|size }}</td>
+        <td title="{{ n.mtime|datetime }}">{{ n.mtime|ago }}</td>
+        <td class="actions">
+          <form method="post" action="{{ url_for('nets_delete', name=n.name) }}" onsubmit="return confirm('Delete {{ n.name }}?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn small danger ghost">Delete</button></form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">No network yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div class="cols">
+<section class="block">
+  <h2>Upload a network</h2>
+  <form method="post" action="{{ url_for('nets_upload') }}" enctype="multipart/form-data" class="grid"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="wide">File (.nnue, as exported by the trainer) <input type="file" name="network" accept=".nnue" required></label>
+    <label class="check"><input type="radio" name="rename" value="keep" checked> Keep the file name</label>
+    <label class="check"><input type="radio" name="rename" value="hash"> Name it nn-&lt;sha256&gt;.nnue, as fishtest</label>
+    <button class="btn primary">Upload</button>
+  </form>
+</section>
+<section class="block">
+  <h2>Default network</h2>
+  <p>Tests use <span class="mono">maskfish.nnue</span> unless another network is chosen. It is the network of the hidden ref <span class="mono">refs/assets/net</span> (published by <span class="mono">scripts/push_net.sh</span>) of:</p>
+  <p class="mono small">{{ settings.net_url }}</p>
+  <form method="post" action="{{ url_for('nets_fetch') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">Fetch the network of refs/assets/net</button></form>
+</section>
+</div>
+{% endblock %}

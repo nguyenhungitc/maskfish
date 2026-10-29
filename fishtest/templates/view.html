@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge %}
+{% block title %}#{{ run.id }} {{ run.new_ref }}{% endblock %}
+{% block content %}
+<div class="title-row">
+  <h1>{{ run.new_ref }} <small class="muted">vs {{ run.base_ref }} · #{{ run.id }}</small></h1>
+  <div class="buttons">
+    {% if run.status in ('pending', 'building', 'running') %}
+      <form method="post" action="{{ url_for('stop', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">Stop</button></form>
+    {% endif %}
+    {% if run.status in ('stopped', 'failed') or (run.status == 'finished' and run.test_type == 'numgames') %}
+      <form method="post" action="{{ url_for('resume', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn primary">Resume</button></form>
+    {% endif %}
+    <a class="btn" href="{{ url_for('run_form', clone=run.id) }}">Rerun</a>
+    <a class="btn" href="{{ url_for('diff', rid=run.id) }}">Diff</a>
+    {% if compare_url(run) %}<a class="btn" href="{{ compare_url(run) }}" target="_blank" rel="noopener">GitHub</a>{% endif %}
+    {% if games_file %}<a class="btn" href="{{ url_for('games', rid=run.id) }}">Games</a>{% endif %}
+    {% if run.status not in ('building', 'running') %}
+      <form method="post" action="{{ url_for('delete', rid=run.id) }}"
+            onsubmit="return confirm('Delete test #{{ run.id }} and its games?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger ghost">Delete</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div id="live" {% if run.status in ('pending', 'building', 'running') %}data-refresh="5"{% endif %}>
+{% include "_live.html" %}
+</div>
+
+<div class="cols">
+<section class="block">
+  <h2>Test</h2>
+  <table class="kv">
+    <tr><th>Repository</th><td class="mono">{{ run.repo }}</td></tr>
+    {% for side in ('new', 'base') %}
+    <tr><th>{{ side|capitalize }}</th><td>
+      <b>{{ run[side ~ '_ref'] }}</b>
+      {% if commit_url(run, run[side ~ '_sha']) %}<a class="mono" href="{{ commit_url(run, run[side ~ '_sha']) }}" target="_blank" rel="noopener">{{ run[side ~ '_sha'][:10] }}</a>
+      {% else %}<span class="mono">{{ run[side ~ '_sha'][:10] }}</span>{% endif %}
+      <div class="muted">{{ run[side ~ '_msg'] }}</div>
+    </td></tr>
+    {% endfor %}
+    <tr><th>Networks</th><td class="mono">new {{ run.new_net }}<br>base {{ run.base_net }}</td></tr>
+    {% if run.new_options or run.base_options %}
+    <tr><th>UCI options</th><td class="mono">new {{ run.new_options or '-' }}<br>base {{ run.base_options or '-' }}</td></tr>
+    {% endif %}
+    {% if run.new_make or run.base_make %}
+    <tr><th>Make options</th><td class="mono">new {{ run.new_make or '-' }}<br>base {{ run.base_make or '-' }}</td></tr>
+    {% endif %}
+    <tr><th>Time control</th><td class="mono">{{ run.tc }} · Threads {{ run.threads }} · Hash {{ run.hash }}</td></tr>
+    <tr><th>Test</th><td class="mono">
+      {% if run.test_type == 'spsa' %}SPSA, {{ run.num_games }} games ({{ run.num_games // 2 }} iterations), A ratio {{ run.spsa.A_ratio }}, alpha {{ run.spsa.alpha }}, gamma {{ run.spsa.gamma }}
+      {% elif run.test_type == 'sprt' %}SPRT [{{ run.elo0 }}, {{ run.elo1 }}] {{ 'nElo' if run.elo_model == 'normalized' else 'logistic Elo' }}, alpha {{ run.alpha }}, beta {{ run.beta }}{% if run.num_games %}, at most {{ run.num_games }} games{% endif %}
+      {% else %}{{ run.num_games }} games{% endif %}
+    </td></tr>
+    <tr><th>Openings</th><td>{{ run.plies_min }}–{{ run.plies_max }} random plies, random hidden identities, game pairs with colors swapped</td></tr>
+    <tr><th>Adjudication</th><td>|score| ≥ {{ run.adjudicate }} internal units for 4 moves of each side, or a mate score</td></tr>
+    <tr><th>Information</th><td>{{ 'full (both sides learn captured dark pieces)' if run.full_info else 'hidden (only the capturer learns a captured dark piece)' }}</td></tr>
+    <tr><th>Bench</th><td class="mono">new {{ run.new_bench or '-' }}<br>base {{ run.base_bench or '-' }}</td></tr>
+    <tr><th>Seed</th><td class="mono">{{ run.seed }}</td></tr>
+    <tr><th>Submitted</th><td>{{ run.username or 'local' }} · {{ run.created|datetime }}</td></tr>
+    {% if run.started %}<tr><th>Started</th><td>{{ run.started|datetime }}</td></tr>{% endif %}
+    {% if run.finished %}<tr><th>Finished</th><td>{{ run.finished|datetime }}</td></tr>{% endif %}
+  </table>
+</section>
+
+<section class="block">
+  <h2>Modify</h2>
+  <form method="post" action="{{ url_for('modify', rid=run.id) }}" class="modify"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Priority <input type="number" name="priority" value="{{ run.priority }}" min="-100" max="100"></label>
+    <label>{{ 'Maximum games (0: no limit)' if run.test_type == 'sprt' else 'Games' }}
+      <input type="number" name="num_games" value="{{ run.num_games }}" min="0" step="2"></label>
+    <label class="wide">Info <textarea name="info" rows="3">{{ run.info }}</textarea></label>
+    <button class="btn">Save</button>
+  </form>
+  <h2>Log</h2>
+  <pre class="log">{{ run.log or 'Nothing yet.' }}</pre>
+</section>
+</div>
+{% endblock %}

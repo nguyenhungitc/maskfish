@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% macro hint(key) -%}
+  {%- if key in saved %}<span class="hint">changed here · command line: <span class="mono">{% if defaults[key] is sameas true %}on{% elif defaults[key] is sameas false %}off{% else %}{{ defaults[key] }}{% endif %}</span></span>{% endif -%}
+{%- endmacro %}
+{% block content %}
+<h1>Settings</h1>
+
+<section class="block">
+  <h2>Runner</h2>
+  <div class="runner-row">
+    <span class="pill {{ runner.cls }}">{{ runner.label }}</span>
+    {% if runner.run %}<a href="{{ url_for('view', rid=runner.run) }}">current test #{{ runner.run }}</a>{% endif %}
+    <div class="buttons">
+      {% if runner.mode != 'running' %}
+        <form method="post" action="{{ url_for('settings_runner', mode='running') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn primary">Resume testing</button></form>
+      {% endif %}
+      {% if runner.mode == 'running' %}
+        <form method="post" action="{{ url_for('settings_runner', mode='pause_after') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">Pause after the current test</button></form>
+      {% endif %}
+      {% if runner.mode != 'paused' %}
+        <form method="post" action="{{ url_for('settings_runner', mode='paused') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">Pause now</button></form>
+      {% endif %}
+    </div>
+  </div>
+  <p class="muted small">Pause now puts the current test back in the queue (its games are kept) and starts nothing until you resume. Tests can still be submitted while the runner is paused.</p>
+</section>
+
+<form method="post" action="{{ url_for('settings_save') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<div class="cols">
+  <section class="block">
+    <h2>Games and builds</h2>
+    <div class="grid one">
+      <label>Games at a time (concurrency)
+        <input type="number" name="concurrency" value="{{ cur.concurrency }}" min="1" max="1024">
+        <span class="hint">{{ cpus }} CPU threads on this machine; a test with N threads plays concurrency / N games at a time. {{ hint('concurrency') }}</span>
+      </label>
+      <label>Build jobs (make -j)
+        <input type="number" name="jobs" value="{{ cur.jobs }}" min="1" max="1024">
+        {{ hint('jobs') }}
+      </label>
+      <label>ARCH of the builds
+        <input name="arch" value="{{ cur.arch }}" list="archs" class="mono">
+        <datalist id="archs">
+          {% for a in ['native', 'x86-64-avx512', 'x86-64-vnni512', 'x86-64-avx2', 'x86-64-bmi2', 'x86-64-sse41-popcnt', 'x86-64', 'apple-silicon', 'armv8'] %}<option value="{{ a }}">{% endfor %}
+        </datalist>
+        <span class="hint">A new ARCH builds the engines again (builds are cached per ARCH). {{ hint('arch') }}</span>
+      </label>
+      <label>Time margin (ms)
+        <input type="number" name="timemargin" value="{{ cur.timemargin }}" min="0" max="60000">
+        <span class="hint">How long an engine may exceed its clock before losing on time. {{ hint('timemargin') }}</span>
+      </label>
+      <label class="check"><input type="checkbox" name="spsa" {{ 'checked' if cur.spsa }}> Enable SPSA tuning tests {{ hint('spsa') }}</label>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Defaults of the New test form</h2>
+    <div class="grid one">
+      <label>Repository
+        <input name="repo" value="{{ cur.repo }}">
+        <span class="hint">URL, owner/repo or a local path. {{ hint('repo') }}</span>
+      </label>
+      <label>Base branch
+        <input name="base_branch" value="{{ cur.base_branch }}">
+        {{ hint('base_branch') }}
+      </label>
+      <label>Repository of the default network
+        <input name="net_url" value="{{ cur.net_url }}" class="mono">
+        <span class="hint">Its hidden ref refs/assets/net holds maskfish.nnue (URL, owner/repo or a local path). Used by "Fetch the network of refs/assets/net" on the Networks page. {{ hint('net_url') }}</span>
+      </label>
+    </div>
+  </section>
+</div>
+<div class="buttons save-row">
+  <button class="btn primary big" name="action" value="save">Save settings</button>
+  {% if saved %}<button class="btn" name="action" value="reset" onclick="return confirm('Use the command-line values again?')">Reset to the command-line values</button>{% endif %}
+</div>
+</form>
+
+<div class="cols">
+  <section class="block">
+    <h2>Password</h2>
+    <p class="muted small">
+      {% if password_web %}A password is set: every change (submitting, stopping, settings…) asks for it, with any user name.
+      {% elif password_cli %}The password of the --password option is used.
+      {% else %}No password: anyone who can open this page can change everything. Set one before opening the server to the network.{% endif %}
+    </p>
+    <form method="post" action="{{ url_for('settings_password') }}" class="grid one"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>New password <input type="password" name="password" autocomplete="new-password"></label>
+      <label>Again <input type="password" name="password2" autocomplete="new-password"></label>
+      <div class="buttons">
+        <button class="btn primary" name="action" value="set">Set password</button>
+        {% if password_web %}<button class="btn danger ghost" name="action" value="remove" onclick="return confirm('Remove the password?')">Remove password</button>{% endif %}
+      </div>
+    </form>
+  </section>
+
+  <section class="block">
+    <h2>Storage</h2>
+    <table class="kv">
+      <tr><th>Data directory</th><td class="mono">{{ cur.data_dir }}</td></tr>
+      <tr><th>Cached builds</th><td>{{ builds_size|size }}</td></tr>
+      <tr><th>Games</th><td>{{ games_size|size }}</td></tr>
+      {% if cur.host %}<tr><th>Listening on</th><td class="mono">{{ cur.host }}:{{ cur.port }} <span class="muted">(command line only)</span></td></tr>{% endif %}
+    </table>
+    <form method="post" action="{{ url_for('settings_clear_builds') }}" onsubmit="return confirm('Delete all cached builds? They are rebuilt when needed.')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn danger ghost">Delete cached builds</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

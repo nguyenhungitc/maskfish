@@ -1,0 +1,42 @@
+# Files from build
+**/*.o
+**/*.s
+# '**/*.s' also matches '.S' on case-insensitive file systems (Windows, macOS)
+!src/external/decompress/huf_decompress_amd64.S
+!src/nnue/embedded_nnue.S
+src/.depend
+
+# Files from Qt
+build
+CMakeLists.txt
+CMakeLists.txt.user
+
+# Built binary
+src/maskfish*
+src/-lstdc++.res
+
+# Builds of a universal binary
+src/temp_builds/
+
+# Neural network for the NNUE evaluation (on GitHub, the network is only in the
+# hidden ref refs/assets/net; net/ holds the local network that
+# scripts/push_net.sh publishes)
+**/*.nnue
+**/*.nnue.part
+/net/
+
+# Trainer outputs (see trainer/README.md)
+**/__pycache__/
+trainer/.venv/
+trainer/data/
+trainer/runs/
+trainer/nets/
+trainer/autotune/
+trainer/archive-*/
+# reference engines (binary and network)
+jieqi/
+
+# pipeline.sh config (holds the Telegram token) and logs
+trainer/scripts/pipeline.env
+trainer/scripts/autotune.env
+trainer/logs/

@@ -1,0 +1,25 @@
+# Authors of Maskfish (https://github.com/nguyenhungitc/maskfish)
+# First time contributors: nguyenhungitc
+the Maskfish developers
+
+# Maskfish is derived from Pikafish, which is derived from Stockfish, and
+# contains code ported from AB-JChess (the reveal heuristics, the copy of the
+# Ranger21 optimizer of the trainer, the extraction of the score <-> mass
+# tables). The authors of those projects below keep their copyright on the
+# code they wrote:
+#
+#   Copyright (C) 2004-2026 The Stockfish developers
+#   Copyright (C) 2004-2023 The Pikafish developers
+#   Copyright (C) The AB-JChess authors
+#
+# All of them are released under the GNU General Public License, version 3
+# or later (see Copying.txt).
+
+# Authors of Pikafish
+the Pikafish developers (https://github.com/official-pikafish/Pikafish/blob/master/AUTHORS)
+
+# Authors of Stockfish
+the Stockfish developers (https://github.com/official-stockfish/Stockfish/blob/master/AUTHORS)
+
+# Authors of AB-JChess
+the AB-JChess authors (https://github.com/lxsgx23/AB-JChess)

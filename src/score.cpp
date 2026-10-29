@@ -1,0 +1,43 @@
+/*
+  Maskfish, a UCI jieqi engine
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
+
+  Maskfish is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  Maskfish is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "score.h"
+
+#include <cassert>
+#include <cstdlib>
+#include <cmath>
+
+#include "uci.h"
+
+namespace Maskfish {
+
+Score::Score(Value v, const Position& pos) {
+    assert(-VALUE_INFINITE < v && v < VALUE_INFINITE);
+
+    if (!is_decisive(v))
+    {
+        score = InternalUnits{rawInternal ? int(v) : UCIEngine::to_cp(v, pos)};
+    }
+    else
+    {
+        auto distance = VALUE_MATE - std::abs(v);
+        score         = (v > 0) ? Mate{distance} : Mate{-distance};
+    }
+}
+
+}

@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}New test{% endblock %}
+{% block content %}
+<h1>New test</h1>
+{% if errors %}
+<div class="flash error">{% for e in errors %}<div>{{ e }}</div>{% endfor %}</div>
+{% endif %}
+<form method="post" action="{{ url_for('run_submit') }}" class="runform"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <section class="block">
+    <h2>Engines</h2>
+    <div class="grid">
+      <label class="wide">Repository
+        <input name="repo" value="{{ v.repo }}" placeholder="https://github.com/owner/maskfish, owner/repo or a local path">
+      </label>
+      <label>Test branch / tag / commit
+        <input name="new_ref" value="{{ v.new_ref }}" required autofocus placeholder="my-patch">
+      </label>
+      <label class="base-side">Base branch / tag / commit
+        <input name="base_ref" value="{{ v.base_ref }}">
+      </label>
+      <label>Test network
+        <select name="new_net">{% for n in nets %}<option {{ 'selected' if n.name == v.new_net }}>{{ n.name }}</option>{% endfor %}
+          {% if not nets %}<option>{{ v.new_net }}</option>{% endif %}</select>
+      </label>
+      <label class="base-side">Base network
+        <select name="base_net">{% for n in nets %}<option {{ 'selected' if n.name == v.base_net }}>{{ n.name }}</option>{% endfor %}
+          {% if not nets %}<option>{{ v.base_net }}</option>{% endif %}</select>
+      </label>
+      <label>Test UCI options
+        <input name="new_options" value="{{ v.new_options }}" placeholder="TTPenalize=true ChanceScaling=340" class="mono">
+      </label>
+      <label class="base-side">Base UCI options
+        <input name="base_options" value="{{ v.base_options }}" class="mono">
+      </label>
+      <label>Test make options
+        <input name="new_make" value="{{ v.new_make }}" placeholder="nnue=att threats=yes layers=2" class="mono">
+      </label>
+      <label class="base-side">Base make options
+        <input name="base_make" value="{{ v.base_make }}" class="mono">
+      </label>
+    </div>
+    {% if not nets %}<p class="muted">No network yet: the default {{ v.new_net }} is fetched from the ref refs/assets/net by the runner (or upload one on the <a href="{{ url_for('nets') }}">Networks</a> page).</p>{% endif %}
+  </section>
+
+  <section class="block">
+    <h2>Conditions</h2>
+    <div class="presets">
+      <button type="button" class="btn small" data-tc="10+0.1" data-hash="16" data-bounds="0,2">STC 10+0.1</button>
+      <button type="button" class="btn small" data-tc="60+0.6" data-hash="64" data-bounds="0.5,2.5">LTC 60+0.6</button>
+      <button type="button" class="btn small" data-bounds="-1.75,0.25">Non-regression [-1.75, 0.25]</button>
+      <button type="button" class="btn small" data-tc="nodes=20000" data-bounds="0,5" data-model="logistic">match.py default (20k nodes, [0, 5] logistic)</button>
+    </div>
+    <div class="grid">
+      <label>Time control
+        <input name="tc" value="{{ v.tc }}" class="mono" required title="10+0.1 (s + increment), nodes=N, depth=N or movetime=MS">
+      </label>
+      <label>Threads <input type="number" name="threads" value="{{ v.threads }}" min="1"></label>
+      <label>Hash (MB) <input type="number" name="hash" value="{{ v.hash }}" min="1"></label>
+      <label>Test type
+        <select name="test_type" id="test_type">
+          <option value="sprt" {{ 'selected' if v.test_type == 'sprt' }}>SPRT</option>
+          <option value="numgames" {{ 'selected' if v.test_type == 'numgames' }}>Fixed number of games</option>
+          {% if settings.spsa %}<option value="spsa" {{ 'selected' if v.test_type == 'spsa' }}>SPSA tuning</option>{% endif %}
+        </select>
+      </label>
+      <label class="sprt">elo0 <input name="elo0" value="{{ v.elo0 }}" class="mono"></label>
+      <label class="sprt">elo1 <input name="elo1" value="{{ v.elo1 }}" class="mono"></label>
+      <label class="sprt">Elo model
+        <select name="elo_model">
+          <option value="normalized" {{ 'selected' if v.elo_model == 'normalized' }}>normalized (nElo, as fishtest)</option>
+          <option value="logistic" {{ 'selected' if v.elo_model == 'logistic' }}>logistic</option>
+        </select>
+      </label>
+      <label class="sprt">alpha <input name="alpha" value="{{ v.alpha }}" class="mono"></label>
+      <label class="sprt">beta <input name="beta" value="{{ v.beta }}" class="mono"></label>
+      <label><span class="sprt-only">Maximum games (0: no limit)</span><span class="games-only">Number of games</span>
+        <input type="number" name="num_games" value="{{ v.num_games }}" min="0" step="2"></label>
+      <label>Priority <input type="number" name="priority" value="{{ v.priority }}" min="-100" max="100"></label>
+    </div>
+  </section>
+
+  {% if settings.spsa %}
+  <section class="block spsa-block">
+    <h2>SPSA parameters</h2>
+    <p class="muted">One per line: <span class="mono">name,start,min,max,c_end,r_end</span>, as printed by the engine for <span class="mono">TUNE()</span>, or just the name of a UCI spin option (its default, min and max are read from the engine, with c_end = (max − min) / 20 and r_end = 0.002). Both sides play the test commit; the number of games sets the length of the tuning.</p>
+    <div class="grid">
+      <label class="wide">Parameters
+        <textarea name="spsa_params" rows="6" class="mono" placeholder="RevealQuietBase&#10;RevealQuietSafety,24,-192,192,12,0.002">{{ v.spsa_params }}</textarea>
+      </label>
+      <label>A ratio <input name="spsa_A" value="{{ v.spsa_A }}" class="mono"></label>
+      <label>alpha <input name="spsa_alpha" value="{{ v.spsa_alpha }}" class="mono"></label>
+      <label>gamma <input name="spsa_gamma" value="{{ v.spsa_gamma }}" class="mono"></label>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="block">
+    <h2>Games</h2>
+    <div class="grid">
+      <label>Random opening plies, min <input type="number" name="plies_min" value="{{ v.plies_min }}" min="0"></label>
+      <label>max <input type="number" name="plies_max" value="{{ v.plies_max }}" min="0"></label>
+      <label>Adjudication (internal units) <input type="number" name="adjudicate" value="{{ v.adjudicate }}" min="100"></label>
+      <label class="check"><input type="checkbox" name="full_info" {{ 'checked' if v.full_info|int }}> Full information (both sides learn captured dark pieces)</label>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Description</h2>
+    <div class="grid">
+      <label>Submitted by <input name="username" value="{{ v.username }}" maxlength="60"></label>
+      <label class="wide">Info <textarea name="info" rows="3" placeholder="What does the patch do?">{{ v.info }}</textarea></label>
+    </div>
+  </section>
+  <button class="btn primary big">Submit test</button>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const f = document.querySelector(".runform");
+const sync = () => {
+  const type = f.elements["test_type"].value;
+  const sprt = type === "sprt", spsa = type === "spsa";
+  f.querySelectorAll(".spsa-block").forEach(e => e.style.display = spsa ? "" : "none");
+  f.querySelectorAll(".base-side").forEach(e => e.style.display = spsa ? "none" : "");
+  f.querySelectorAll(".sprt").forEach(e => e.style.display = sprt ? "" : "none");
+  f.querySelectorAll(".sprt-only").forEach(e => e.style.display = sprt ? "" : "none");
+  f.querySelectorAll(".games-only").forEach(e => e.style.display = sprt ? "none" : "");
+};
+f.elements["test_type"].addEventListener("change", sync);
+sync();
+f.querySelectorAll(".presets button").forEach(b => b.addEventListener("click", () => {
+  const d = b.dataset;
+  if (d.tc) f.elements["tc"].value = d.tc;
+  if (d.hash) f.elements["hash"].value = d.hash;
+  if (d.bounds) {
+    [f.elements["elo0"].value, f.elements["elo1"].value] = d.bounds.split(",");
+    f.elements["test_type"].value = "sprt";
+    f.elements["elo_model"].value = d.model || "normalized";
+    sync();
+  }
+}));
+</script>
+{% endblock %}

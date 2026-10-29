@@ -1,0 +1,154 @@
+# Makes a release, by hand only (Actions > Release > Run workflow), from the
+# branch pro only (started on another branch, it stops at once): builds the
+# binaries (Binaries workflow, called here) of the last commit of pro with the
+# network of the hidden ref refs/assets/net
+# (published by scripts/push_net.sh), then makes a release with their archives:
+#
+#   maskfish-ubuntu-x86-64-universal.tar, maskfish-windows-x86-64-universal.zip,
+#   maskfish-macos-universal.tar, maskfish-android-arm64-universal.tar
+#
+# Each binary embeds the network, and each archive also holds it as
+# maskfish.nnue: the release has no separate network file.
+#
+# The tag is yymmdd (date in Vietnam, UTC+7), or yymmdd-2, yymmdd-3, ... when
+# the tag exists, unless one is given; the title is "Maskfish yyyy-mm-dd"
+# (with the same -2, -3, ... as the tag). The release is made only when every
+# binary was built and checked, and when every archive holds the network of
+# the ref as it was at the start (not one pushed during the run).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of the release (empty: yymmdd)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  REF: refs/assets/net
+
+jobs:
+  prepare:
+    name: Network and tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      title: ${{ steps.tag.outputs.title }}
+      sha256: ${{ steps.net.outputs.sha256 }}
+      commit: ${{ steps.net.outputs.commit }}
+    steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::Releases are made from the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Network of refs/assets/net
+        id: net
+        run: |
+          if ! git fetch --no-tags origin "+$REF:$REF"; then
+            echo "::error::$REF does not exist: publish a network with scripts/push_net.sh"
+            exit 1
+          fi
+          git cat-file blob "$REF:maskfish.nnue" > maskfish.nnue
+          if [ "$(od -An -tx1 -N4 maskfish.nnue | tr -d ' \n')" != "28b52ffd" ]; then
+            echo "::error::maskfish.nnue of $REF is not a zstd-compressed network"
+            exit 1
+          fi
+          echo "sha256=$(sha256sum maskfish.nnue | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse "$REF")" >> "$GITHUB_OUTPUT"
+
+      - name: Tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # One date for the tag and the title (yymmdd yyyy-mm-dd)
+          read -r base day <<< "$(TZ=Asia/Ho_Chi_Minh date '+%y%m%d %Y-%m-%d')"
+          title="Maskfish $day"
+          if [ -n "$TAG" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+              echo "::error::The tag $TAG exists"
+              exit 1
+            fi
+            tag=$TAG
+          else
+            tag=$base
+            n=2
+            while git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; do
+              tag="$base-$n"
+              title="Maskfish $day-$n"
+              n=$((n + 1))
+            done
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "Release: $title (tag $tag)"
+
+  binaries:
+    name: Binaries
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/binaries.yml
+
+  publish:
+    name: Publish ${{ needs.prepare.outputs.tag }}
+    needs: [prepare, binaries]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      TITLE: ${{ needs.prepare.outputs.title }}
+      SHA256: ${{ needs.prepare.outputs.sha256 }}
+      NET_COMMIT: ${{ needs.prepare.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: maskfish-*
+          merge-multiple: true
+          path: dist
+
+      - name: Check the archives (all there, network of the ref)
+        working-directory: dist
+        run: |
+          for a in maskfish-ubuntu-x86-64-universal.tar maskfish-windows-x86-64-universal.zip \
+                   maskfish-macos-universal.tar maskfish-android-arm64-universal.tar; do
+            [ -f "$a" ] || { echo "::error::$a is missing"; exit 1; }
+            case $a in
+              *.tar) sum=$(tar -xOf "$a" ./maskfish.nnue | sha256sum | cut -d ' ' -f 1) ;;
+              *.zip) sum=$(unzip -p "$a" maskfish.nnue | sha256sum | cut -d ' ' -f 1) ;;
+            esac
+            if [ "$sum" != "$SHA256" ]; then
+              echo "::error::$a does not hold the network of $REF ($SHA256)"
+              exit 1
+            fi
+            echo "$a: ok"
+          done
+
+      - name: Create the release
+        run: |
+          {
+            echo "Network: \`maskfish.nnue\`, sha256 \`$SHA256\` (\`$REF\` at $NET_COMMIT),"
+            echo "embedded in every binary and also in every archive."
+            echo
+            echo "Code: $GITHUB_SHA (branch \`$GITHUB_REF_NAME\`)."
+          } > notes.md
+
+          gh release create "$TAG" dist/maskfish-* \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file notes.md
+          echo "::notice::Released $TAG"

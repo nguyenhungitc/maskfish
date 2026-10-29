@@ -1,0 +1,697 @@
+/*
+  Maskfish, a UCI jieqi engine
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
+
+  Maskfish is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  Maskfish is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "uci.h"
+
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <iterator>
+#include <optional>
+#include <sstream>
+#include <string_view>
+#include <filesystem>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "benchmark.h"
+#include "engine.h"
+#include "memory.h"
+#include "movegen.h"
+#include "position.h"
+#include "score.h"
+#include "search.h"
+#include "types.h"
+#include "ucioption.h"
+
+namespace Maskfish {
+
+using Time = std::chrono::steady_clock;
+using ms   = std::chrono::milliseconds;
+
+constexpr auto BenchmarkCommand = "speedtest";
+
+template<typename... Ts>
+struct overload: Ts... {
+    using Ts::operator()...;
+};
+
+template<typename... Ts>
+overload(Ts...) -> overload<Ts...>;
+
+void UCIEngine::print_info_string(std::string_view str) {
+    sync_cout_start();
+    for (auto& line : split(str, "\n"))
+    {
+        if (!is_whitespace(line))
+        {
+            std::cout << "info string " << line << '\n';
+        }
+    }
+    sync_cout_end();
+}
+
+UCIEngine::UCIEngine(CommandLine cli_) :
+    engine(cli_.argc > 0 ? std::optional{path_from_utf8(cli_.argv[0])} : std::nullopt),
+    cli(std::move(cli_)) {
+
+    engine.get_options().add_info_listener([](const std::optional<std::string>& str) {
+        if (str.has_value())
+            print_info_string(*str);
+    });
+
+    init_search_update_listeners();
+}
+
+void UCIEngine::init_search_update_listeners() {
+    engine.set_on_iter([](const auto& i) { on_iter(i); });
+    engine.set_on_update_no_moves([](const auto& i) { on_update_no_moves(i); });
+    engine.set_on_update_full(
+      [this](const auto& i) { on_update_full(i, engine.get_options()["UCI_ShowWDL"]); });
+    engine.set_on_start([]() {});
+    engine.set_on_bestmove([](const auto& bm, const auto& p) { on_bestmove(bm, p); });
+    engine.set_on_verify_networks([](const auto& s) { print_info_string(s); });
+}
+
+void UCIEngine::loop() {
+    set_console_utf8();
+    std::string token, cmd;
+
+    for (int i = 1; i < cli.argc; ++i)
+        cmd += std::string(cli.argv[i]) + " ";
+
+    do
+    {
+        if (cli.argc == 1
+            && !getline(std::cin, cmd))  // Wait for an input or an end-of-file (EOF) indication
+            cmd = "quit";
+
+        currentCmd = cmd;
+        std::istringstream is(cmd);
+
+        token.clear();  // Avoid a stale if getline() returns nothing or a blank line
+        is >> token;
+
+        if (token == "quit" || token == "stop")
+            engine.stop();
+
+        // The GUI sends 'ponderhit' to tell that the user has played the expected move.
+        // So, 'ponderhit' is sent if pondering was done on the same move that the user
+        // has played. The search should continue, but should also switch from pondering
+        // to the normal search.
+        else if (token == "ponderhit")
+            engine.set_ponderhit(false);
+
+        else if (token == "uci")
+        {
+            sync_cout << "id name " << engine_info(true) << "\n"
+                      << engine.get_options() << sync_endl;
+
+            sync_cout << "uciok" << sync_endl;
+        }
+
+        else if (token == "setoption")
+            setoption(is);
+        else if (token == "go")
+        {
+            // send info strings after the go command is sent for old GUIs and python-chess
+            print_info_string(engine.numa_config_information_as_string());
+            print_info_string(engine.thread_allocation_information_as_string());
+            go(is);
+        }
+        else if (token == "position")
+            position(is);
+        else if (token == "ucinewgame")
+            engine.search_clear();
+        else if (token == "isready")
+            sync_cout << "readyok" << sync_endl;
+
+        // Add custom non-UCI commands, mainly for debugging purposes.
+        else if (token == "flip")
+            engine.flip();
+        else if (token == "bench")
+            bench(is);
+        else if (token == BenchmarkCommand)
+            benchmark(is);
+        else if (token == "d")
+            sync_cout << engine.visualize() << sync_endl;
+        else if (token == "eval")
+            engine.trace_eval();
+        else if (token == "evalraw")
+            engine.eval_raw();
+        else if (token == "rule")
+            engine.rule();
+        else if (token == "compiler")
+            sync_cout << compiler_info() << sync_endl;
+        else if (token == "export_net")
+        {
+            std::pair<std::optional<std::string>, std::string> files;
+            std::string                                        f;
+
+            if (is >> std::skipws >> f)
+                files.first = f;
+
+            engine.save_network(files);
+        }
+        else if (token == "--help" || token == "help" || token == "--license" || token == "license")
+            sync_cout
+              << "\nMaskfish is a powerful jieqi engine for playing and analyzing."
+                 "\nIt is released as free software licensed under the GNU GPLv3 License."
+                 "\nMaskfish is normally used with a graphical user interface (GUI) and implements"
+                 "\nthe Universal Chess Interface (UCI) protocol to communicate with a GUI, an API, etc."
+                 "\nFor any further information, visit https://github.com/nguyenhungitc/maskfish#readme"
+                 "\nor read the corresponding README.md and Copying.txt files distributed along with this program.\n"
+              << sync_endl;
+        else if (!token.empty() && token[0] != '#')
+            sync_cout << "Unknown command: '" << cmd << "'. Type help for more information."
+                      << sync_endl;
+
+    } while (token != "quit" && cli.argc <= 1);  // The command-line arguments are one-shot
+}
+
+Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
+    Search::LimitsType limits;
+    std::string        token;
+
+    limits.startTime = now();  // The search starts as early as possible
+
+    while (is >> token)
+    {
+        if (token == "searchmoves")  // Needs to be the last command on the line
+        {
+            while (is >> token)
+                limits.searchmoves.push_back(to_lower(token));
+            break;
+        }
+
+        else if (token == "wtime")
+            is >> limits.time[WHITE];
+        else if (token == "btime")
+            is >> limits.time[BLACK];
+        else if (token == "winc")
+            is >> limits.inc[WHITE];
+        else if (token == "binc")
+            is >> limits.inc[BLACK];
+        else if (token == "movestogo")
+            is >> limits.movestogo;
+        else if (token == "depth")
+            is >> limits.depth;
+        else if (token == "nodes")
+            is >> limits.nodes;
+        else if (token == "movetime")
+            is >> limits.movetime;
+        else if (token == "mate")
+            is >> limits.mate;
+        else if (token == "perft")
+            is >> limits.perft;
+        else if (token == "infinite")
+            limits.infinite = 1;
+        else if (token == "ponder")
+            limits.ponderMode = true;
+
+        if (is.fail())
+            terminate_on_critical_error("Invalid argument for '" + token + "'");
+    }
+
+    return limits;
+}
+
+void UCIEngine::go(std::istringstream& is) {
+
+    Search::LimitsType limits = parse_limits(is);
+
+    if (limits.perft)
+        perft(limits);
+    else
+        engine.go(limits);
+}
+
+void UCIEngine::bench(std::istream& args) {
+    std::string token;
+    u64         num, nodes = 0, cnt = 1;
+    u64         nodesSearched = 0;
+    const auto& options       = engine.get_options();
+
+    engine.set_on_update_full([&](const auto& i) {
+        nodesSearched = i.nodes;
+        on_update_full(i, options["UCI_ShowWDL"]);
+    });
+
+    std::vector<std::string> list = Benchmark::setup_bench(engine.fen(), args);
+
+    num = count_if(list.begin(), list.end(),
+                   [](const std::string& s) { return s.find("go ") == 0 || s.find("eval") == 0; });
+
+    TimePoint elapsed = now();
+
+    for (const auto& cmd : list)
+    {
+        std::istringstream is(cmd);
+        is >> token;
+
+        if (token == "go" || token == "eval")
+        {
+            std::cerr << "\nPosition: " << cnt++ << '/' << num << " (" << engine.fen() << ")"
+                      << std::endl;
+            if (token == "go")
+            {
+                Search::LimitsType limits = parse_limits(is);
+
+                if (limits.perft)
+                    nodesSearched = perft(limits);
+                else
+                {
+                    engine.go(limits);
+                    engine.wait_for_search_finished();
+                }
+
+                nodes += nodesSearched;
+                nodesSearched = 0;
+            }
+            else
+                engine.trace_eval();
+        }
+        else if (token == "setoption")
+            setoption(is);
+        else if (token == "position")
+            position(is);
+        else if (token == "ucinewgame")
+        {
+            engine.search_clear();  // search_clear may take a while
+            elapsed = now();
+        }
+    }
+
+    elapsed = now() - elapsed + 1;  // Ensure positivity to avoid a 'divide by zero'
+
+    dbg_print();
+
+    std::cerr << "\n==========================="    //
+              << "\nTotal time (ms) : " << elapsed  //
+              << "\nNodes searched  : " << nodes    //
+              << "\nNodes/second    : " << 1000 * nodes / elapsed << std::endl;
+
+    // reset callback, to not capture a dangling reference to nodesSearched
+    engine.set_on_update_full([&](const auto& i) { on_update_full(i, options["UCI_ShowWDL"]); });
+}
+
+void UCIEngine::benchmark(std::istream& args) {
+    // Probably not very important for a test this long, but include for completeness and sanity.
+    static constexpr int NUM_WARMUP_POSITIONS = 3;
+
+    std::string token;
+    u64         cnt = 1;
+
+    engine.set_on_update_full([](const auto&) {});
+    engine.set_on_iter([](const auto&) {});
+    engine.set_on_update_no_moves([](const auto&) {});
+    engine.set_on_bestmove([](const auto&, const auto&) {});
+    engine.set_on_verify_networks([](const auto&) {});
+
+    Benchmark::BenchmarkSetup setup = Benchmark::setup_benchmark(args);
+
+    const auto numGoCommands = count_if(setup.commands.begin(), setup.commands.end(),
+                                        [](const std::string& s) { return s.find("go ") == 0; });
+
+
+    // Set options once at the start.
+    auto ss = std::istringstream("name Threads value " + std::to_string(setup.threads));
+    setoption(ss);
+    ss = std::istringstream("name Hash value " + std::to_string(setup.ttSize));
+    setoption(ss);
+
+    // Warmup
+    for (const auto& cmd : setup.commands)
+    {
+        std::istringstream is(cmd);
+        is >> token;
+
+        if (token == "go")
+        {
+            // One new line is produced by the search, so omit it here
+            std::cerr << "\rWarmup position " << cnt++ << '/' << NUM_WARMUP_POSITIONS;
+
+            Search::LimitsType limits = parse_limits(is);
+
+            // Run with silenced network verification
+            engine.go(limits);
+            engine.wait_for_search_finished();
+        }
+        else if (token == "position")
+            position(is);
+        else if (token == "ucinewgame")
+        {
+            engine.search_clear();  // search_clear may take a while
+        }
+
+        if (cnt > NUM_WARMUP_POSITIONS)
+            break;
+    }
+
+    std::cerr << "\n";
+
+    cnt = 1;
+
+    int           numHashfullReadings = 0;
+    constexpr int hashfullAges[]      = {0, 999};  // Only normal hashfull and touched hash.
+    constexpr int hashfullAgeCount    = std::size(hashfullAges);
+    int           totalHashfull[hashfullAgeCount] = {0};
+    int           maxHashfull[hashfullAgeCount]   = {0};
+
+    auto updateHashfullReadings = [&]() {
+        numHashfullReadings += 1;
+
+        for (int i = 0; i < hashfullAgeCount; ++i)
+        {
+            const int hashfull = engine.get_hashfull(hashfullAges[i]);
+            maxHashfull[i]     = std::max(maxHashfull[i], hashfull);
+            totalHashfull[i] += hashfull;
+        }
+    };
+
+    engine.search_clear();  // search_clear may take a while
+
+    Time::time_point elapsed;
+    Time::duration   totalTime(0);
+
+    u64 nodes = 0, nodesSearched = 0;
+
+    engine.set_on_update_full([&](const Engine::InfoFull& i) { nodesSearched = i.nodes; });
+
+    engine.set_on_start([&elapsed, &nodesSearched]() {
+        elapsed       = Time::now();
+        nodesSearched = 0;
+    });
+
+    engine.set_on_bestmove(
+      [&totalTime, &elapsed, &nodes, &nodesSearched](const auto&, const auto&) {
+          totalTime += Time::now() - elapsed;
+          nodes += nodesSearched;
+      });
+
+    for (const auto& cmd : setup.commands)
+    {
+        std::istringstream is(cmd);
+        is >> token;
+
+        if (token == "go")
+        {
+            // One new line is produced by the search, so omit it here
+            std::cerr << "\rPosition " << cnt++ << '/' << numGoCommands;
+
+            Search::LimitsType limits = parse_limits(is);
+
+            // Run with silenced network verification
+            engine.go(limits);
+            engine.wait_for_search_finished();
+
+            updateHashfullReadings();
+        }
+        else if (token == "position")
+            position(is);
+        else if (token == "ucinewgame")
+        {
+            engine.search_clear();  // search_clear may take a while
+        }
+    }
+
+    // Ensure positivity to avoid a 'divide by zero'
+    const auto totalTimeMs = std::max<i64>(std::chrono::duration_cast<ms>(totalTime).count(), 1LL);
+
+    dbg_print();
+
+    std::cerr << "\n";
+
+    static_assert(
+      std::size(hashfullAges) == 2 && hashfullAges[0] == 0 && hashfullAges[1] == 999,
+      "Hardcoded for display. Would complicate the code needlessly in the current state.");
+
+    std::string threadBinding = engine.thread_binding_information_as_string();
+    if (threadBinding.empty())
+        threadBinding = "none";
+
+    // clang-format off
+
+    std::cerr << "==========================="
+              << "\nVersion                    : "
+              << engine_version_info()
+              // "\nCompiled by                : "
+              << compiler_info()
+              << "Large pages                : " << (has_large_pages() ? "yes" : "no")
+              << "\nUser invocation            : " << BenchmarkCommand << " "
+              << setup.originalInvocation << "\nFilled invocation          : " << BenchmarkCommand
+              << " " << setup.filledInvocation
+              << "\nAvailable processors       : " << engine.get_numa_config_as_string()
+              << "\nThread count               : " << setup.threads
+              << "\nThread binding             : " << threadBinding
+              << "\nTT size [MiB]              : " << setup.ttSize
+              << "\nHash max, avg [per mille]  : "
+              << "\n    single search          : " << maxHashfull[0] << ", "
+              << totalHashfull[0] / numHashfullReadings
+              << "\n    single game            : " << maxHashfull[1] << ", "
+              << totalHashfull[1] / numHashfullReadings
+              << "\nTotal nodes searched       : " << nodes
+              << "\nTotal search time [s]      : " << totalTimeMs / 1000.0
+              << "\nNodes/second               : " << 1000 * nodes / totalTimeMs << std::endl;
+
+    // clang-format on
+
+    init_search_update_listeners();
+}
+
+void UCIEngine::setoption(std::istringstream& is) {
+    engine.wait_for_search_finished();
+    engine.get_options().setoption(is);
+}
+
+u64 UCIEngine::perft(const Search::LimitsType& limits) {
+    auto nodes = engine.perft(engine.fen(), limits.perft);
+    sync_cout << "\nNodes searched: " << nodes << "\n" << sync_endl;
+    return nodes;
+}
+
+void UCIEngine::position(std::istringstream& is) {
+    std::string token, fen;
+
+    is >> token;
+
+    std::vector<std::string> moves;
+
+    if (token == "startpos")
+    {
+        fen = StartFEN;
+
+        // Consume the "moves" token, if any. Without it, what follows is still
+        // taken as moves rather than silently dropping the first one.
+        if (std::string next; is >> next && next != "moves")
+            moves.push_back(next);
+    }
+    else if (token == "fen")
+        while (is >> token && token != "moves")
+            fen += token + " ";
+    else
+        return;
+
+    while (is >> token)
+    {
+        moves.push_back(token);
+    }
+
+    // Invalid positions and moves are reported with "info string" (Jieqi GUIs
+    // send the revealed pieces, see the README)
+    engine.set_position(fen, moves);
+}
+
+namespace {
+
+struct WinRateParams {
+    double a;
+    double b;
+};
+
+inline WinRateParams win_rate_params(const Position& pos) {
+    const int ply = pos.game_ply();
+    if (ply <= 9)
+        return { 0.00064066, -0.05207866 };
+    else if (ply <= 19)
+        return { 0.00091732, -0.07495616 };
+    else if (ply <= 29)
+        return { 0.00125966, -0.09838683 };
+    else if (ply <= 39)
+        return { 0.00162431, -0.13737944 };
+    else if (ply <= 49)
+        return { 0.00196824, -0.19680290 };
+    else if (ply <= 59)
+        return { 0.00235683, -0.29232929 };
+    else if (ply <= 69)
+        return { 0.00277996, -0.42024359 };
+    else if (ply <= 79)
+        return { 0.00324104, -0.58686233 };
+    else if (ply <= 100)
+        return { 0.00394702, -0.90882361 };
+    else if (ply <= 120)
+        return { 0.00426714, -1.24856114 };
+    else
+        return { 0.00353587, -1.81372732 };
+}
+
+// The win rate model is 1 / (1 + exp((a - eval) / b)), where a = p_a(material) and b = p_b(material).
+// It fits the LTC fishtest statistics rather accurately.
+int win_rate_model(Value v, const Position& pos) {
+
+    auto [a, b] = win_rate_params(pos);
+
+    // Return the win rate in per mille units, rounded to the nearest integer.
+    return std::round(1000 / (1 + std::exp(-(a * v + b))));
+}
+
+double win_rate_model_double(Value v, const Position& pos) {
+    auto [a, b] = win_rate_params(pos);
+    return 1 / (1 + std::exp(-(a * v + b)));
+}
+}
+
+std::string UCIEngine::format_score(const Score& s) {
+    const auto format = overload{[](Score::Mate mate) -> std::string {
+                                     auto m = (mate.plies > 0 ? (mate.plies + 1) : mate.plies) / 2;
+                                     return std::string("mate ") + std::to_string(m);
+                                 },
+                                 [](Score::InternalUnits units) -> std::string {
+                                     return std::string("cp ") + std::to_string(units.value);
+                                 }};
+
+    return s.visit(format);
+}
+
+// Turns a Value to an integer centipawn number,
+// without treatment of mate and similar special scores.
+int UCIEngine::to_cp(Value v, const Position& pos) {
+
+    long double wdl_w = win_rate_model_double( v, pos);
+    long double wdl_l = win_rate_model_double(-v, pos);
+    long double win_loss_rate = wdl_w - wdl_l;
+    constexpr long double mate = double(VALUE_MATE_IN_MAX_PLY - 1) / 400;
+
+    return std::clamp(int(400 * std::clamp(std::log10((1 + win_loss_rate) / (1 - win_loss_rate)), -mate, mate) + 0.5), -9999, 9999);
+}
+
+std::string UCIEngine::wdl(Value v, const Position& pos) {
+    std::stringstream ss;
+
+    int wdl_w = win_rate_model(v, pos);
+    int wdl_l = win_rate_model(-v, pos);
+    int wdl_d = 1000 - wdl_w - wdl_l;
+    ss << wdl_w << " " << wdl_d << " " << wdl_l;
+
+    return ss.str();
+}
+
+std::string UCIEngine::square(Square s) {
+    return std::string{char('a' + file_of(s)), char('0' + rank_of(s))};
+}
+
+std::string UCIEngine::move(Move m) {
+    if (m == Move::none())
+        return "(none)";
+
+    if (m == Move::null())
+        return "0000";
+
+    Square from = m.from_sq();
+    Square to   = m.to_sq();
+
+    std::string move = square(from) + square(to);
+
+    return move;
+}
+
+
+std::string UCIEngine::to_lower(std::string str) {
+    std::transform(str.begin(), str.end(), str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    return str;
+}
+
+Move UCIEngine::to_move(const Position& pos, std::string str) {
+    // A move may carry the revealed / captured pieces (Jieqi), see Engine::set_position()
+    for (const auto& m : MoveList<ALL>(pos))
+        if (str.substr(0, 4) == move(m))
+            return m;
+
+    return Move::none();
+}
+
+void UCIEngine::on_update_no_moves(const Engine::InfoShort& info) {
+    sync_cout << "info depth " << info.depth << " score " << format_score(info.score) << sync_endl;
+}
+
+void UCIEngine::on_update_full(const Engine::InfoFull& info, bool showWDL) {
+    std::stringstream ss;
+
+    ss << "info";
+    ss << " depth " << info.depth                 //
+       << " seldepth " << info.selDepth           //
+       << " multipv " << info.multiPV             //
+       << " score " << format_score(info.score);  //
+
+    if (!info.bound.empty())
+        ss << " " << info.bound;
+
+    if (showWDL)
+        ss << " wdl " << info.wdl;
+
+    ss << " nodes " << info.nodes        //
+       << " nps " << info.nps            //
+       << " hashfull " << info.hashfull  //
+       << " tbhits " << info.tbHits      //
+       << " time " << info.timeMs        //
+       << " pv " << info.pv;             //
+
+    sync_cout << ss.str() << sync_endl;
+}
+
+void UCIEngine::on_iter(const Engine::InfoIter& info) {
+    std::stringstream ss;
+
+    ss << "info";
+    ss << " depth " << info.depth                     //
+       << " currmove " << info.currmove               //
+       << " currmovenumber " << info.currmovenumber;  //
+
+    sync_cout << ss.str() << sync_endl;
+}
+
+void UCIEngine::on_bestmove(std::string_view bestmove, std::string_view ponder) {
+    sync_cout << "bestmove " << bestmove;
+    if (!ponder.empty())
+        std::cout << " ponder " << ponder;
+    std::cout << sync_endl;
+}
+
+void UCIEngine::terminate_on_critical_error(const std::string& message) {
+    sync_cout << "info string CRITICAL ERROR: Command `" << currentCmd
+              << "` failed. Reason: " << message << '\n'
+              << sync_endl;
+    std::exit(1);
+}
+
+}  // namespace Maskfish

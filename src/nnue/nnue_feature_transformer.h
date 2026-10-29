@@ -1,0 +1,516 @@
+/*
+  Maskfish, a UCI jieqi engine
+  Copyright (C) 2026 The Maskfish developers (see AUTHORS file)
+
+  Maskfish is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  Maskfish is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+// A class that converts the input features of the NNUE evaluation function
+
+#ifndef NNUE_FEATURE_TRANSFORMER_H_INCLUDED
+#define NNUE_FEATURE_TRANSFORMER_H_INCLUDED
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <iosfwd>
+
+#include "../position.h"
+#include "../types.h"
+#include "nnue_accumulator.h"
+#include "nnue_architecture.h"
+#include "nnue_common.h"
+#include "nnz_helper.h"
+#include "simd.h"
+
+namespace Maskfish::Eval::NNUE {
+
+// Returns the inverse of a permutation
+template<std::size_t Len>
+constexpr std::array<std::size_t, Len>
+invert_permutation(const std::array<std::size_t, Len>& order) {
+    std::array<std::size_t, Len> inverse{};
+    for (std::size_t i = 0; i < order.size(); i++)
+        inverse[order[i]] = i;
+    return inverse;
+}
+
+// Divide a byte region of size TotalSize to chunks of size
+// BlockSize, and permute the blocks by a given order
+template<std::size_t BlockSize, typename T, std::size_t N, std::size_t OrderSize>
+void permute(T (&data)[N], const std::array<std::size_t, OrderSize>& order) {
+    constexpr std::size_t TotalSize = N * sizeof(T);
+
+    static_assert(TotalSize % (BlockSize * OrderSize) == 0,
+                  "ChunkSize * OrderSize must perfectly divide TotalSize");
+
+    constexpr std::size_t ProcessChunkSize = BlockSize * OrderSize;
+
+    std::array<std::byte, ProcessChunkSize> buffer{};
+
+    std::byte* const bytes = reinterpret_cast<std::byte*>(data);
+
+    for (std::size_t i = 0; i < TotalSize; i += ProcessChunkSize)
+    {
+        std::byte* const values = &bytes[i];
+
+        for (std::size_t j = 0; j < OrderSize; j++)
+        {
+            auto* const buffer_chunk = &buffer[j * BlockSize];
+            auto* const value_chunk  = &values[order[j] * BlockSize];
+
+            std::copy(value_chunk, value_chunk + BlockSize, buffer_chunk);
+        }
+
+        std::copy(std::begin(buffer), std::end(buffer), values);
+    }
+}
+
+// Input feature converter
+template<IndexType TransformedFeatureDimensions>
+class FeatureTransformer {
+
+    // Number of output dimensions for one side
+    static constexpr IndexType HalfDimensions = TransformedFeatureDimensions;
+
+   public:
+    // Output type
+    using OutputType = TransformedFeatureType;
+
+    // Number of input/output dimensions
+    static constexpr IndexType InputDimensions  = FeatureSet::Dimensions;
+    static constexpr IndexType OutputDimensions = HalfDimensions;
+#ifdef JIEQI_NNUE_THREATS
+    static constexpr IndexType ThreatInputDimensions = ThreatFeatureSet::Dimensions;
+#endif
+
+    // Size of forward propagation buffer
+    static constexpr std::size_t BufferSize = OutputDimensions * sizeof(OutputType);
+
+    // Store the order by which 128-bit blocks of a 1024-bit data must
+    // be permuted so that calling packus on adjacent vectors of 16-bit
+    // integers loaded from the data results in the pre-permutation order
+    static constexpr auto PackusEpi16Order = []() -> std::array<std::size_t, 8> {
+#if defined(USE_AVX512)
+        // _mm512_packus_epi16 after permutation:
+        // |   0   |   2   |   4   |   6   | // Vector 0
+        // |   1   |   3   |   5   |   7   | // Vector 1
+        // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | // Packed Result
+        return {0, 2, 4, 6, 1, 3, 5, 7};
+#elif defined(USE_AVX2) || defined(USE_LASX)
+        // _mm256_packus_epi16 (or __lasx_xvssrani_bu_h) after permutation:
+        // |   0   |   2   |  |   4   |   6   | // Vector 0, 2
+        // |   1   |   3   |  |   5   |   7   | // Vector 1, 3
+        // | 0 | 1 | 2 | 3 |  | 4 | 5 | 6 | 7 | // Packed Result
+        return {0, 2, 1, 3, 4, 6, 5, 7};
+#else
+        return {0, 1, 2, 3, 4, 5, 6, 7};
+#endif
+    }();
+
+    static constexpr auto InversePackusEpi16Order = invert_permutation(PackusEpi16Order);
+
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+    // The threat weight rows are read a full vector (sizeof(vec_t) bytes) at a
+    // time by the threat accumulator updates: unpack{lo,hi}_epi8 interleave
+    // the bytes of two rows (or of a row and zero) and maddubs against a
+    // vector of ones sums each pair into a 16-bit lane (see
+    // vec_widen_pair_i8()). The unpacks work within 128-bit lanes, so the
+    // 16-bit results of a vector come out with its 8-byte blocks in the order
+    // {0, 2, 4, 6, ...} (lo) and {1, 3, 5, 7, ...} (hi). Storing the 8-byte
+    // blocks of every vector in this order at load time makes lo and hi two
+    // consecutive vectors of the accumulator, whose layout is unchanged. (The
+    // identity with 128-bit vectors.) The HalfKA rows are not permuted: an
+    // incremental update has mostly one row of each sign, which gain nothing.
+    static constexpr auto WideningPairOrder = []() {
+        constexpr std::size_t              NumBlocks = sizeof(SIMD::vec_t) / 8;
+        std::array<std::size_t, NumBlocks> order{};
+        for (std::size_t i = 0; i < NumBlocks; ++i)
+            order[i] = i % 2 == 0 ? i / 2 : NumBlocks / 2 + i / 2;
+        return order;
+    }();
+
+    static constexpr auto InverseWideningPairOrder = invert_permutation(WideningPairOrder);
+#endif
+
+    // Hash value embedded in the evaluation file
+    static constexpr std::uint32_t get_hash_value() {
+        // Networks without PSQT (make psqt=no) have a different layout
+        constexpr std::uint32_t PSQTHash = UsePSQT ? 0 : 0x5E0D0000;
+#ifdef JIEQI_NNUE_THREATS
+        return FeatureSet::HashValue ^ ThreatFeatureSet::HashValue ^ (OutputDimensions * 2)
+             ^ PSQTHash;
+#else
+        return FeatureSet::HashValue ^ (OutputDimensions * 2) ^ PSQTHash;
+#endif
+    }
+
+    // The 8-bit threat weights are permuted element for element like the
+    // 16-bit ones (blocks of 8 elements), so that they line up with the
+    // accumulator.
+    // The 8-bit weights are permuted by blocks of 8, which become blocks of
+    // 16 bytes once sign-extended to the 16-bit accumulators
+    void permute_weights() {
+        permute<16>(biases, PackusEpi16Order);
+        permute<8>(weights, PackusEpi16Order);
+#ifdef JIEQI_NNUE_THREATS
+        permute<8>(threatWeights, PackusEpi16Order);
+#endif
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, WideningPairOrder);
+#endif
+    }
+
+    void unpermute_weights() {
+#if defined(USE_PAIRED_WIDENING_ADD) && defined(JIEQI_NNUE_THREATS)
+        if constexpr (sizeof(SIMD::vec_t) > 16)
+            permute<8>(threatWeights, InverseWideningPairOrder);
+#endif
+        permute<16>(biases, InversePackusEpi16Order);
+        permute<8>(weights, InversePackusEpi16Order);
+#ifdef JIEQI_NNUE_THREATS
+        permute<8>(threatWeights, InversePackusEpi16Order);
+#endif
+    }
+
+    // Read network parameters
+    bool read_parameters(std::istream& stream) {
+
+        read_leb_128<BiasType>(stream, biases, HalfDimensions);
+        read_little_endian<WeightType>(stream, weights, HalfDimensions * InputDimensions);
+        if constexpr (UsePSQT)
+            read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
+        else
+            std::memset(psqtWeights, 0, sizeof(psqtWeights));
+#ifdef JIEQI_NNUE_THREATS
+        // Threat weights are not doubled: the threat accumulator is doubled
+        // when it is added in transform(). Stored as raw int8 (LEB128 would
+        // not make them smaller, the file is compressed anyway).
+        read_little_endian<ThreatWeightType>(stream, threatWeights,
+                                             HalfDimensions * ThreatInputDimensions);
+        if constexpr (UsePSQT)
+            read_leb_128<PSQTWeightType>(stream, threatPsqtWeights,
+                                         PSQTBuckets * ThreatInputDimensions);
+        else
+            std::memset(threatPsqtWeights, 0, sizeof(threatPsqtWeights));
+#endif
+
+        permute_weights();
+        return !stream.fail();
+    }
+
+    // Write network parameters
+    bool write_parameters(std::ostream& stream) const {
+        std::unique_ptr<FeatureTransformer> copy = std::make_unique<FeatureTransformer>(*this);
+
+        copy->unpermute_weights();
+
+        write_leb_128<BiasType>(stream, copy->biases, HalfDimensions);
+        write_little_endian<WeightType>(stream, copy->weights, HalfDimensions * InputDimensions);
+        if constexpr (UsePSQT)
+            write_leb_128<PSQTWeightType>(stream, copy->psqtWeights, PSQTBuckets * InputDimensions);
+#ifdef JIEQI_NNUE_THREATS
+        write_little_endian<ThreatWeightType>(stream, copy->threatWeights,
+                                              HalfDimensions * ThreatInputDimensions);
+        if constexpr (UsePSQT)
+            write_leb_128<PSQTWeightType>(stream, copy->threatPsqtWeights,
+                                          PSQTBuckets * ThreatInputDimensions);
+#endif
+
+        return !stream.fail();
+    }
+
+    std::size_t get_content_hash() const {
+        std::size_t h = 0;
+        hash_combine(h, get_raw_data_hash(biases));
+        hash_combine(h, get_raw_data_hash(weights));
+        hash_combine(h, get_raw_data_hash(psqtWeights));
+#ifdef JIEQI_NNUE_THREATS
+        hash_combine(h, get_raw_data_hash(threatWeights));
+        hash_combine(h, get_raw_data_hash(threatPsqtWeights));
+#endif
+        hash_combine(h, get_hash_value());
+        return h;
+    }
+
+    // Convert input features
+    // Also records the non-zero 32-bit chunks of the output in nnzInfo, for
+    // the sparse input layer that follows.
+    std::int32_t transform(const Position&                             pos,
+                           AccumulatorStack&                           accumulatorStack,
+                           AccumulatorCaches::Cache<HalfDimensions>*   cache,
+                           OutputType*                                 output,
+                           int                                         bucket,
+                           [[maybe_unused]] NNZInfo<OutputDimensions>& nnzInfo) const {
+
+        using namespace SIMD;
+
+        accumulatorStack.evaluate(pos, *this, *cache);
+        const auto& accumulatorState = accumulatorStack.latest();
+
+        const Color perspectives[2]  = {pos.side_to_move(), ~pos.side_to_move()};
+        const auto& psqtAccumulation = (accumulatorState.acc<HalfDimensions>()).psqtAccumulation;
+        const auto& accumulation     = (accumulatorState.acc<HalfDimensions>()).accumulation;
+
+        // The accumulators are in half units (the weights are not doubled on
+        // load). The HalfKA one (and the threat one, added to it) is doubled
+        // with saturation, which gives the doubled value clamped to the int16
+        // range: this clamp does not change the clipped result (make quant=2:
+        // weights at scale 255, the sum is not doubled, see FtAccMultiplier,
+        // and clipped to 0..255). The HalfKA
+        // accumulator, bounded by |bias| + 62 x 127, and the threat one,
+        // bounded by 144 x 127, never wrap around if |bias| <= 24893 (checked
+        // by the trainer), so this is exact.
+        const BiasType* accumulations[2] = {accumulation[perspectives[0]],
+                                            accumulation[perspectives[1]]};
+        std::int32_t    psqtSum[2]       = {psqtAccumulation[perspectives[0]][bucket],
+                                            psqtAccumulation[perspectives[1]][bucket]};
+
+#ifdef JIEQI_NNUE_THREATS
+        // The threat accumulator (make threats=yes) is added to the HalfKA one
+        // (which also holds the meta features with make meta=yes)
+        const auto&     threats                = accumulatorState.threats;
+        const BiasType* threatAccumulations[2] = {threats.acc[perspectives[0]],
+                                                  threats.acc[perspectives[1]]};
+        psqtSum[0] += threats.psqt[perspectives[0]][bucket];
+        psqtSum[1] += threats.psqt[perspectives[1]][bucket];
+#endif
+        const auto psqt = UsePSQT ? (psqtSum[0] - psqtSum[1]) / 2 : 0;
+
+        for (IndexType p = 0; p < 2; ++p)
+        {
+            const IndexType offset = (HalfDimensions / 2) * p;
+
+#if defined(VECTOR)
+
+            constexpr IndexType OutputChunkSize = MaxChunkSize;
+            static_assert((HalfDimensions / 2) % OutputChunkSize == 0);
+            constexpr IndexType NumOutputChunks = HalfDimensions / 2 / OutputChunkSize;
+
+            const vec_t Zero = vec_zero();
+            const vec_t One  = vec_set_16(FtMaxVal);
+
+            const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulations[p][0]));
+            const vec_t* in1 =
+              reinterpret_cast<const vec_t*>(&(accumulations[p][HalfDimensions / 2]));
+            vec_t* out = reinterpret_cast<vec_t*>(output + offset);
+    #ifdef JIEQI_NNUE_THREATS
+            const vec_t* thr0 = reinterpret_cast<const vec_t*>(&(threatAccumulations[p][0]));
+            const vec_t* thr1 =
+              reinterpret_cast<const vec_t*>(&(threatAccumulations[p][HalfDimensions / 2]));
+            // 2 x (HalfKA + threats), saturated (see above; quant=2: not doubled)
+            auto in = [](const vec_t* acc, const vec_t* thr, IndexType i) {
+                const vec_t sum = vec_adds_16(acc[i], thr[i]);
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(sum, sum);
+                else
+                    return sum;
+            };
+    #else
+            // 2 x HalfKA, saturated (see above; quant=2: not doubled)
+            auto in = [](const vec_t* acc, const vec_t*, IndexType i) {
+                if constexpr (FtAccMultiplier == 2)
+                    return vec_adds_16(acc[i], acc[i]);
+                else
+                    return acc[i];
+            };
+            const vec_t* thr0 = nullptr;
+            const vec_t* thr1 = nullptr;
+    #endif
+
+            // Per the NNUE architecture, here we want to multiply pairs of
+            // clipped elements and divide the product by 128. To do this,
+            // we can naively perform min/max operation to clip each of the
+            // four int16 vectors, mullo pairs together, then pack them into
+            // one int8 vector. However, there exists a faster way.
+
+            // The idea here is to use the implicit clipping from packus to
+            // save us two vec_max_16 instructions. This clipping works due
+            // to the fact that any int16 integer below zero will be zeroed
+            // on packus.
+
+            // Consider the case where the second element is negative.
+            // If we do standard clipping, that element will be zero, which
+            // means our pairwise product is zero. If we perform packus and
+            // remove the lower-side clip for the second element, then our
+            // product before packus will be negative, and is zeroed on pack.
+            // The two operation produce equivalent results, but the second
+            // one (using packus) saves one max operation per pair.
+
+            // But here we run into a problem: mullo does not preserve the
+            // sign of the multiplication. We can get around this by doing
+            // mulhi, which keeps the sign. But that requires an additional
+            // tweak.
+
+            // mulhi cuts off the last 16 bits of the resulting product,
+            // which is the same as performing a rightward shift of 16 bits.
+            // We can use this to our advantage. Recall that we want to
+            // divide the final product by 128, which is equivalent to a
+            // 7-bit right shift. Intuitively, if we shift the clipped
+            // value left by 9, and perform mulhi, which shifts the product
+            // right by 16 bits, then we will net a right shift of 7 bits.
+            // However, this won't work as intended. Since we clip the
+            // values to have a maximum value of 127, shifting it by 9 bits
+            // might occupy the signed bit, resulting in some positive
+            // values being interpreted as negative after the shift.
+
+            // There is a way, however, to get around this limitation: scale
+            // the accumulators by 2 (here, when they are read: see above).
+            // To get the same pairwise multiplication result as before,
+            // we need to divide the product by 128 * 2 * 2 = 512, which
+            // amounts to a right shift of 9 bits. So now we only have to
+            // shift left by 7 bits, perform mulhi (shifts right by 16 bits)
+            // and net a 9 bit right shift. Since we scaled everything by
+            // two, the values are clipped at 127 * 2 = 254, which occupies
+            // 8 bits. Shifting it by 7 bits left will no longer occupy the
+            // signed bit, so we are safe. (make quant=2: the accumulators are
+            // at scale 255 and clipped at 255, which still fits in 8 bits.)
+
+            // Note that on NEON processors, we shift left by 6 instead
+            // because the instruction "vqdmulhq_s16" also doubles the
+            // return value after the multiplication, adding an extra shift
+            // to the left by 1, so we compensate by shifting less before
+            // the multiplication.
+
+            constexpr int shift =
+    #if defined(USE_SSE2) || defined(USE_LSX)
+              7;
+    #else
+              6;
+    #endif
+
+            static_assert(NumOutputChunks % 2 == 0);
+
+            [[maybe_unused]] auto cursor = nnzInfo.make_cursor(p);
+
+            for (IndexType j = 0; j < NumOutputChunks; j += 2)
+            {
+                vec_t packed[2];
+                for (IndexType k = 0; k < 2; ++k)
+                {
+                    const IndexType i = (j + k) * 2;
+
+                    const vec_t sum0a =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 0), One), Zero), shift);
+                    const vec_t sum0b =
+                      vec_slli_16(vec_max_16(vec_min_16(in(in0, thr0, i + 1), One), Zero), shift);
+                    const vec_t sum1a = vec_min_16(in(in1, thr1, i + 0), One);
+                    const vec_t sum1b = vec_min_16(in(in1, thr1, i + 1), One);
+
+                    const vec_t pa = vec_mulhi_16(sum0a, sum1a);
+                    const vec_t pb = vec_mulhi_16(sum0b, sum1b);
+
+                    packed[k] = out[j + k] = vec_packus_16(pa, pb);
+                }
+
+                cursor.record2(packed[0], packed[1]);
+            }
+
+#elif defined(USE_RVV)
+
+            // Same arithmetic as the scalar code below; also records the
+            // indices of the non-zero output bytes
+            const BiasType* in0 = accumulations[p];
+            const BiasType* in1 = accumulations[p] + HalfDimensions / 2;
+    #ifdef JIEQI_NNUE_THREATS
+            const BiasType* thr0 = threatAccumulations[p];
+            const BiasType* thr1 = threatAccumulations[p] + HalfDimensions / 2;
+    #endif
+            for (std::size_t j = 0, vl; j < HalfDimensions / 2; j += vl)
+            {
+                vl = __riscv_vsetvl_e16m2(HalfDimensions / 2 - j);
+
+                // In 32 bits (gcc 14 crashes on vsadd), which gives the clipped
+                // values of the saturating 16-bit SIMD code
+                const vint16m2_t acc0 = __riscv_vle16_v_i16m2(in0 + j, vl);
+                const vint16m2_t acc1 = __riscv_vle16_v_i16m2(in1 + j, vl);
+    #ifdef JIEQI_NNUE_THREATS
+                vint32m4_t sum0 =
+                  __riscv_vwadd_vv_i32m4(acc0, __riscv_vle16_v_i16m2(thr0 + j, vl), vl);
+                vint32m4_t sum1 =
+                  __riscv_vwadd_vv_i32m4(acc1, __riscv_vle16_v_i16m2(thr1 + j, vl), vl);
+    #else
+                vint32m4_t sum0 = __riscv_vsext_vf2_i32m4(acc0, vl);
+                vint32m4_t sum1 = __riscv_vsext_vf2_i32m4(acc1, vl);
+    #endif
+                if constexpr (FtAccMultiplier == 2)
+                {
+                    sum0 = __riscv_vsll_vx_i32m4(sum0, 1, vl);
+                    sum1 = __riscv_vsll_vx_i32m4(sum1, 1, vl);
+                }
+                sum0 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum0, FtMaxVal, vl), 0, vl);
+                sum1 = __riscv_vmax_vx_i32m4(__riscv_vmin_vx_i32m4(sum1, FtMaxVal, vl), 0, vl);
+
+                const vuint32m4_t prod =
+                  __riscv_vreinterpret_v_i32m4_u32m4(__riscv_vmul_vv_i32m4(sum0, sum1, vl));
+                const vuint8m1_t result =
+                  __riscv_vnsrl_wx_u8m1(__riscv_vnsrl_wx_u16m2(prod, 9, vl), 0, vl);
+                __riscv_vse8_v_u8m1(&output[offset + j], result, vl);
+
+                const vbool8_t    mask = __riscv_vmsne_vx_u8m1_b8(result, 0, vl);
+                const unsigned    cnt  = unsigned(__riscv_vcpop_m_b8(mask, vl));
+                const vuint16m2_t idx =
+                  __riscv_vcompress_vm_u16m2(__riscv_vid_v_u16m2(vl), mask, vl);
+                __riscv_vse16_v_u16m2(&nnzInfo.nnz[nnzInfo.count],
+                                      __riscv_vadd_vx_u16m2(idx, u16(offset + j), cnt), cnt);
+                nnzInfo.count += cnt;
+            }
+
+#else
+
+            for (IndexType j = 0; j < HalfDimensions / 2; ++j)
+            {
+                int sum0 = accumulations[p][j + 0];
+                int sum1 = accumulations[p][j + HalfDimensions / 2];
+    #ifdef JIEQI_NNUE_THREATS
+                sum0 += threatAccumulations[p][j + 0];
+                sum1 += threatAccumulations[p][j + HalfDimensions / 2];
+    #endif
+                sum0 *= FtAccMultiplier;
+                sum1 *= FtAccMultiplier;
+                sum0               = std::clamp(sum0, 0, FtMaxVal);
+                sum1               = std::clamp(sum1, 0, FtMaxVal);
+                output[offset + j] = static_cast<OutputType>(unsigned(sum0 * sum1) / 512);
+            }
+
+#endif
+        }
+
+        return psqt;
+    }  // end of function transform()
+
+    alignas(CacheLineSize) BiasType biases[HalfDimensions];
+    alignas(CacheLineSize) WeightType weights[HalfDimensions * InputDimensions];
+    alignas(CacheLineSize) PSQTWeightType psqtWeights[InputDimensions * PSQTBuckets];
+#ifdef JIEQI_NNUE_THREATS
+    alignas(CacheLineSize) ThreatWeightType threatWeights[HalfDimensions * ThreatInputDimensions];
+    alignas(CacheLineSize) PSQTWeightType threatPsqtWeights[ThreatInputDimensions * PSQTBuckets];
+#endif
+};
+
+}  // namespace Maskfish::Eval::NNUE
+
+
+template<Maskfish::Eval::NNUE::IndexType TransformedFeatureDimensions>
+struct std::hash<Maskfish::Eval::NNUE::FeatureTransformer<TransformedFeatureDimensions>> {
+    std::size_t
+    operator()(const Maskfish::Eval::NNUE::FeatureTransformer<TransformedFeatureDimensions>& ft)
+      const noexcept {
+        return ft.get_content_hash();
+    }
+};
+
+#endif  // #ifndef NNUE_FEATURE_TRANSFORMER_H_INCLUDED

@@ -1,0 +1,48 @@
+{% macro results_box(run, big=False) -%}
+{%- set r = results(run) -%}
+<a class="results {{ r.cls }}{{ ' big' if big }}" href="{{ url_for('view', rid=run.id) }}">
+  {%- for line in r.lines %}<span>{{ line }}</span>{% endfor -%}
+</a>
+{%- endmacro %}
+
+{% macro status_badge(run) -%}
+<span class="badge st-{{ run.status }}">{{ run.status }}</span>
+{%- endmacro %}
+
+{% macro runs_table(runs, title, empty, total=None) %}
+<section class="block">
+  <h2>{{ title }} <small>{{ total if total is not none else runs|length }}</small></h2>
+  {% if not runs %}
+    <p class="muted">{{ empty }}</p>
+  {% else %}
+  <table class="runs">
+    <tbody>
+    {% for run in runs %}
+      <tr>
+        <td class="actions">
+          {% if run.status in ('pending', 'building', 'running') %}
+          <form method="post" action="{{ url_for('stop', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" title="Stop">Stop</button></form>
+          {% elif run.status in ('stopped', 'failed') %}
+          <form method="post" action="{{ url_for('resume', rid=run.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small" title="Put back in the queue">Resume</button></form>
+          {% endif %}
+        </td>
+        <td class="who">
+          <div>{{ run.username or 'local' }}</div>
+          <div class="muted" title="{{ (run.finished or run.created)|datetime }}">{{ (run.finished or run.created)|ago }}</div>
+        </td>
+        <td class="branch">
+          <a href="{{ url_for('view', rid=run.id) }}"><b>{{ run.new_ref }}</b></a>
+          <a class="muted" href="{{ url_for('diff', rid=run.id) }}">diff</a>
+          <div class="muted mono">#{{ run.id }} · {{ run.new_sha[:8] }} vs {{ run.base_ref }}</div>
+          {% if run.status not in ('running', 'finished') %}<div>{{ status_badge(run) }}</div>{% endif %}
+        </td>
+        <td class="res">{{ results_box(run) }}</td>
+        <td class="tc mono">{{ run.tc }}<br>th {{ run.threads }}</td>
+        <td class="info">{{ run.info or run.new_msg }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endmacro %}
