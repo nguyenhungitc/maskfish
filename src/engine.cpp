@@ -291,6 +291,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // ProbCut verifies captures at depth - 3, or at depth - 5 when the node is
     // improving (instead of depth - 5)
     options.add("ProbCutImprovingDepth", Option(false));
+    // No upper bound on the term from the statScore of the previous move in the
+    // bonus scale of a quiet move that caused a fail low
+    options.add("BonusScaleNoCap", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

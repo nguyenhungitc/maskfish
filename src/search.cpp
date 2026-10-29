@@ -409,6 +409,7 @@ bool Search::Worker::iterative_deepening() {
     simpleSeeMargin = bool(options["SimpleSeeMargin"]);
     improvingAtBeta = bool(options["ImprovingAtBeta"]);
     probCutImprovingDepth = bool(options["ProbCutImprovingDepth"]);
+    bonusScaleNoCap = bool(options["BonusScaleNoCap"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1988,7 +1989,9 @@ moves_loop:  // When in check, search starts here
     else if (!priorCapture && prevSq != SQ_NONE)
     {
         int bonusScale = -251;
-        bonusScale += std::min(-(ss - 1)->statScore / 76, 256);
+        // UCI option BonusScaleNoCap: no upper bound on the statScore term
+        bonusScale += bonusScaleNoCap ? -(ss - 1)->statScore / 76
+                                      : std::min(-(ss - 1)->statScore / 76, 256);
         bonusScale += std::min(54 * depth, 549);
         bonusScale += 138 * ((ss - 1)->moveCount > 12);
         bonusScale += 70 * (!ss->inCheck && bestValue <= ss->staticEval - 184);
