@@ -412,6 +412,7 @@ bool Search::Worker::iterative_deepening() {
     bonusScaleNoCap = bool(options["BonusScaleNoCap"]);
     bonusPrevStatScore = bool(options["BonusPrevStatScore"]);
     contHistSingleScale = bool(options["ContHistSingleScale"]);
+    evalDiffOnTTHit = bool(options["EvalDiffOnTTHit"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1206,11 +1207,14 @@ Value Search::Worker::search(
         static_evaluation();
 
     // Use static evaluation difference to improve quiet move ordering
-    if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture && !ttHit)
+    // (with the UCI option EvalDiffOnTTHit, the main history is also updated
+    // on a TT hit; the pawn history still is not)
+    if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture
+        && (evalDiffOnTTHit || !ttHit))
     {
         int bonus = std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
         thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus * 1269 / 1024;
-        if (type_of((ss - 1)->movedPiece) != PAWN)
+        if (!ttHit && type_of((ss - 1)->movedPiece) != PAWN)
             thisThread->pawn_history_entry(pos)[(ss - 1)->movedPiece][prevSq]
               << bonus * 1267 / 1024;
     }

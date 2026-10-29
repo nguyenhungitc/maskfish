@@ -300,6 +300,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Continuation histories of quiet moves are updated with one scale (944/1024)
     // for bonuses and maluses instead of 1064/1024 and 824/1024
     options.add("ContHistSingleScale", Option(false));
+    // The static evaluation difference also updates the main history of the
+    // previous move on a TT hit
+    options.add("EvalDiffOnTTHit", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
