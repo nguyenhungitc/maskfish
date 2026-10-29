@@ -344,6 +344,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes: the window of each outcome is narrowed to the values that can
     // still change the result, given the bounds of the other outcomes (Star1)
     options.add("ChanceChildWindow", Option(false));
+    // Chance nodes (non-PV): the TT entries of all the outcomes are looked up
+    // before any is searched, and their bounds can decide the node at once
+    options.add("ChanceTTProbe", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

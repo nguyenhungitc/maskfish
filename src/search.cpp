@@ -419,6 +419,7 @@ bool Search::Worker::iterative_deepening() {
     simpleEvalDiffBonus = bool(options["SimpleEvalDiffBonus"]);
     chanceFarMin = bool(options["ChanceFarMin"]);
     chanceChildWindow = bool(options["ChanceChildWindow"]);
+    chanceTTProbe = bool(options["ChanceTTProbe"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -2646,14 +2647,16 @@ Value Search::Worker::aggregate_tables(
 // Such an estimate is flagged in ss->estimated, so that the callers do not
 // store it, or a value derived from it, as BOUND_EXACT. Every outcome is
 // searched at ss: the flag of an outcome is read right after its search.
-template<typename SearchOutcome>
+template<typename SearchOutcome, typename ProbeOutcome>
 Value Search::Worker::chance_node(Stack*          ss,
                                   const int*      counts,
                                   int             n,
                                   int             total,
                                   Value           alpha,
                                   Value           beta,
-                                  SearchOutcome&& searchOutcome) {
+                                  SearchOutcome&& searchOutcome,
+                                  ProbeOutcome&&  probeOutcome,
+                                  bool            probe) {
 
     assert(n > 0 && n <= Position::MaxRestPieceTypes && total > 0);
 
@@ -2667,6 +2670,31 @@ Value Search::Worker::chance_node(Stack*          ss,
 
     // Some outcome returned, within the window, a value that is an estimate
     bool outcomeEstimated = false;
+
+    // UCI option ChanceTTProbe (non-PV nodes): before any outcome is searched,
+    // their TT entries give bounds of their values (a probing phase, as in
+    // Star2, made of TT lookups instead of searches). They can decide the node
+    // at once, while the search of each outcome alone could only take its own
+    // TT cutoff, and they narrow the windows of ChanceChildWindow.
+    if (probe)
+    {
+        for (int i = 0; i < n; ++i)
+            probeOutcome(i, lo[i], hi[i]);
+
+        const Value upper = aggregate_chance(hi.data(), counts, n, total, ChanceBound::Upper);
+        if (upper <= alpha)
+        {
+            ss->estimated = false;
+            return upper;
+        }
+
+        const Value lower = aggregate_chance(lo.data(), counts, n, total, ChanceBound::Lower);
+        if (lower >= beta)
+        {
+            ss->estimated = false;
+            return lower;
+        }
+    }
 
     for (int i = 0; i < n; ++i)
     {
@@ -2687,10 +2715,18 @@ Value Search::Worker::chance_node(Stack*          ss,
             return VALUE_ZERO;
         }
 
+        // The search of the outcome takes precedence over a bound from its TT
+        // entry (ChanceTTProbe) that it contradicts
         if (v <= a)
+        {
             hi[i] = v;
+            lo[i] = std::min(lo[i], v);
+        }
         else if (v >= b)
+        {
             lo[i] = v;
+            hi[i] = std::max(hi[i], v);
+        }
         else
         {
             lo[i] = hi[i] = v;
@@ -2725,6 +2761,32 @@ Value Search::Worker::chance_node(Stack*          ss,
     }
 
     return VALUE_ZERO;  // Unreachable
+}
+
+
+// Tightens the bounds lo and hi of the value of a position (an outcome of a
+// chance node, searched at the given ply) with its TT entry, if the entry is
+// at least as deep as the search of the outcome would be. As the TT cutoffs of
+// search(), not when the 40 moves counter reaches 70; decisive values are left
+// out (their conversion from the TT may downgrade a mate score).
+void Search::Worker::tt_outcome_bounds(
+  Key key, Depth depth, int ply, int r40c, Value& lo, Value& hi) const {
+
+    if (r40c >= 70)
+        return;
+
+    auto [ttHit, ttData, ttWriter] = tt.probe(observer_tt_key(key, rootObserver));
+    if (!ttHit || ttData.depth < depth)
+        return;
+
+    const Value v = value_from_tt(ttData.value, ply, r40c);
+    if (!is_valid(v) || is_decisive(v))
+        return;
+
+    if (ttData.bound & BOUND_LOWER)
+        lo = std::max(lo, v);
+    if (ttData.bound & BOUND_UPPER)
+        hi = std::min(hi, v);
 }
 
 
@@ -2884,8 +2946,17 @@ Value Search::Worker::hidden_capture_search(
         return value;
     };
 
-    const Value value =
-      chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
+    // TT bounds of an outcome (ChanceTTProbe): the key with the piece out of the pool
+    auto probeOutcome = [&](int i, Value& lo, Value& hi) {
+        const Piece piece = restPieces[i].first;
+        pos.remove_rest_piece(piece);
+        tt_outcome_bounds(pos.key(), isQsearch ? DEPTH_QS : depth, ss->ply, pos.rule40_count(), lo,
+                          hi);
+        pos.restore_rest_piece(piece);
+    };
+
+    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
+                                    probeOutcome, chanceTTProbe && nodeType != PV);
 
     // Leave the capture as the parent made it: its pool is restored, so the
     // top of the accumulator stack must not remove a piece from it any more
@@ -2968,7 +3039,17 @@ Value Search::Worker::flip_search(
         return value;
     };
 
-    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome);
+    // TT bounds of an outcome (ChanceTTProbe), at the depth of its search
+    auto probeOutcome = [&](int i, Value& lo, Value& hi) {
+        const Depth d = isQsearch                             ? DEPTH_QS
+                      : chanceBranchDepth && i > 0 && depth > 1 ? depth - 1
+                                                              : depth;
+        tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), d, ss->ply,
+                          pos.rule40_count(), lo, hi);
+    };
+
+    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
+                                    probeOutcome, chanceTTProbe && nodeType != PV);
 
     // Leave the move of the dark piece as the parent made it, without the
     // reveal (and the refresh flags) of the last outcome: a second search of

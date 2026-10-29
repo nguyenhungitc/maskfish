@@ -527,6 +527,7 @@ class Worker {
     bool   simpleEvalDiffBonus = false;
     bool   chanceFarMin = false;
     bool   chanceChildWindow = false;
+    bool   chanceTTProbe = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
@@ -573,14 +574,19 @@ class Worker {
                              Value&     b) const;
 
     // Searches the outcomes of a chance node, see search.cpp
-    template<typename SearchOutcome>
+    template<typename SearchOutcome, typename ProbeOutcome>
     Value chance_node(Stack*          ss,
                       const int*      counts,
                       int             n,
                       int             total,
                       Value           alpha,
                       Value           beta,
-                      SearchOutcome&& searchOutcome);
+                      SearchOutcome&& searchOutcome,
+                      ProbeOutcome&&  probeOutcome,
+                      bool            probe);
+    // Bounds of the value of a position from its TT entry (UCI option
+    // ChanceTTProbe)
+    void tt_outcome_bounds(Key key, Depth depth, int ply, int r40c, Value& lo, Value& hi) const;
     Reveal::QuietParameters revealQuiet;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
