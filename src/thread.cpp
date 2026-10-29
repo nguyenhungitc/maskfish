@@ -305,18 +305,17 @@ void ThreadPool::start_thinking(Position&          pos,
     searchable = searchable && pos.is_playable();
     if (searchable)
     {
-        const auto legalmoves = MoveList<ALL>(pos);
-
+        // UCIEngine::to_move() only returns legal moves (or Move::none())
         for (const auto& uciMove : limits.searchmoves)
         {
             auto move = UCIEngine::to_move(pos, uciMove);
 
-            if (std::find(legalmoves.begin(), legalmoves.end(), move) != legalmoves.end())
+            if (move != Move::none())
                 rootMoves.emplace_back(move);
         }
 
         if (rootMoves.empty())
-            for (const auto& m : legalmoves)
+            for (const auto& m : MoveList<ALL>(pos))
                 rootMoves.emplace_back(m);
     }
 
