@@ -413,6 +413,7 @@ bool Search::Worker::iterative_deepening() {
     bonusPrevStatScore = bool(options["BonusPrevStatScore"]);
     contHistSingleScale = bool(options["ContHistSingleScale"]);
     evalDiffOnTTHit = bool(options["EvalDiffOnTTHit"]);
+    corrHistBestMoveSign = bool(options["CorrHistBestMoveSign"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -2052,10 +2053,13 @@ moves_loop:  // When in check, search starts here
                        moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6), bestMove,
                        unadjustedStaticEval, tt.generation());
 
-    // Adjust correction history
+    // Adjust correction history. With the UCI option CorrHistBestMoveSign, only
+    // when the error direction matches whether a best move was found.
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
-        && ((bestValue < ss->staticEval && bestValue < beta)  // negative correction & no fail high
-            || (bestValue > ss->staticEval && bestMove)))     // positive correction & no fail low
+        && (corrHistBestMoveSign
+              ? (bestValue > ss->staticEval) == bool(bestMove)
+              : ((bestValue < ss->staticEval && bestValue < beta)  // negative correction & no fail high
+                 || (bestValue > ss->staticEval && bestMove))))    // positive correction & no fail low
     {
         // With CorrHistAsym, positive corrections are smaller
         const int divisor = 8 + (corrHistAsym ? 2 * (bestValue > ss->staticEval) : 0);

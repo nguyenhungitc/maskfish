@@ -303,6 +303,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // The static evaluation difference also updates the main history of the
     // previous move on a TT hit
     options.add("EvalDiffOnTTHit", Option(false));
+    // The correction history is updated upwards only when a best move was found
+    // and downwards only when none was
+    options.add("CorrHistBestMoveSign", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
