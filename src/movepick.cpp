@@ -30,33 +30,30 @@ namespace Maskfish {
 
 using Attacks::line_bb;
 
-namespace {
+// Stages of the move picker. The kind of picker (main search, quiescence
+// search, evasions, ProbCut) is the stage it starts with after the TT move,
+// firstStage. The first stage generates and scores its moves in
+// INIT_FIRST_STAGE: captures, or evasions when in check.
+enum Stages : i8 {
+    TT,                // the TT move, if any
+    INIT_FIRST_STAGE,  // generate and score the moves of firstStage
 
-enum Stages {
-    // generate main search moves
-    MAIN_TT,
-    CAPTURE_INIT,
+    // main search
     GOOD_CAPTURE,
-    QUIET_INIT,
     GOOD_QUIET,
-    BAD_CAPTURE,
-    BAD_QUIET,
+    BAD_MOVES,  // losing captures, then quiet moves with a low score
 
-    // generate evasion moves
-    EVASION_TT,
-    EVASION_INIT,
+    // quiescence search: all captures
+    QSEARCH,
+
+    // in check: all evasions
     EVASION,
 
-    // generate probcut moves
-    PROBCUT_TT,
-    PROBCUT_INIT,
+    // ProbCut: captures with SEE >= threshold
     PROBCUT,
-
-    // generate qsearch moves
-    QSEARCH_TT,
-    QCAPTURE_INIT,
-    QCAPTURE
 };
+
+namespace {
 
 #ifdef USE_AVX512
 // Load the Move, and the ExtMove value, into all lanes of 512-bit registers
@@ -175,9 +172,11 @@ MovePicker::MovePicker(const Position&              p,
     ply(pl) {
 
     if (pos.checkers())
-        stage = EVASION_TT + !(ttm && pos.legal(ttm));
+        firstStage = EVASION;
     else
-        stage = (depth > 0 ? MAIN_TT : QSEARCH_TT) + !(ttm && pos.legal(ttm));
+        firstStage = depth > 0 ? GOOD_CAPTURE : QSEARCH;
+
+    stage = ttm && pos.legal(ttm) ? TT : INIT_FIRST_STAGE;
 }
 
 // MovePicker constructor for ProbCut: we generate captures with Static Exchange
@@ -189,17 +188,21 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
     threshold(th) {
     assert(!pos.checkers());
 
-    stage = PROBCUT_TT
-          + !(ttm && pos.legal(ttm) && pos.capture(ttm) && pos.see_ge(ttm, threshold));
+    firstStage = PROBCUT;
+    stage      = ttm && pos.legal(ttm) && pos.capture(ttm) && pos.see_ge(ttm, threshold)
+                 ? TT
+                 : INIT_FIRST_STAGE;
 }
 
 // Assigns a numerical value to each move in a list, used for sorting.
 // Captures are ordered by Most Valuable Victim (MVV), preferring captures
 // with a good history. Quiets moves are ordered using the history tables.
 template<GenType Type>
-ExtMove* MovePicker::score(MoveList<Type>& ml) {
+ExtMove* MovePicker::generate_and_score() {
 
     static_assert(Type == CAPTURES || Type == QUIETS || Type == EVASIONS, "Wrong type");
+
+    MoveList<Type> ml(pos);  // move generation
 
     Color us = pos.side_to_move();
 
@@ -315,113 +318,95 @@ Move MovePicker::select(Pred filter) {
 // picking the move with the highest score from a list of generated moves.
 Move MovePicker::next_move() {
 
-top:
+    constexpr int goodQuietThreshold = -14000;
+
+dispatch:
     switch (stage)
     {
 
-    case MAIN_TT :
-    case EVASION_TT :
-    case QSEARCH_TT :
-    case PROBCUT_TT :
-        ++stage;
+    case TT :
+        stage = INIT_FIRST_STAGE;
         return ttMove;
 
-    case CAPTURE_INIT :
-    case PROBCUT_INIT :
-    case QCAPTURE_INIT : {
-        MoveList<CAPTURES> ml(pos);
+    case INIT_FIRST_STAGE :
+        cur = endBadMoves = moves;
 
-        cur = endBadCaptures = moves;
-        endCur               = score<CAPTURES>(ml);
+        if (firstStage == EVASION)
+            endCur = generate_and_score<EVASIONS>();
+        else
+            endCur = generate_and_score<CAPTURES>();
 
         partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
-        ++stage;
-        goto top;
-    }
+
+        stage = firstStage;
+        goto dispatch;
 
     case GOOD_CAPTURE :
         if (select([&]() {
-                // Move losing capture to endBadCaptures to be tried later
+                // Move losing capture to endBadMoves to be tried later
                 if (pos.see_ge(*cur, -cur->value / 18))
                     return true;
-                *endBadCaptures++ = *cur;
+                *endBadMoves++ = *cur;
                 return false;
             }))
             return *(cur - 1);
 
-        ++stage;
-        [[fallthrough]];
+        endBadCaptures = endBadMoves;
 
-    case QUIET_INIT :
         if (!skipQuiets)
         {
-            MoveList<QUIETS> ml(pos);
-
-            cur = endBadQuiets = endBadCaptures;
-            endCur             = score<QUIETS>(ml);
+            // Generate the quiet moves after the bad captures
+            cur    = endBadMoves;
+            endCur = generate_and_score<QUIETS>();
 
             partial_insertion_sort(cur, endCur, -3330 * depth);
+
+            stage = GOOD_QUIET;
+            [[fallthrough]];
+
+        case GOOD_QUIET :
+            if (select([&]() {
+                    // Move quiet moves with a low score next to the bad
+                    // captures, to be tried after them
+                    if (cur->value > goodQuietThreshold)
+                        return true;
+                    *endBadMoves++ = *cur;
+                    return false;
+                }))
+                return *(cur - 1);
         }
 
-        ++stage;
-        [[fallthrough]];
-
-    case GOOD_QUIET :
-        if (!skipQuiets && select([&]() {
-                if (cur->value > -14000)
-                    return true;
-                *endBadQuiets++ = *cur;
-                return false;
-            }))
-            return *(cur - 1);
-
-        // Prepare the pointers to loop over the bad captures
+        // Prepare the pointers to loop over the bad captures and bad quiets
         cur    = moves;
-        endCur = endBadCaptures;
+        endCur = endBadMoves;
 
-        ++stage;
+        stage = BAD_MOVES;
         [[fallthrough]];
 
-    case BAD_CAPTURE :
-        if (select([]() { return true; }))
-            return *(cur - 1);
-
-        // Prepare the pointers to loop over the bad quiets
-        cur    = endBadCaptures;
-        endCur = endBadQuiets;
-
-        ++stage;
-        [[fallthrough]];
-
-    case BAD_QUIET :
-        if (!skipQuiets)
-            return select([]() { return true; });
-
-        return Move::none();
-
-    case EVASION_INIT : {
-        MoveList<EVASIONS> ml(pos);
-
-        cur    = moves;
-        endCur = score<EVASIONS>(ml);
-
-        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
-        ++stage;
-        [[fallthrough]];
-    }
-
+    case BAD_MOVES :
+    case QSEARCH :
     case EVASION :
-    case QCAPTURE :
         return select([]() { return true; });
 
     case PROBCUT :
         return select([&]() { return pos.see_ge(*cur, threshold); });
-    }
 
-    assert(false);
-    return Move::none();  // Silence warning
+    default :
+        assert(false);
+        return Move::none();
+    }
 }
 
-void MovePicker::skip_quiet_moves() { skipQuiets = true; }
+void MovePicker::skip_quiet_moves() {
+    skipQuiets = true;
+
+    // Drop the quiet moves not emitted yet: the good quiet moves left in
+    // GOOD_QUIET and the bad quiet moves, which follow the bad captures
+    if (stage == GOOD_QUIET || stage == BAD_MOVES)
+    {
+        endCur      = endBadCaptures;
+        endBadMoves = endBadCaptures;
+    }
+}
 
 }  // namespace Maskfish

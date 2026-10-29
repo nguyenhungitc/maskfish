@@ -20,12 +20,15 @@
 #define MOVEPICK_H_INCLUDED
 
 #include "history.h"
+#include "misc.h"
 #include "movegen.h"
 #include "types.h"
 
 namespace Maskfish {
 
 class Position;
+
+enum Stages : i8;
 
 // The MovePicker class is used to pick one legal move at a time from the
 // current position. The most important method is next_move(), which emits one
@@ -55,7 +58,7 @@ class MovePicker {
     template<typename Pred>
     Move select(Pred);
     template<GenType T>
-    ExtMove* score(MoveList<T>&);
+    ExtMove* generate_and_score();
     ExtMove* begin() { return cur; }
     ExtMove* end() { return endCur; }
 
@@ -66,8 +69,9 @@ class MovePicker {
     const PieceToHistory**       continuationHistory;
     const PawnHistoryEntry*      pawnHistory;
     Move                         ttMove;
-    ExtMove *                    cur, *endCur, *endBadCaptures, *endBadQuiets;
-    int                          stage;
+    ExtMove *                    cur, *endCur, *endBadCaptures, *endBadMoves;
+    Stages                       stage;
+    Stages                       firstStage;
     int                          threshold;
     Depth                        depth;
     int                          ply;
