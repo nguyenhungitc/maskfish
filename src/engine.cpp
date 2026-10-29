@@ -268,6 +268,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR: no reduction term for the number of consecutive quiet moves leading
     // to the node; the base reduction is raised by 286 instead
     options.add("NoQuietMoveStreak", Option(false));
+    // LMR: the reduction decrease of the TT move is not applied when the next
+    // ply has many fail highs, and does not take the reduction below 0
+    options.add("TTMoveReductionFloor", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

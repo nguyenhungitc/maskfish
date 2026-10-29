@@ -401,6 +401,7 @@ bool Search::Worker::iterative_deepening() {
     noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
     lmrPvNodeSelf = bool(options["LMRPvNodeSelf"]);
     noQuietMoveStreak = bool(options["NoQuietMoveStreak"]);
+    ttMoveReductionFloor = bool(options["TTMoveReductionFloor"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1667,9 +1668,16 @@ moves_loop:  // When in check, search starts here
         else
             r += (ss + 1)->quietMoveStreak * 49;
 
-        // For first picked move (ttMove) reduce reduction
+        // For first picked move (ttMove) reduce reduction. UCI option
+        // TTMoveReductionFloor: not when the next ply has many fail highs (the
+        // reduction was just increased for that), and not below 0.
         if (move == ttData.move)
-            r -= 2753;
+        {
+            if (!ttMoveReductionFloor)
+                r -= 2753;
+            else if ((ss + 1)->cutoffCnt <= (cutoffCntTweak ? 1 : 2))
+                r = std::max(0, r - 2753);
+        }
 
         // UCI option StatScoreNoOffset: no constant subtracted from the
         // statScore; the base reduction compensates for the quiet moves
