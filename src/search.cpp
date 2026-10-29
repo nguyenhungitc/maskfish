@@ -410,6 +410,7 @@ bool Search::Worker::iterative_deepening() {
     improvingAtBeta = bool(options["ImprovingAtBeta"]);
     probCutImprovingDepth = bool(options["ProbCutImprovingDepth"]);
     bonusScaleNoCap = bool(options["BonusScaleNoCap"]);
+    bonusPrevStatScore = bool(options["BonusPrevStatScore"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -2930,6 +2931,11 @@ void update_all_stats(const Position& pos,
     PieceType              capturedPiece;
 
     int bonus = std::min(144 * depth - 106, 1803) + 273 * (bestMove == ttMove);
+
+    // UCI option BonusPrevStatScore: a larger bonus when the previous move had
+    // good statistics, a smaller one when it had bad ones
+    if (workerThread.bonusPrevStatScore)
+        bonus += (ss - 1)->statScore / 32;
 
     // The more moves were searched before the best one, the more significant
     // it is (UCI option BestMoveBonusScale). 64-bit product: no overflow.

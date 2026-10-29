@@ -372,6 +372,7 @@ class Worker {
     bool contCorr6Ply = false;
     bool simplifications    = false;
     bool bigPawnHistory = false;
+    bool bonusPrevStatScore = false;
 
     // Entry of the pawn history for the position (UCI option BigPawnHistory)
     auto& pawn_history_entry(const Position& pos) {
