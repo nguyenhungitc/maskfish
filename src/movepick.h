@@ -54,6 +54,8 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+    static inline bool threatByLesserValue = false;  // UCI option ThreatByLesserValue
+
     static inline bool noCaptureCheckBonus = false;  // UCI option NoCaptureCheckBonus
 
    private:

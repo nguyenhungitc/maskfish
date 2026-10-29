@@ -273,11 +273,19 @@ ExtMove* MovePicker::generate_and_score() {
 
             // penalty for moving to a square threatened by a lesser piece
             // or bonus for escaping an attack by a lesser piece.
+            // With the UCI option ThreatByLesserValue, in proportion to the
+            // piece value, and no penalty when the piece is already attacked.
             if (pt != PAWN && pt <= BISHOP)
             {
-                static constexpr int bonus[BISHOP + 1] = {0, 517, 144, 256, 0, 256, 144};
-                int v = threatByLesser[pt] & to ? -95 : 100 * bool(threatByLesser[pt] & from);
-                value += bonus[pt] * v;
+                if (threatByLesserValue)
+                    value += int(PieceValue[pt]) * 20
+                           * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
+                else
+                {
+                    static constexpr int bonus[BISHOP + 1] = {0, 517, 144, 256, 0, 256, 144};
+                    int v = threatByLesser[pt] & to ? -95 : 100 * bool(threatByLesser[pt] & from);
+                    value += bonus[pt] * v;
+                }
             }
 
             if (ply < LOW_PLY_HISTORY_SIZE)

@@ -312,6 +312,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     MovePicker::noCaptureCheckBonus = bool(o);
                     return std::nullopt;
                 }));
+    // Bonus for escaping and penalty for moving into an attack by a lesser piece
+    // of a quiet move: 20 * piece value, the two cancelling out
+    options.add("ThreatByLesserValue", Option(false, [](const Option& o) {
+                    MovePicker::threatByLesserValue = bool(o);
+                    return std::nullopt;
+                }));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
