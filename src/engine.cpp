@@ -274,6 +274,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // LMR re-search: the same branch for every fail high of the reduced search
     // (also when it was not reduced), searching deeper above bestValue + 60
     options.add("SimpleLMRResearch", Option(false));
+    // Singular extensions: the minimum depth does not decrease once the
+    // completed depth exceeds 32
+    options.add("SENoCompletedDepth", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

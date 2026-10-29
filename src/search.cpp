@@ -403,6 +403,7 @@ bool Search::Worker::iterative_deepening() {
     noQuietMoveStreak = bool(options["NoQuietMoveStreak"]);
     ttMoveReductionFloor = bool(options["TTMoveReductionFloor"]);
     simpleLMRResearch = bool(options["SimpleLMRResearch"]);
+    seNoCompletedDepth = bool(options["SENoCompletedDepth"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1544,7 +1545,8 @@ moves_loop:  // When in check, search starts here
         // and lower extension margins scale well.
 
         if (!rootNode && move == ttData.move && !excludedMove
-            && depth >= 5 - (thisThread->completedDepth > 32) + ss->ttPv && is_valid(ttData.value)
+            && depth >= 5 - (!seNoCompletedDepth && thisThread->completedDepth > 32) + ss->ttPv
+            && is_valid(ttData.value)
             && !is_decisive(ttData.value) && (ttData.bound & BOUND_LOWER)
             && ttData.depth >= depth - 3 && !is_shuffling(move, ss, pos) && !seekMate)
         {

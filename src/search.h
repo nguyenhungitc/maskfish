@@ -511,6 +511,7 @@ class Worker {
     bool   noQuietMoveStreak = false;
     bool   ttMoveReductionFloor = false;
     bool   simpleLMRResearch = false;
+    bool   seNoCompletedDepth = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
