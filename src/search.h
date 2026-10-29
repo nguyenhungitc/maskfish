@@ -505,6 +505,7 @@ class Worker {
     bool   revealQsearchEvasions = false;
     bool   rootScoreEMA = false;
     bool   standPatNoTT = false;
+    bool   statScoreNoOffset = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

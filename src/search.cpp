@@ -397,6 +397,7 @@ bool Search::Worker::iterative_deepening() {
     rootScoreEMA = bool(options["RootScoreEMA"]);
     standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
+    statScoreNoOffset = bool(options["StatScoreNoOffset"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1662,15 +1663,22 @@ moves_loop:  // When in check, search starts here
         if (move == ttData.move)
             r -= 2753;
 
+        // UCI option StatScoreNoOffset: no constant subtracted from the
+        // statScore; the base reduction compensates for the quiet moves
+        // (3804 * 955 / 9646 = 377)
         if (capture)
             ss->statScore =
               786 * int(pos.captured_value()) / 100
               + thisThread->captureHistory[movedPiece][move.to_sq()][pos.captured_type()]
-              - 4998;
+              - (statScoreNoOffset ? 0 : 4998);
         else
             ss->statScore = 2 * thisThread->mainHistory[us][move.from_to()]
                           + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()] - 3804;
+                          + (*contHist[1])[movedPiece][move.to_sq()]
+                          - (statScoreNoOffset ? 0 : 3804);
+
+        if (statScoreNoOffset)
+            r += 377;
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 955 / 9646;

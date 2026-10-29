@@ -255,6 +255,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     resize_threads();
                     return std::nullopt;
                 }));
+    // LMR: statScore without the constant subtracted from it (the base reduction
+    // is raised to compensate for quiet moves)
+    options.add("StatScoreNoOffset", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
