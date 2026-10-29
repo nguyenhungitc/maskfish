@@ -381,7 +381,6 @@ bool Search::Worker::iterative_deepening() {
     lmrTweaks          = bool(options["LMRTweaks"]);
     aspirationTweaks = bool(options["AspirationTweaks"]);
     mainHistoryDecay = bool(options["MainHistoryDecay"]);
-    malusDecay = bool(options["MalusDecay"]);
     bestMoveBonusScale = bool(options["BestMoveBonusScale"]);
     lmrHistoryDivisor = bool(options["LMRHistoryDivisor"]);
     simplifications        = bool(options["Simplifications"]);
@@ -3634,7 +3633,7 @@ void update_all_stats(const Position& pos,
     // it is (UCI option BestMoveBonusScale). 64-bit product: no overflow.
     if (workerThread.bestMoveBonusScale && !PvNode)
         bonus += int(std::int64_t(bonus) * (quietsSearched.size() + capturesSearched.size()) / 256);
-    int malus = std::min(1012 * depth - 213, 2437) - (workerThread.malusDecay ? 0 : 31 * moveCount);
+    int malus = std::min(1012 * depth - 213, 2437) - (31 * moveCount);
 
     if (!pos.capture(bestMove))
     {
@@ -3645,8 +3644,6 @@ void update_all_stats(const Position& pos,
         int quietMalus = malus * 1555 / 1024;
         for (Move move : quietsSearched)
         {
-            if (workerThread.malusDecay)
-                quietMalus = quietMalus * 950 / 1024;
             update_quiet_histories(pos, ss, workerThread, move, -quietMalus);
         }
     }

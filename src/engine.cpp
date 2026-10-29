@@ -172,9 +172,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // At each new search, move the main history 1/4 of the way back to its
     // initial value.
     options.add("MainHistoryDecay", Option(false));
-    // History malus of the quiet moves searched before the best move decreasing
-    // geometrically with their number (instead of the move count term).
-    options.add("MalusDecay", Option(false));
     // At non-PV nodes, scale the history bonus of the best move with the
     // number of moves searched before it.
     options.add("BestMoveBonusScale", Option(false));

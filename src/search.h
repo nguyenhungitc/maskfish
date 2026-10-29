@@ -370,7 +370,6 @@ class Worker {
     // default. Public because the free history update functions read them.
     bool contCorr4Ply    = false;
     bool multiCutHistory = false;
-    bool malusDecay      = false;
     bool bestMoveBonusScale = false;
     bool contHistOffset = false;
     bool contCorr6Ply = false;
