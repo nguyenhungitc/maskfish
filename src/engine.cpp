@@ -318,6 +318,11 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     MovePicker::threatByLesserValue = bool(o);
                     return std::nullopt;
                 }));
+    // Quiet evasions are ordered without the low ply history
+    options.add("NoEvasionLowPly", Option(false, [](const Option& o) {
+                    MovePicker::noEvasionLowPly = bool(o);
+                    return std::nullopt;
+                }));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));
