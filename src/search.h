@@ -524,6 +524,7 @@ class Worker {
     bool   corrHistBestMoveSign = false;
     bool   tmEffortFactor = false;
     bool   tmReductionInterp = false;
+    bool   simpleEvalDiffBonus = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

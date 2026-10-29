@@ -335,6 +335,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Time management: the time reduction for a stable best move is linear in
     // the number of iterations it has been stable, between 0.67 and 1.44
     options.add("TMReductionInterp", Option(false));
+    // History bonus from the static evaluation difference as the clamped
+    // difference times a constant (24 main history, 23 pawn history)
+    options.add("SimpleEvalDiffBonus", Option(false));
     // Count dark pieces at their expected value in the material scaling of
     // the evaluation.
     options.add("JieqiMaterial", Option(false));

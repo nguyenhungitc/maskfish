@@ -416,6 +416,7 @@ bool Search::Worker::iterative_deepening() {
     corrHistBestMoveSign = bool(options["CorrHistBestMoveSign"]);
     tmEffortFactor = bool(options["TMEffortFactor"]);
     tmReductionInterp = bool(options["TMReductionInterp"]);
+    simpleEvalDiffBonus = bool(options["SimpleEvalDiffBonus"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
@@ -1233,11 +1234,16 @@ Value Search::Worker::search(
     if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture
         && (evalDiffOnTTHit || !ttHit))
     {
-        int bonus = std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
-        thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()] << bonus * 1269 / 1024;
+        // UCI option SimpleEvalDiffBonus: the clamped evaluation difference
+        // times a constant per history (same range, fewer operations)
+        const int evalDiff = std::clamp(-int((ss - 1)->staticEval + ss->staticEval), -67, 91) + 20;
+        const int bonus =
+          std::clamp(-19 * int((ss - 1)->staticEval + ss->staticEval), -1271, 1725) + 379;
+        thisThread->mainHistory[~us][((ss - 1)->currentMove).from_to()]
+          << (simpleEvalDiffBonus ? evalDiff * 24 : bonus * 1269 / 1024);
         if (!ttHit && type_of((ss - 1)->movedPiece) != PAWN)
             thisThread->pawn_history_entry(pos)[(ss - 1)->movedPiece][prevSq]
-              << bonus * 1267 / 1024;
+              << (simpleEvalDiffBonus ? evalDiff * 23 : bonus * 1267 / 1024);
     }
 
     if (!hindsightFirst)
