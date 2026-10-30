@@ -238,7 +238,7 @@ def main():
     if not args.stats_only and not args.out:
         raise SystemExit("give the output network (or --stats-only)")
 
-    F.set_arch(S.detect_arch(args.net))
+    S.use_net_arch(args.net)   # (and its mid mirror options, kept in the output)
     q = S.read_nnue(args.net)
     if q["version"] != S.VERSION:
         raise SystemExit(f"{args.net} has the old file format: run serialize.py --upgrade first")

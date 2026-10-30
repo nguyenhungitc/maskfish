@@ -72,8 +72,17 @@ def main():
                     help="check the evaluate() scaling with the engine option EvalScaling "
                          "(train.py --eval-scaling)")
     args = ap.parse_args()
-    F.set_arch(S.detect_arch(args.net) if args.net else args.arch)
+    F.set_arch(args.arch)
     mid_mirror_opts = F.apply_mid_mirror_args(args)
+    if args.net:
+        # the architecture and the mid mirror options the network was made for
+        arch, mm = S.detect_arch_full(args.net)
+        given = {"pawn_tiebreak": args.mid_pawn_tiebreak, "no_king_flag": args.mid_no_king_flag}
+        if (args.mid_pawn_tiebreak or args.mid_no_king_flag) and given != mm:
+            raise SystemExit(f"{args.net} was made with the mid mirror options {mm}, not {given}")
+        S.use_net_arch(args.net)
+        mid_mirror_opts = {k: "true" for k, on in (("MidMirrorPawnTieBreak", mm["pawn_tiebreak"]),
+                                                  ("MidMirrorNoKingFlag", mm["no_king_flag"])) if on}
     print(f"arch {F.ARCH}" + (f", EvalScaling {args.eval_scaling}"
                               if args.eval_scaling != "complexity" else ""))
 

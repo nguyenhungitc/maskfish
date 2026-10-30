@@ -113,6 +113,16 @@ void Network<Arch, Transformer>::load(const std::filesystem::path& rootDirectory
 
 
 template<typename Arch, typename Transformer>
+void Network<Arch, Transformer>::reload(const std::filesystem::path& rootDirectory,
+                                        std::string                  evalfilePath) {
+    // Not loaded until it loads again: a network that no longer fits the
+    // options is then reported by verify() instead of being used
+    evalFile.current = std::string("None");
+    load(rootDirectory, evalfilePath);
+}
+
+
+template<typename Arch, typename Transformer>
 bool Network<Arch, Transformer>::save(const std::optional<std::string>& filename) const {
     std::string actualFilename;
     std::string msg;
@@ -255,6 +265,15 @@ void Network<Arch, Transformer>::verify(std::string                             
             if (oldVersionFile && !embedded)
                 msg3 = "The network file has an old format (16-bit weights): convert it with "
                        "trainer/serialize.py --upgrade.";
+            if (otherMidMirrorFile >= 0)
+            {
+                const auto b = [](bool v) { return std::string(v ? "true" : "false"); };
+                msg3 = "The network was made for the UCI options MidMirrorPawnTieBreak="
+                     + b(otherMidMirrorFile & 1) + " and MidMirrorNoKingFlag="
+                     + b(otherMidMirrorFile & 2)
+                     + " (as the data it was trained on, trainer options --mid-pawn-tiebreak "
+                       "and --mid-no-king-flag): set them to these values.";
+            }
 
             std::string msg = "ERROR: " + msg1 + '\n' + "ERROR: " + msg2 + '\n' + "ERROR: " + msg3
                             + '\n' + "ERROR: " + msg4 + '\n' + "ERROR: " + msg5 + '\n';
@@ -345,13 +364,21 @@ void Network<Arch, Transformer>::load_stream(std::stringstream& stream, const st
         evalFile.current        = name;
         evalFile.netDescription = description.value();
         oldVersionFile          = false;
+        otherMidMirrorFile      = -1;
     }
     else
     {
         stream.clear();
         stream.seekg(0);
-        const std::uint32_t version = read_little_endian<std::uint32_t>(stream);
+        const std::uint32_t version  = read_little_endian<std::uint32_t>(stream);
+        const std::uint32_t fileHash = read_little_endian<std::uint32_t>(stream);
         oldVersionFile |= stream && version == OldVersion;
+        // A file of this architecture made for other mid mirror settings
+        if (stream && version == Version && fileHash != file_hash())
+            for (bool tieBreak : {false, true})
+                for (bool noKingFlag : {false, true})
+                    if (fileHash == (hash ^ FeatureSet::runtime_hash(tieBreak, noKingFlag)))
+                        otherMidMirrorFile = int(tieBreak) + 2 * int(noKingFlag);
     }
 }
 
@@ -449,7 +476,7 @@ bool Network<Arch, Transformer>::read_parameters(std::istream& stream,
     std::uint32_t hashValue;
     if (!read_header(stream, &hashValue, &netDescription))
         return false;
-    if (hashValue != Network::hash)
+    if (hashValue != file_hash())
         return false;
     if (!Detail::read_parameters(stream, featureTransformer))
         return false;
@@ -468,7 +495,7 @@ bool Network<Arch, Transformer>::read_parameters(std::istream& stream,
 template<typename Arch, typename Transformer>
 bool Network<Arch, Transformer>::write_parameters(std::ostream&      stream,
                                                   const std::string& netDescription) const {
-    if (!write_header(stream, Network::hash, netDescription))
+    if (!write_header(stream, file_hash(), netDescription))
         return false;
     if (!Detail::write_parameters(stream, featureTransformer))
         return false;

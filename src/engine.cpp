@@ -377,25 +377,28 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("AltFutility", Option(false));
     // Simpler thread selection: votes by score only (Threads > 1).
     options.add("SimpleThreadVote", Option(false));
-    // The squares attacked by the opponent are cached in the StateInfo
-    // and used to generate and test king moves. No functional change (bench
-    // identical): compare the speed with and without.
 #ifdef JIEQI_NNUE_ATT
     // Mid mirror (make nnue=att): tell apart the pawn pairs with the same sum
     // of squares. The network and the prepared training data must use the
-    // same setting (trainer option --mid-pawn-tiebreak).
-    options.add("MidMirrorPawnTieBreak", Option(false, [](const Option& o) {
+    // same setting (trainer option --mid-pawn-tiebreak): it is part of the
+    // network hash, and a network made for the other value is not loaded.
+    options.add("MidMirrorPawnTieBreak", Option(false, [this](const Option& o) {
                     Eval::NNUE::FeatureSet::midPawnTieBreak = bool(o);
+                    reload_big_network();  // the network must have been made for it
                     return std::nullopt;
                 }));
     // Mid mirror: do not test the king flag (bit 63) of the balance encodings,
     // which the borrows of unbalanced positions can change (trainer option
-    // --mid-no-king-flag).
-    options.add("MidMirrorNoKingFlag", Option(false, [](const Option& o) {
+    // --mid-no-king-flag; part of the network hash, as above).
+    options.add("MidMirrorNoKingFlag", Option(false, [this](const Option& o) {
                     Eval::NNUE::FeatureSet::midNoKingFlag = bool(o);
+                    reload_big_network();  // the network must have been made for it
                     return std::nullopt;
                 }));
 #endif
+    // The squares attacked by the opponent are cached in the StateInfo
+    // and used to generate and test king moves. No functional change (bench
+    // identical): compare the speed with and without.
     options.add("ThreatCache", Option(false, [](const Option& o) {
                     Position::useThreatCache = bool(o);
                     return std::nullopt;
@@ -683,6 +686,14 @@ std::unique_ptr<NN::Networks> Engine::get_default_networks() const {
 void Engine::load_big_network(const std::string& file) {
     networks.modify_and_replicate(
       [this, &file](NN::Networks& networks_) { networks_.big.load(binaryDirectory, file); });
+    threads.clear();
+    threads.ensure_network_replicated();
+}
+
+void Engine::reload_big_network() {
+    networks.modify_and_replicate([this](NN::Networks& networks_) {
+        networks_.big.reload(binaryDirectory, std::string(options["EvalFile"]));
+    });
     threads.clear();
     threads.ensure_network_replicated();
 }

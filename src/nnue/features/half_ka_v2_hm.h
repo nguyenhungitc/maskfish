@@ -252,6 +252,25 @@ class HalfKAv2_hm {
     static int  make_attack_bucket(const Position& pos, Color c);
 #endif
 
+    // The mid mirror options change the input features, so a network only
+    // fits the settings it was trained with: they are recorded in the hash
+    // of the network file (xored into it when on, so that the files made
+    // without them are unchanged), and a file made with other settings is
+    // not loaded (trainer: jieqi_features.mid_mirror_hash()).
+    static constexpr std::uint32_t MidPawnTieBreakHash = 0x7E1B0000u;
+    static constexpr std::uint32_t MidNoKingFlagHash   = 0x6C9F0000u;
+    static constexpr std::uint32_t runtime_hash(bool pawnTieBreak, bool noKingFlag) {
+        return (pawnTieBreak ? MidPawnTieBreakHash : 0) ^ (noKingFlag ? MidNoKingFlagHash : 0);
+    }
+    // The part of the network hash given by the current options
+    static std::uint32_t runtime_hash() {
+#ifdef JIEQI_NNUE_ATT
+        return runtime_hash(midPawnTieBreak, midNoKingFlag);
+#else
+        return 0;
+#endif
+    }
+
     // Feature transformer bucket and mirroring for one perspective
     static std::pair<int, bool> make_feature_bucket(const Position& pos, Color perspective);
 

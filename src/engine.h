@@ -96,6 +96,8 @@ class Engine {
     void                                  verify_networks() const;
     std::unique_ptr<Eval::NNUE::Networks> get_default_networks() const;
     void                                  load_big_network(const std::string& file);
+    // Loads the network of EvalFile again (an option in its hash has changed)
+    void reload_big_network();
     void save_network(const std::pair<std::optional<std::string>, std::string> files);
 
     // utility functions

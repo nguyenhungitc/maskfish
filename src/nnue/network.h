@@ -67,6 +67,9 @@ class Network {
     // rootDirectory: the directory of the binary (a path, which does not
     // convert implicitly to a string on Windows); evalfilePath is UTF-8
     void load(const std::filesystem::path& rootDirectory, std::string evalfilePath);
+    // Loads the network again even if it is the current one (the options
+    // that are part of the network hash have changed)
+    void reload(const std::filesystem::path& rootDirectory, std::string evalfilePath);
     bool save(const std::optional<std::string>& filename) const;
 
     std::size_t get_content_hash() const;
@@ -117,8 +120,18 @@ class Network {
     // transformer weights (reported by verify())
     bool oldVersionFile = false;
 
+    // A file that failed to load was made for other mid mirror settings
+    // (reported by verify()): -1 if not, otherwise 1 * MidMirrorPawnTieBreak
+    // + 2 * MidMirrorNoKingFlag of the file (a plain int: the networks are
+    // copied as bytes into shared memory)
+    int otherMidMirrorFile = -1;
+
     // Hash value of evaluation function structure
     static constexpr std::uint32_t hash = Transformer::get_hash_value() ^ Arch::get_hash_value();
+
+    // Hash of a network file for the current options: the options that change
+    // the input features (FeatureSet::runtime_hash()) are part of it
+    static std::uint32_t file_hash() { return hash ^ FeatureSet::runtime_hash(); }
 
     template<IndexType Size>
     friend struct AccumulatorCaches::Cache;

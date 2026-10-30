@@ -124,7 +124,9 @@ def ft_hash(arch: F.Arch | None = None) -> int:
 
 
 def network_hash() -> int:
-    return ft_hash() ^ arch_hash()
+    """Hash of the file header: with the mid mirror options in use
+    (jieqi_features.mid_mirror_hash())."""
+    return ft_hash() ^ arch_hash() ^ F.mid_mirror_hash()
 
 
 ARCH_HASH = arch_hash(2048)   # kept for compatibility (default architecture)
@@ -347,6 +349,14 @@ def read_nnue(path: str) -> dict:
     f = io.BytesIO(raw)
     version, nhash, dlen = struct.unpack("<III", f.read(12))
     if version not in (VERSION, OLD_VERSION) or nhash != network_hash():
+        made = mid_mirror_of(nhash)
+        if version in (VERSION, OLD_VERSION) and made is not None:
+            raise ValueError(f"{path}: network made with the mid mirror options "
+                             f"pawn_tiebreak={int(made[0])} no_king_flag={int(made[1])}, used with "
+                             f"pawn_tiebreak={int(F.MID_PAWN_TIEBREAK)} "
+                             f"no_king_flag={int(F.MID_NO_KING_FLAG)}: use the same options "
+                             "(--mid-pawn-tiebreak / --mid-no-king-flag, engine options "
+                             "MidMirrorPawnTieBreak / MidMirrorNoKingFlag)")
         known = {S_hash: name for name, S_hash in _arch_network_hashes().items()}
         hint = f" (looks like arch '{known[nhash]}')" if nhash in known else ""
         raise ValueError(f"incompatible network for arch '{F.ARCH}' "
@@ -405,6 +415,18 @@ def read_nnue(path: str) -> dict:
     return q
 
 
+def mid_mirror_of(nhash: int) -> tuple[bool, bool] | None:
+    """(pawn_tiebreak, no_king_flag) of a network of the current architecture
+    from its hash, or None if it is not one."""
+    if not F.MID_MIRROR:
+        return None
+    for tb in (False, True):
+        for nk in (False, True):
+            if nhash == ft_hash() ^ arch_hash() ^ F.mid_mirror_hash(tb, nk):
+                return tb, nk
+    return None
+
+
 def _arch_network_hashes() -> dict:
     out = {}
     for name, a in F.ARCHS.items():
@@ -413,8 +435,9 @@ def _arch_network_hashes() -> dict:
     return out
 
 
-def detect_arch(path: str) -> str:
-    """Architecture of a .nnue file, from its hash."""
+def detect_arch_full(path: str) -> tuple[str, dict]:
+    """Architecture of a .nnue file and its mid mirror options (for
+    jieqi_features.set_mid_mirror_options()), from its hash."""
     import zstandard
     raw = open(path, "rb").read()
     try:
@@ -423,9 +446,28 @@ def detect_arch(path: str) -> str:
         pass
     _, nhash, _ = struct.unpack("<III", raw[:12])
     for name, h in _arch_network_hashes().items():
-        if h == nhash:
-            return name
+        for tb in (False, True):
+            for nk in (False, True):
+                if not F.ARCHS[name].mid_mirror and (tb or nk):
+                    continue
+                if h ^ (F.MID_PAWN_TIEBREAK_HASH if tb else 0) \
+                        ^ (F.MID_NO_KING_FLAG_HASH if nk else 0) == nhash:
+                    return name, {"pawn_tiebreak": tb, "no_king_flag": nk}
     raise ValueError(f"unknown network hash {nhash:#x}")
+
+
+def detect_arch(path: str) -> str:
+    """Architecture of a .nnue file, from its hash (see detect_arch_full())."""
+    return detect_arch_full(path)[0]
+
+
+def use_net_arch(path: str) -> str:
+    """Selects the architecture and the mid mirror options of a .nnue file
+    (jieqi_features.set_arch(), set_mid_mirror_options()); returns the arch."""
+    arch, mm = detect_arch_full(path)
+    F.set_arch(arch)
+    F.set_mid_mirror_options(**mm)
+    return arch
 
 
 def upgrade(q: dict) -> tuple[int, int]:
@@ -643,15 +685,14 @@ def main():
     leb128 = not args.no_leb128
 
     if args.no_leb128 and args.source.endswith(".nnue") and not (args.upgrade or args.to_checkpoint):
-        F.set_arch(detect_arch(args.source))
+        use_net_arch(args.source)      # (and its mid mirror options)
         q = read_nnue(args.source)
         write_nnue(q, args.target, q["description"], leb128=False)
         print(f"written {args.target} (arch {F.ARCH}, without LEB128)")
         return
 
     if args.convert:
-        src = detect_arch(args.source)
-        F.set_arch(src)
+        src = use_net_arch(args.source)   # (the mid mirror options are kept)
         q = read_nnue(args.source)
         try:
             q = convert(q, src, args.convert, requantize=True)
@@ -679,7 +720,7 @@ def main():
         return
 
     if args.upgrade:
-        F.set_arch(detect_arch(args.source))
+        use_net_arch(args.source)      # (and its mid mirror options)
         q = read_nnue(args.source)
         if q["version"] == VERSION:
             raise SystemExit(f"{args.source} already has the current version")
@@ -695,7 +736,7 @@ def main():
     from model import NNUE
 
     if args.to_checkpoint:
-        F.set_arch(detect_arch(args.source))
+        use_net_arch(args.source)      # (and its mid mirror options)
         model = NNUE(init_psqt=False)
         load_into_model(read_nnue(args.source), model)
         torch.save({"model": model.state_dict(), "arch": F.ARCH}, args.target)

@@ -337,6 +337,40 @@ def set_mid_mirror_options(pawn_tiebreak: bool | None = None, no_king_flag: bool
         MID_NO_KING_FLAG = no_king_flag
 
 
+# The mid mirror options change the input features, so a network only fits the
+# settings it was trained with: they are part of the hash of the network file
+# (xored into it when on; engine: HalfKAv2_hm::runtime_hash()), and the
+# prepared data records them (PREFIX.midmirror, read by train.py).
+MID_PAWN_TIEBREAK_HASH = 0x7E1B0000
+MID_NO_KING_FLAG_HASH = 0x6C9F0000
+
+
+def mid_mirror_hash(pawn_tiebreak: bool | None = None, no_king_flag: bool | None = None) -> int:
+    """Part of the network hash given by the mid mirror options (by default the
+    current ones); 0 for the architectures without the mid mirror."""
+    if not MID_MIRROR:
+        return 0
+    tb = MID_PAWN_TIEBREAK if pawn_tiebreak is None else pawn_tiebreak
+    nk = MID_NO_KING_FLAG if no_king_flag is None else no_king_flag
+    return (MID_PAWN_TIEBREAK_HASH if tb else 0) ^ (MID_NO_KING_FLAG_HASH if nk else 0)
+
+
+def mid_mirror_text() -> str:
+    """The current options, as written in PREFIX.midmirror."""
+    return f"pawn_tiebreak={int(MID_PAWN_TIEBREAK)} no_king_flag={int(MID_NO_KING_FLAG)}"
+
+
+def parse_mid_mirror_text(text: str) -> dict:
+    """Options of a PREFIX.midmirror file, for set_mid_mirror_options()."""
+    out = {}
+    for item in text.split():
+        k, _, v = item.partition("=")
+        if k not in ("pawn_tiebreak", "no_king_flag") or v not in ("0", "1"):
+            raise ValueError(f"bad mid mirror setting {item!r}")
+        out[k] = v == "1"
+    return out
+
+
 def add_mid_mirror_args(ap):
     """Command line options of set_mid_mirror_options()."""
     ap.add_argument("--mid-pawn-tiebreak", action="store_true",

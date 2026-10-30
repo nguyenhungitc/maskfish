@@ -736,8 +736,14 @@ Variants of the mid mirror, to be tested with an SPRT: `prepare_data.py
 apart pairs of pawns with the same sum of squares, and `--mid-no-king-flag`
 (`MidMirrorNoKingFlag=true`) does not test the king flag of the balance
 encodings, which unbalanced positions can corrupt. The prepared data, the
-network and the engine must use the same settings, which the network file
-does not record; `verify.py` takes the same options.
+network and the engine must use the same settings: `prepare_data.py` records
+them (`PREFIX.midmirror`), `train.py` takes them from the data and records
+them in the hash of the networks it exports, and the engine only loads a
+network made for its current `MidMirrorPawnTieBreak` / `MidMirrorNoKingFlag`
+values (the error message names the values the network needs; changing one
+of these options loads the network again). `verify.py --net`,
+`serialize.py` and `ftperm.py` take them from the network; `verify.py`
+without `--net` takes the options. The pipeline scripts do not set them.
 
 ### 7.3. Threat features (`threats`, `att-threats`)
 
@@ -937,6 +943,8 @@ sources can be added if it uses this format and internal units (`RawScore`).
   stacks) for the `-blend` architectures;
 - `PREFIX.arch`: architecture name;
 - `PREFIX.material`: `major` or `jieqi` (`--jieqi-material`);
+- `PREFIX.midmirror`: the mid mirror options (`--mid-pawn-tiebreak`,
+  `--mid-no-king-flag`, section 7.2), recorded in the networks trained on it;
 - `PREFIX.fields`: names of the fields of the `.meta.npy` records.
 
 With the `threats` / `att-threats` architectures every shard also has (about

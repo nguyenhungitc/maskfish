@@ -298,6 +298,8 @@ def main():
         f.write(F.feature_arch(args.arch) + "\n")   # the layer stacks do not matter
     with open(args.out + ".material", "w") as f:
         f.write(("jieqi" if args.jieqi_material else "major") + "\n")
+    with open(args.out + ".midmirror", "w") as f:   # (read by train.py: in the network hash)
+        f.write(F.mid_mirror_text() + "\n")
     with open(args.out + ".fields", "w") as f:      # (scripts/pipeline.sh checks it)
         f.write(" ".join(META_DTYPE.names) + "\n")
     print(f"{total_out} positions in {shard} shard(s) -> {args.out}-*.npy "

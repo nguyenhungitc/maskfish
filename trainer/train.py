@@ -139,6 +139,18 @@ class Data:
             except FileNotFoundError:
                 kinds.add("none")
         self.material_kinds = sorted(kinds)
+        # Mid mirror options of the data (PREFIX.midmirror; none before they
+        # existed): the exported networks record them in their hash
+        mm = set()
+        for prefix in prefixes:
+            try:
+                with open(prefix + ".midmirror") as fm:
+                    mm.add(fm.read().strip())
+            except FileNotFoundError:
+                mm.add("pawn_tiebreak=0 no_king_flag=0")
+        if len(mm) != 1:
+            raise SystemExit(f"data prefixes prepared with different mid mirror options: {sorted(mm)}")
+        self.mid_mirror = F.parse_mid_mirror_text(mm.pop())
         self.n = int(self.sizes.sum())
         if self.n == 0:
             raise SystemExit("empty data set")
@@ -526,6 +538,15 @@ def main():
     val = Data(args.val) if args.val else None
     if val and val.arch != train.arch:
         raise SystemExit(f"train data is arch '{train.arch}' but validation data is '{val.arch}'")
+    if val and val.mid_mirror != train.mid_mirror:
+        raise SystemExit(f"train data has the mid mirror options {train.mid_mirror}, validation "
+                         f"data {val.mid_mirror}")
+    # the networks are trained (and exported, their hash records it) for the
+    # mid mirror options of the data
+    F.set_mid_mirror_options(**train.mid_mirror)
+    if any(train.mid_mirror.values()):
+        say(f"mid mirror options of the data: {F.mid_mirror_text()} (recorded in the networks)",
+            flush=True)
     eval_scale = False if args.no_eval_scale else args.eval_scaling
     if eval_scale:
         for name, d in (("train", train), ("validation", val)):
