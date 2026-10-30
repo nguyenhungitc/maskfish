@@ -246,11 +246,15 @@ more before stopping. The options are read from `src/engine.cpp`
 tested with the opposite of their default, numeric options with the values
 of `OPT_INT_TESTS`, groups from `OPT_GROUP_TESTS`. `OPT_EXCLUDE` are never
 tested: output only, several threads only (`SharedHistory`,
-`SimpleThreadVote`), time management only (`StopEarly`, `SimpleMtg`: no
-effect with a node limit, test them with `match.py --tc`), speed only
-(`ThreatCache`, `ThreatsIncremental`: same search, compare the speed with
-`bench`; a fixed-node SPRT would see 0 Elo and remove them), data format
-(`JieqiMaterial`), and `SeekMate`, which does not aim at playing strength.
+`SimpleThreadVote`, `NMPOddThreads`: the matches use one thread), time
+management only (`StopEarly`, `SimpleMtg`, `TMEffortFactor`,
+`TMReductionInterp`: no effect with a node limit, test them with `match.py
+--tc`), speed only (`ThreatCache`, `ThreatsIncremental`: same search, compare
+the speed with `bench`; a fixed-node SPRT would see 0 Elo and remove them),
+data format (`JieqiMaterial`), network format (`MidMirrorPawnTieBreak`,
+`MidMirrorNoKingFlag`: a network trained with the same setting is needed,
+the engine does not load the others), and `SeekMate` with
+`SeekMatePrevScore`, which do not aim at playing strength.
 Accepted options are used for the data too, except `NO_DATA_OPTS`
 (`RevealQuiet*` and `RevealQsearchEvasions`, and `EvalScaling`: the data
 is made with the scaling the training uses, `EVAL_SCALING` of pipeline.env;

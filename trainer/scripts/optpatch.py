@@ -10,6 +10,8 @@ disappears from the code.
 engine actions
   flip    bool option: default becomes the opposite (the option stays)
   set     default becomes --value (int / bool)
+          (flip / set of a bool option whose callback sets a static member,
+          X::member = bool(o): the member's initial value changes too)
   remove  the option disappears: registration + reading removed, the member
           variable becomes `static constexpr` with the CURRENT default, then
           (unless --no-fold) dead branches are folded where it is provably safe:
@@ -192,6 +194,39 @@ def set_default(src: str, name: str, value: str) -> str:
     k = args_txt.index(first)
     new_args = args_txt[:k] + value + args_txt[k + len(first):]
     return src[:a0] + new_args + src[a1:]
+
+
+def sync_callback_statics(src_dir: str, src: str, name: str, value: str) -> list:
+    """A bool option whose callback sets a static member (X::member = bool(o)):
+    the callback only runs when the option is set, so the member keeps its own
+    initial value. Gives the declaration `static inline bool member = ...;` the
+    new default too. Returns the names of the files changed."""
+    f = find_option_add(src, name)
+    if not f:
+        return []
+    members = re.findall(r"(?:\w+::)*(\w+)\s*=\s*bool\(\s*o\s*\)", src[f[2]:f[3]])
+    changed = []
+    for member in members:
+        decl = re.compile(r"(static\s+inline\s+bool\s+%s\s*=\s*)(?:true|false)(\s*;)" % re.escape(member))
+        hits = []
+        for fn in sorted(os.listdir(src_dir)):
+            if fn.endswith((".cpp", ".h")):
+                p = os.path.join(src_dir, fn)
+                if decl.search(open(p, encoding="utf-8").read()):
+                    hits.append(p)
+        for sub in ("nnue", os.path.join("nnue", "features")):
+            d = os.path.join(src_dir, sub)
+            for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+                p = os.path.join(d, fn)
+                if fn.endswith((".cpp", ".h")) and decl.search(open(p, encoding="utf-8").read()):
+                    hits.append(p)
+        if len(hits) != 1:
+            raise SystemExit(f"static member {member} of option {name}: {len(hits)} declarations")
+        s = open(hits[0], encoding="utf-8").read()
+        s = decl.sub(lambda m: m.group(1) + value + m.group(2), s, count=1)
+        open(hits[0], "w", encoding="utf-8").write(s)
+        changed.append(os.path.relpath(hits[0], src_dir))
+    return changed
 
 
 KEEP_COMMENT = re.compile(r"Experimental|off by default|test\s+with SPRT|match\.py|ideas? (from|ported)", re.I)
@@ -666,9 +701,12 @@ def main():
         value = literal(kind, a.value)
         if kind == "int" and not (int(lo) <= int(value) <= int(hi)):
             raise SystemExit(f"{value} outside [{lo}, {hi}]")
-    s = set_default(open(eng, encoding="utf-8").read(), a.option, value)
+    src = open(eng, encoding="utf-8").read()
+    s = set_default(src, a.option, value)
     open(eng, "w", encoding="utf-8").write(s)
-    print(f"{a.option}: default {default} -> {value}")
+    synced = sync_callback_statics(a.src, src, a.option, value) if kind == "bool" else []
+    print(f"{a.option}: default {default} -> {value}"
+          + (f" (static members in {', '.join(synced)})" if synced else ""))
 
 
 if __name__ == "__main__":

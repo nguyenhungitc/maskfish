@@ -136,7 +136,7 @@ fi
 : "${OPT_MAX_PAIRS:=12000}"
 : "${OPT_RETRY:=2}"                  # later cycles in which an undecided option is tested again
 : "${OPT_GROUP:=1}"                  # test the undecided options that leaned positive together
-: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial SeekMate SimpleThreadVote SimpleMtg ThreatCache ThreatsIncremental VoteSinglePVOnly FrequentTimeCheck}"
+: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial SeekMate SimpleThreadVote SimpleMtg ThreatCache ThreatsIncremental VoteSinglePVOnly FrequentTimeCheck TMEffortFactor TMReductionInterp NMPOddThreads SeekMatePrevScore MidMirrorPawnTieBreak MidMirrorNoKingFlag}"
 # options that change the evaluation in a way the trainer does not model: never in the data
 # (EvalScaling: the data must be made with the scaling the training uses, EVAL_SCALING)
 : "${NO_DATA_OPTS:=RevealQuiet RevealQsearchEvasions EvalScaling}"
