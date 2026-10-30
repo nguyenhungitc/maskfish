@@ -135,7 +135,10 @@ def main():
             pos = F.parse_fen(fen)
             material, rule40 = E.position_scale_inputs(pos, args.jieqi_material)
             se, allmat = E.alignment_inputs(pos)
-            sed = None if F.PSQT else E.simple_eval_dark(pos)
+            # simple_eval_dark(): the PSQT part of a network without one, and
+            # the material balance of EvalScaling Correlation
+            sed = E.simple_eval_dark(pos) if not F.PSQT or args.eval_scaling == "correlation" \
+                else None
             r_final = E.evaluate_int(e_psqt, e_pos, material, rule40, args.eval_scaling, se, allmat,
                                      sed)
             if r_final == e_final:
@@ -174,7 +177,10 @@ def main():
                 mat, r40 = E.position_scale_inputs(pos, args.jieqi_material)
                 se, allmat = E.alignment_inputs(pos)
                 t = lambda x: torch.tensor([float(x)])
-                qf = E.evaluate_qat(t(qp), t(qv), t(mat), t(r40), args.eval_scaling, t(se), t(allmat))
+                sd = E.simple_eval_dark(pos) if not F.PSQT or args.eval_scaling == "correlation" \
+                    else None
+                qf = E.evaluate_qat(t(qp), t(qv), t(mat), t(r40), args.eval_scaling, t(se), t(allmat),
+                                    None if sd is None else t(sd))
                 qat_final_exact += int(round(qf.item())) == e_final
     engine.quit()
     if tmp:

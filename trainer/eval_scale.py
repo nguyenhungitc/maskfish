@@ -40,6 +40,19 @@ the kings, a dark piece as the kind of piece of its square (JieqiMaterial
 does not apply). prepare_data.py stores se and the total material of every
 position for it ("se", "allmat").
 
+With EvalScaling Correlation, train.py --eval-scaling correlation: the same
+agreement, but with the material balance of simple_eval_dark() (sed below, a
+dark piece at the average value of its pool) and the scaling by the major
+material of EvalScaling Complexity (JieqiMaterial applies):
+
+    sed_norm    = sed * 1024 / (|sed| + 1024)
+    nnue_norm   = nnue * 1024 / (|nnue| + 1024)
+    correl      = sed_norm * nnue_norm / 512
+    v           = (nnue + nnue * correl / 65536) * (18560 + material) / 33331
+    v          -= v * rule40 / 217
+
+It needs the field sed of the prepared data.
+
 Networks without PSQT ("-nopsqt", make psqt=no) with EvalScaling Complexity:
 psqt is 0, and the material stands for it in the complexity term:
 
@@ -49,7 +62,6 @@ where sed is simple_eval_dark(): the material balance for the side to move, a
 dark piece counting at the average value of its side's pool
 (Position::dark_value()). prepare_data.py stores it too ("sed").
 
-(EvalScaling Correlation of the engine is not modelled.)
 """
 
 from __future__ import annotations
@@ -65,7 +77,7 @@ VALUE_MATE_IN_MAX_PLY = 32000 - 246     # VALUE_MATE - MAX_PLY (maskfish/src/typ
 
 _MAJOR = (F.ROOK, F.CANNON, F.KNIGHT)
 _MINOR = (F.PAWN, F.ADVISOR, F.BISHOP)
-SCALINGS = ("complexity", "alignment")
+SCALINGS = ("complexity", "alignment", "correlation")
 
 
 def major_material(pos: F.JieqiPosition) -> int:
@@ -182,8 +194,19 @@ def evaluate_int(psqt: int, positional: int, material: int, rule40: int,
     the mate range, which a trained network never reaches). scaling
     "alignment" (EvalScaling Alignment) uses se and allmat instead of material.
     sed (simple_eval_dark()) is given for networks without PSQT: it stands for
-    the PSQT part in the complexity term."""
+    the PSQT part in the complexity term; scaling "correlation" (EvalScaling
+    Correlation) needs it too."""
     nnue = _i32(psqt + positional)
+    if scaling == "correlation":
+        if sed is None:
+            raise ValueError("EvalScaling Correlation needs sed (simple_eval_dark())")
+        sed_norm = _tdiv(_i32(sed * ALIGN_NORM), abs(sed) + ALIGN_NORM)
+        nnue_norm = _tdiv(_i32(nnue * ALIGN_NORM), abs(nnue) + ALIGN_NORM)
+        correl = _tdiv(_i32(sed_norm * nnue_norm), ALIGN_DIV)
+        base = _i32(nnue + _tdiv(_i32(nnue * correl), ALIGN_EVAL_DIV))
+        v = _i32(_tdiv(base * (MATERIAL_BASE + material), MATERIAL_DIV))   # 64-bit product
+        v = _i32(v - _tdiv(v * min(rule40, RULE40_MAX), RULE40_DIV))
+        return max(-VALUE_MATE_IN_MAX_PLY + 1, min(VALUE_MATE_IN_MAX_PLY - 1, v))
     if scaling == "alignment":
         se_norm = _tdiv(se * ALIGN_NORM, abs(se) + ALIGN_NORM)
         nnue_norm = _i32(_tdiv(nnue * ALIGN_NORM, abs(nnue) + ALIGN_NORM))
@@ -203,6 +226,13 @@ def evaluate_float(psqt, positional, material, rule40, scaling: str = "complexit
                    allmat=None, sed=None):
     """Differentiable version for training (torch tensors or numpy arrays, internal
     units). Differs from evaluate_int() only by the integer truncations."""
+    if scaling == "correlation":
+        nnue = psqt + positional
+        sed_norm = sed * ALIGN_NORM / (abs(sed) + ALIGN_NORM)
+        nnue_norm = nnue * ALIGN_NORM / (abs(nnue) + ALIGN_NORM)
+        correl = sed_norm * nnue_norm / ALIGN_DIV
+        v = (nnue + nnue * correl / ALIGN_EVAL_DIV) * ((MATERIAL_BASE + material) / MATERIAL_DIV)
+        return v * (1.0 - rule40 / RULE40_DIV)
     if scaling == "alignment":
         nnue = psqt + positional
         se_norm = se * ALIGN_NORM / (abs(se) + ALIGN_NORM)
@@ -230,6 +260,15 @@ def evaluate_qat(psqt, positional, material, rule40, scaling: str = "complexity"
     dtype = psqt.dtype
     psqt, positional, material, rule40 = (wide(t) for t in (psqt, positional, material, rule40))
     nnue = psqt + positional
+    if scaling == "correlation":
+        sed = wide(sed)
+        sed_norm = torch.trunc(sed * ALIGN_NORM / (torch.abs(sed) + ALIGN_NORM))
+        nnue_norm = q_tdiv(nnue * ALIGN_NORM, torch.abs(nnue) + ALIGN_NORM)
+        correl = q_tdiv(sed_norm * nnue_norm, ALIGN_DIV)
+        base = nnue + q_tdiv(nnue * correl, ALIGN_EVAL_DIV)
+        v = q_tdiv(base * (MATERIAL_BASE + material), MATERIAL_DIV)
+        v = v - q_tdiv(v * torch.clamp(rule40, max=RULE40_MAX), RULE40_DIV)
+        return torch.clamp(v, -VALUE_MATE_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1).to(dtype)
     if scaling == "alignment":
         se, allmat = wide(se), wide(allmat)
         se_norm = torch.trunc(se * ALIGN_NORM / (torch.abs(se) + ALIGN_NORM))

@@ -307,7 +307,8 @@ def prefetched(it, depth: int):
 
 def scaling_mode(eval_scale) -> str | None:
     """None (raw network output), "complexity" (True: the engine's default
-    EvalScaling) or "alignment" (EvalScaling Alignment)."""
+    EvalScaling), "alignment" or "correlation" (EvalScaling Alignment /
+    Correlation)."""
     if not eval_scale:
         return None
     return "complexity" if eval_scale is True else str(eval_scale)
@@ -316,7 +317,7 @@ def scaling_mode(eval_scale) -> str | None:
 def model_score(model, batch, eval_scale=True, qat: bool = False) -> torch.Tensor:
     """Score of the model for a batch, internal units: after the engine's
     evaluate() scaling when the batch has its inputs and eval_scale is on
-    (True / "complexity", or "alignment": the EvalScaling option), otherwise the
+    (True / "complexity", "alignment" or "correlation": the EvalScaling option), otherwise the
     raw network output. qat: the score of the quantized network, as the engine
     computes it (model.forward_parts_qat())."""
     stm, nstm, bucket, _, _, threats = batch[:6]
@@ -325,12 +326,13 @@ def model_score(model, batch, eval_scale=True, qat: bool = False) -> torch.Tenso
     se, allmat = (batch[9], batch[10]) if len(batch) >= 11 else (None, None)
     sed = batch[11] if len(batch) >= 12 else None
     mode = scaling_mode(eval_scale)
-    if material is None or (mode == "alignment" and se is None):
+    if material is None or (mode == "alignment" and se is None) \
+            or (mode == "correlation" and sed is None):
         mode = None
     extra = {"scaling": mode, "se": se, "allmat": allmat} if mode else {}
     # Without PSQT, EvalScaling Complexity takes simple_eval_dark() for the
-    # PSQT part (as the engine)
-    if mode == "complexity" and not F.PSQT:
+    # PSQT part (as the engine); EvalScaling Correlation always uses it
+    if (mode == "complexity" and not F.PSQT) or mode == "correlation":
         extra["sed"] = sed
     if qat:
         psqt, positional = model.forward_parts_qat(stm, nstm, bucket, threats, blend)
@@ -483,7 +485,8 @@ def main():
                          "(e.g. 8); 0 = off")
     ap.add_argument("--eval-scaling", choices=E.SCALINGS, default="complexity",
                     help="the engine's EvalScaling option the network is trained for: "
-                         "complexity (default) or alignment (needs data prepared with se / allmat)")
+                         "complexity (default), alignment (needs data prepared with se / allmat) "
+                         "or correlation (needs data prepared with sed)")
     ap.add_argument("--no-eval-scale", action="store_true",
                     help="compare the raw network output with the data scores, without the "
                          "engine's evaluate() scaling (old behaviour; the scale of the "
@@ -536,6 +539,10 @@ def main():
                                  "prepare_data.py): prepare it again from the text files to "
                                  "train a network without PSQT with EvalScaling Complexity "
                                  "(or use --eval-scaling alignment)")
+            if d is not None and eval_scale == "correlation" and not d.has_sed:
+                raise SystemExit(f"the {name} data has no sed (prepared by an older "
+                                 "prepare_data.py): prepare it again from the text files to "
+                                 "train with --eval-scaling correlation")
             if d is not None and eval_scale == "alignment" and not d.has_align:
                 raise SystemExit(f"the {name} data has no se / allmat (prepared by an older "
                                  "prepare_data.py): prepare it again from the text files to "

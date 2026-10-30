@@ -132,12 +132,14 @@ fi
 : "${CHECKPOINT_EVERY:=1}"; : "${TRAIN_THREADS:=0}"; : "${BATCH_TARGET:=16384}"; : "${DEVICE:=}"; : "${REQUIRE_GPU:=1}"; : "${INIT_FROM_CURRENT:=1}"
 : "${TRAIN_GPUS:=1}"; : "${QAT_START:=0}"; : "${FTPERM:=0}"; : "${EVAL_SCALING:=Complexity}"
 case "$EVAL_SCALING" in
-  Complexity|Alignment) ;;
-  *) echo "EVAL_SCALING must be Complexity or Alignment" >&2; exit 2 ;;
+  Complexity|Alignment|Correlation) ;;
+  *) echo "EVAL_SCALING must be Complexity, Alignment or Correlation" >&2; exit 2 ;;
 esac
 # The engine option EvalScaling and train.py --eval-scaling must agree (README 7.13)
 EVAL_OPT=(); EVAL_ARG=()
-if [[ "$EVAL_SCALING" == Alignment ]]; then EVAL_OPT=(EvalScaling=Alignment); EVAL_ARG=(--eval-scaling alignment); fi
+if [[ "$EVAL_SCALING" != Complexity ]]; then
+  EVAL_OPT=(EvalScaling=$EVAL_SCALING); EVAL_ARG=(--eval-scaling "${EVAL_SCALING,,}")
+fi
 : "${TRAIN_ARGS:=}"; : "${EXTRA_TRAIN:=}"
 : "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 : "${SPRT=0 5}"; : "${MATCH_EPOCHS:=last}"; : "${MATCH_OPTS:=}"; : "${AUTO_PROMOTE:=1}"
@@ -609,6 +611,11 @@ prepare_one() {   # $1 = main text file, $2 = output prefix, $3 = force
   if [[ "$EVAL_SCALING" == Alignment && -f "${prefix}.arch" ]] \
      && ! grep -qw allmat "${prefix}.fields" 2>/dev/null; then
     echo "Prepared without se / allmat (needed by EVAL_SCALING=Alignment): preparing again" | tee -a "$CUR_LOG"
+    force=1
+  fi
+  if [[ "$EVAL_SCALING" == Correlation && -f "${prefix}.arch" ]] \
+     && ! grep -qw sed "${prefix}.fields" 2>/dev/null; then
+    echo "Prepared without sed (needed by EVAL_SCALING=Correlation): preparing again" | tee -a "$CUR_LOG"
     force=1
   fi
   # --max-dups (README 7.15), recorded in ${prefix}.opts; mirror=0: data prepared

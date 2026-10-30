@@ -325,7 +325,7 @@ python train.py data/train0 data/train1 --val data/val1 --out runs/gen2 \
 | `--optimizer` | `adam` | `ranger21`: the optimizer of nnue-pytorch (AdamW with lookahead, `ranger21.py`); the learning rate still follows `--lr` and `--gamma`. A run resumed with another optimizer starts a new one at the current learning rate |
 | `--stack-balance` | 0 (off) | Balance the loss across layer stacks; the value is the cap (e.g. 8) |
 | `--checkpoint-every` | 1 | Write `epoch_K.pt` only every K epochs (and at the last one); `last.pt` and the `.nnue` files are always written |
-| `--eval-scaling` | `complexity` | The engine's `EvalScaling` option the network will play with: `complexity` or `alignment` ([section 7.13](#713-evalscaling-alignment)) |
+| `--eval-scaling` | `complexity` | The engine's `EvalScaling` option the network will play with: `complexity`, `alignment` or `correlation` ([section 7.13](#713-evalscaling-alignment)) |
 | `--no-eval-scale` | | Compare the raw network output with the data scores (old behaviour, see below) |
 | `--qat-start` | 0 (off) | Quantization-aware training from this epoch on ([section 7.11](#711-quantization-aware-training)) |
 | `--val-qat` | | Also print the validation loss of the quantized network before `--qat-start` |
@@ -869,8 +869,15 @@ everywhere, `train.py --eval-scaling alignment`, `verify.py --eval-scaling
 alignment`, `setoption name EvalScaling value Alignment` in the engine (and
 `--opt EvalScaling=Alignment` when generating data and in matches;
 `EVAL_SCALING` in `pipeline.env`). It needs the fields `se` and `allmat` of
-the prepared data (prepare old data again). The engine's third value,
-`Correlation`, is not modeled by the trainer.
+the prepared data (prepare old data again).
+
+The third value, `Correlation`, measures the same agreement with the
+material balance of `simple_eval_dark()` (a dark piece at the average value
+of its pool) and scales by the major material, as `Complexity` (so
+`JieqiMaterial` applies). Train with `train.py --eval-scaling correlation`
+(`verify.py --eval-scaling correlation`, `EvalScaling Correlation` in the
+engine, `EVAL_SCALING="Correlation"` in pipeline.env). It needs the field
+`sed` of the prepared data.
 
 ### 7.14. 32 layer stacks (`-s32`, `make stacks=32`)
 
@@ -969,7 +976,8 @@ Training speed depends on the GPU; run a small epoch first
 | The engine reports `network file ... was not loaded` for a network trained before the engine used 8-bit weights | The file has the old version (16-bit HalfKA weights): convert it with `serialize.py --upgrade`, see [section 11.1](#111-file-format-change-8-bit-weights) |
 | `the train data has no material / rule40` | The data was prepared before the loss used the `evaluate()` scaling: run `prepare_data.py` again on the text files (or train with `--no-eval-scale`) |
 | `the train data has no se / allmat` | `--eval-scaling alignment` needs data prepared by the current `prepare_data.py`: prepare it again from the text files |
-| `SCALE MISMATCH` with a network trained with `--eval-scaling alignment` | Run `verify.py` (and the engine) with `--eval-scaling alignment` / `EvalScaling Alignment` |
+| `the train data has no sed` | `--eval-scaling correlation` (and `--no-psqt` with `complexity`) need data prepared by the current `prepare_data.py`: prepare it again from the text files |
+| `SCALE MISMATCH` with a network trained with `--eval-scaling alignment` / `correlation` | Run `verify.py` (and the engine) with the same `--eval-scaling` / `EvalScaling` value |
 | `SCALE MISMATCH` in `verify.py` | `eval_scale.py` no longer matches `src/evaluate.cpp` (constants or material): update it |
 | `incompatible network for arch ...` | A network of the wrong architecture was given to `--init-net` / `serialize.py`; the message gives the file's real architecture |
 | `prepare_data.py` runs out of RAM | Lower `--shard-size` (e.g. 500000) |

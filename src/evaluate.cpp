@@ -140,7 +140,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         // material balance, but with dark pieces at the average value of their
         // pool (simple_eval_dark()) and the scaling by the major material of
         // EvalScaling Complexity. Optimism only enters through that agreement.
-        // The trainer does not model it (no train.py --eval-scaling for it).
+        // Modelled by the trainer: train.py --eval-scaling correlation
+        // (trainer/eval_scale.py).
         const int material  = jieqiMaterial ? pos.jieqi_major_material() : pos.major_material();
         const int se        = simple_eval_dark(pos);
         const int se_norm   = (se * 1024) / (std::abs(se) + 1024);

@@ -17,7 +17,8 @@ balance for the side to move) and allmat (total material) are those of the
 EvalScaling Alignment option (train.py --eval-scaling alignment). sed
 (simple_eval_dark(): material balance with dark pieces at the average value of
 their pool) stands for the PSQT part of networks without one (train.py
---no-psqt) in EvalScaling Complexity.
+--no-psqt) in EvalScaling Complexity, and is the material balance of
+EvalScaling Correlation (train.py --eval-scaling correlation).
 
 The threat architectures (--arch threats / att-threats) also write, per shard:
        data/train-00000.threats.npy   uint32 (T,): threat feature indices of all

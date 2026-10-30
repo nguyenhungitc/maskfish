@@ -360,7 +360,7 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Correlation (the same agreement, with dark pieces at the average value
     // of their pool, and
     // the major material). The trainer must use the same (train.py
-    // --eval-scaling); it does not model Correlation.
+    // --eval-scaling complexity / alignment / correlation).
     options.add("EvalScaling", Option("Complexity var Complexity var Alignment var Correlation",
                                       "Complexity"));
     // Time management: the move horizon in whole

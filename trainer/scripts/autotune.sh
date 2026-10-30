@@ -156,7 +156,7 @@ set_arch_vars || exit 2
 ENGINE="${ENGINE:-$SRC_DIR/$BIN_BASE}"
 # the engine option EvalScaling of pipeline.env (README 7.13) in every match
 : "${EVAL_SCALING:=Complexity}"
-EVAL_OPT=""; [[ "$EVAL_SCALING" == Alignment ]] && EVAL_OPT="EvalScaling=Alignment"
+EVAL_OPT=""; [[ "$EVAL_SCALING" != Complexity ]] && EVAL_OPT="EvalScaling=$EVAL_SCALING"
 
 AT_DIR="$TRAINER_DIR/autotune"
 WORK="$AT_DIR/work"

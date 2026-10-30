@@ -254,8 +254,9 @@ effect with a node limit, test them with `match.py --tc`), speed only
 Accepted options are used for the data too, except `NO_DATA_OPTS`
 (`RevealQuiet*` and `RevealQsearchEvasions`, and `EvalScaling`: the data
 is made with the scaling the training uses, `EVAL_SCALING` of pipeline.env;
-the group `EvalCorrelation` tests `EvalScaling=Correlation`, which the
-trainer does not model).
+the group `EvalCorrelation` tests `EvalScaling=Correlation` with the
+current net; to adopt it, set `EVAL_SCALING="Correlation"` in pipeline.env so
+that the data and the training use it too).
 
 Each value plays an SPRT `OPT_SPRT` (default `[0, 3]`) with the current net,
 at `OPT_NODES` nodes per move, against the options in use, for at most
