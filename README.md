@@ -1,4 +1,4 @@
-# Maskfish - *Luck is a skill too*
+# Maskfish - *luck is a skill too*
 
 Maskfish adapts Pikafish, a free UCI xiangqi engine derived
 from Stockfish, to **Jieqi**: a xiangqi variant in which all
