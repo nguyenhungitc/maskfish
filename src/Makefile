@@ -802,6 +802,19 @@ endif
 # the bench signature, would depend on the build.
 CXXFLAGS += -ffp-contract=off
 
+### 3.2.1b zstd compression (export_net)
+# export_net writes the networks with zstd level 1 (strategy fast): the int8
+# weights compress as well as with the higher levels (74% of the size at
+# levels 1 to 19), so the other block compressors of external/compress are
+# left out of the binary (a level that needs one uses the fast one).
+CXXFLAGS += -DZSTD_EXCLUDE_DFAST_BLOCK_COMPRESSOR -DZSTD_EXCLUDE_GREEDY_BLOCK_COMPRESSOR \
+            -DZSTD_EXCLUDE_LAZY_BLOCK_COMPRESSOR -DZSTD_EXCLUDE_LAZY2_BLOCK_COMPRESSOR \
+            -DZSTD_EXCLUDE_BTLAZY2_BLOCK_COMPRESSOR -DZSTD_EXCLUDE_BTOPT_BLOCK_COMPRESSOR \
+            -DZSTD_EXCLUDE_BTULTRA_BLOCK_COMPRESSOR
+# Its workspace poisoning for the sanitizers declares the sanitizer hooks
+# without C linkage once compiled as C++, which does not link: left out.
+CXXFLAGS += -DZSTD_ASAN_DONT_POISON_WORKSPACE -DZSTD_MSAN_DONT_POISON_WORKSPACE
+
 ### 3.2.2 Debugging
 ifeq ($(debug),no)
 	CXXFLAGS += -DNDEBUG

@@ -186,7 +186,9 @@ a comment in [`src/engine.cpp`](src/engine.cpp).
   positions (default `16 1 13 default depth`) and prints the node count, the
   signature of the build; `speedtest` measures the speed. Both need a network.
 * `flip` swaps the colors of the position; `export_net [file]` writes the
-  network in use; `compiler` prints the compiler and the build options.
+  network in use, compressed with zstd like the files of the trainer (it can
+  be loaded again with `EvalFile`); `compiler` prints the compiler and the
+  build options.
 
 ## Compiling
 

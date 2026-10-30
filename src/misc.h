@@ -672,6 +672,9 @@ void set_console_utf8();
 
 std::stringstream read_compressed_nnue(const std::filesystem::path& fpath);
 std::stringstream read_compressed_nnue(const void* data, std::size_t size);
+// Writes data to fpath compressed with zstd, as read_compressed_nnue() (and
+// the trainer) read it. False on an error.
+bool write_compressed_nnue(const std::filesystem::path& fpath, const std::string& data, int level = 1);
 }  // namespace Maskfish
 
 template<std::size_t N>

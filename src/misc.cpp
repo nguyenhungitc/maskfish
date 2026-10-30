@@ -692,6 +692,20 @@ std::stringstream read_compressed_nnue(const std::filesystem::path& fpath) {
     return ss;
 }
 
+// One zstd frame holding data, with its size (the format of the networks
+// written by the trainer's serialize.py). Level 1 by default: the network
+// weights compress as well as with the higher levels (see the Makefile)
+bool write_compressed_nnue(const std::filesystem::path& fpath, const std::string& data, int level) {
+    std::vector<char> out(ZSTD_compressBound(data.size()));
+    const usize       n = ZSTD_compress(out.data(), out.size(), data.data(), data.size(), level);
+    if (ZSTD_isError(n))
+        return false;
+
+    std::ofstream fout(fpath, std::ios::binary);
+    fout.write(out.data(), std::streamsize(n));
+    return bool(fout);
+}
+
 // The same for a network in memory (the one embedded in the binary)
 std::stringstream read_compressed_nnue(const void* data, std::size_t size) {
     std::stringstream ss;
