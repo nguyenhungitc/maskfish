@@ -195,9 +195,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Compute the static eval and the hindsight depth adjustments before the
     // TT cutoff (which then uses the adjusted depth).
     options.add("HindsightFirst", Option(false));
-    // On the PV of the previous iteration, no internal iterative reduction and
-    // no shallow pruning of quiet moves at PV nodes.
-    options.add("FollowPV", Option(false));
     // Increase the reduction already when the next ply has two fail highs
     options.add("CutoffCntTweak", Option(false));
     // Make null move pruning easier after null move fail highs of previous siblings

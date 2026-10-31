@@ -497,7 +497,6 @@ class Worker {
     bool   lmrHistoryDivisor = false;
     bool   corrHistAsym = false;
     bool   hindsightFirst = false;
-    bool   followPVOption = false;
     // PV of the previous iteration for the current PV line (UCI option FollowPV)
     std::vector<Move> followPVLine;
     bool   cutoffCntTweak = false;
