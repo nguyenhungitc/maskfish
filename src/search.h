@@ -79,7 +79,6 @@ struct Stack {
     bool                        ttPv;
     bool                        ttHit;
     int                         cutoffCnt;
-    int                         priorNMPFailHigh;  // null move fail highs of previous siblings
     int                         reduction;
     bool                        isPvNode;
     int                         quietMoveStreak;
@@ -499,7 +498,6 @@ class Worker {
     // PV of the previous iteration for the current PV line (UCI option FollowPV)
     std::vector<Move> followPVLine;
     bool   cutoffCntTweak = false;
-    bool   nmpFailHighCount = false;
     bool   nmpOddThreads    = false;
     bool   mateTTExtension = false;
     bool   stopEarly = false;

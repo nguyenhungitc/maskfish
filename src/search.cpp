@@ -388,7 +388,6 @@ bool Search::Worker::iterative_deepening() {
     contCorr6Ply = bool(options["ContCorr6Ply"]);
     hindsightFirst = bool(options["HindsightFirst"]);
     cutoffCntTweak = bool(options["CutoffCntTweak"]);
-    nmpFailHighCount = bool(options["NMPFailHighCount"]);
     nmpOddThreads    = bool(options["NMPOddThreads"]);
     mateTTExtension = bool(options["MateTTExtension"]);
     stopEarly = bool(options["StopEarly"]);
@@ -1111,7 +1110,6 @@ Value Search::Worker::search(
     ss->statScore       = 0;
     ss->isPvNode        = PvNode;
     (ss + 2)->cutoffCnt = 0;
-    (ss + 1)->priorNMPFailHigh = 0;
 
     // Computed before the TT lookup, to overlap with the TT prefetch
     const auto correctionValue = correction_value(*thisThread, pos, ss);
@@ -1333,8 +1331,7 @@ Value Search::Worker::search(
 
     // Step 8. Null move search with verification search
     if (cutNode && (ss - 1)->currentMove != Move::null() && eval >= beta
-        && ss->staticEval + (nmpFailHighCount ? 50 * ss->priorNMPFailHigh : 0)
-             >= beta - 9 * depth + 201
+        && ss->staticEval >= beta - 9 * depth + 201
         && !excludedMove && pos.major_material(us) && ss->ply >= thisThread->nmpMinPly
         && !is_loss(beta))
     {
@@ -1367,10 +1364,7 @@ Value Search::Worker::search(
         if (nullValue >= beta && !is_win(nullValue))
         {
             if (thisThread->nmpMinPly || depth < 16)
-            {
-                ++ss->priorNMPFailHigh;
                 return nullValue;
-            }
 
             assert(!thisThread->nmpMinPly);  // Recursive verification is not allowed
 
@@ -1383,10 +1377,7 @@ Value Search::Worker::search(
             thisThread->nmpMinPly = 0;
 
             if (v >= beta)
-            {
-                ++ss->priorNMPFailHigh;
                 return nullValue;
-            }
         }
     }
 

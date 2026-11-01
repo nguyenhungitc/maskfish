@@ -192,8 +192,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("HindsightFirst", Option(false));
     // Increase the reduction already when the next ply has two fail highs
     options.add("CutoffCntTweak", Option(false));
-    // Make null move pruning easier after null move fail highs of previous siblings
-    options.add("NMPFailHighCount", Option(false));
     // Null move pruning: the threads with an odd index reduce one ply less, so
     // that the threads search more different trees (only matters with
     // Threads > 1)
