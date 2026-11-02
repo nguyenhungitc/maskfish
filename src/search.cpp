@@ -435,6 +435,7 @@ bool Search::Worker::iterative_deepening() {
     chanceCV = int(options["ChanceCV"]);
     chanceQsearchRep = bool(options["ChanceQsearchRep"]);
     chanceMixTT = bool(options["ChanceMixTT"]);
+    chanceMixFut = bool(options["ChanceMixFut"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3174,15 +3175,10 @@ Value Search::Worker::flip_search(
 
     // Searches outcome i at depth d (in the quiescence search at d <= 0), as a
     // node of the type of nt (std::integral_constant<NodeType, ...>)
-    auto searchOutcomeAs = [&](auto nt, int i, Value a, Value b, Depth d, bool cut) {
-        constexpr NodeType NT = decltype(nt)::value;
-
+    // Reveals the piece as outcome i (undone by pos.undo_flip(flipSq, ...) with
+    // the piece returned); the accumulator stack gets the reveal
+    auto flipOutcome = [&](int i) {
         const Piece piece = restPieces[i].first;
-
-        branchReduction.restore();
-        // Prefetch the TT entry of the outcome as early as possible
-        const Key flipKey = pos.flip_key(flipSq, piece);
-        prefetch(tt.get_cluster(observer_tt_key(flipKey, rootObserver)));
 
         DirtyPiece dp = baseDp;  // do_flip may add refresh flags for this outcome only
         accumulatorStack.pop();
@@ -3195,6 +3191,18 @@ Value Search::Worker::flip_search(
         const Piece flippedPiece = pos.do_flip(flipSq, piece, &dp);
 #endif
         accumulatorStack.push(dp);
+        return flippedPiece;
+    };
+
+    auto searchOutcomeAs = [&](auto nt, int i, Value a, Value b, Depth d, bool cut) {
+        constexpr NodeType NT = decltype(nt)::value;
+
+        branchReduction.restore();
+        // Prefetch the TT entry of the outcome as early as possible
+        const Key flipKey = pos.flip_key(flipSq, restPieces[i].first);
+        prefetch(tt.get_cluster(observer_tt_key(flipKey, rootObserver)));
+
+        const Piece flippedPiece = flipOutcome(i);
         assert(pos.key() == flipKey);
 
         const Value value = d <= 0 ? qsearch<NT>(pos, ss, a, b) : search<NT>(pos, ss, a, b, d, cut);
@@ -3219,6 +3227,18 @@ Value Search::Worker::flip_search(
         const Value value  = searchOutcomeAs(std::integral_constant<NodeType, PV>{}, i,
                                              -VALUE_INFINITE, VALUE_INFINITE, d, false);
         ss->pv             = nodePv;
+        return value;
+    };
+
+    // Static evaluation of outcome i, corrected as in search(), or VALUE_NONE
+    // when the reveal gives check (ChanceMixFut)
+    auto staticOutcome = [&](int i) {
+        const Piece flippedPiece = flipOutcome(i);
+        const Value value =
+          pos.checkers()
+            ? VALUE_NONE
+            : to_corrected_static_eval(evaluate(pos), correction_value(*this, pos, ss));
+        pos.undo_flip(flipSq, flippedPiece);
         return value;
     };
 
@@ -3319,7 +3339,44 @@ Value Search::Worker::flip_search(
 
         bool        estimated = false;
         const Depth shallow   = depth - chanceMix;
-        for (int i = 0; i < restCount; ++i)
+
+        // UCI option ChanceMixFut (non-PV nodes, shallow searches in the
+        // quiescence search, depth <= 7): after a reveal that gives no check,
+        // the side to move here can stand pat, so the quiescence value of an
+        // outcome is at least its static evaluation. If the static evaluations
+        // of the outcomes, the most likely one lowered by a reverse futility
+        // margin of 90 per ply, already make the node fail high, the search of
+        // the most likely outcome would most likely be cut at once: the node
+        // fails high without any search. Only tried when the static evaluation
+        // of the parent, from the point of view of this node, is at least beta
+        // + 20 per ply.
+        bool futile = false;
+        if (chanceMixFut && nodeType == NonPV && shallow <= 0 && depth <= 7 && !is_decisive(beta)
+            && !(ss - 1)->inCheck && is_valid((ss - 1)->staticEval)
+            && -(ss - 1)->staticEval >= beta + 20 * depth)
+        {
+            bool ok = true;
+            for (int i = 0; i < restCount && ok; ++i)
+                ok = is_valid(values[i] = staticOutcome(i));
+
+            if (ok)
+            {
+                const Value top = values[0];
+                values[0]       = top - 90 * depth;
+                if (aggregate_chance(values.data(), counts.data(), restCount, total,
+                                     ChanceBound::Exact)
+                    >= beta)
+                {
+                    values[0] = top;
+                    value = std::max(beta, aggregate_chance(values.data(), counts.data(), restCount,
+                                                            total, ChanceBound::Exact));
+                    ss->estimated = false;
+                    futile        = true;
+                }
+            }
+        }
+
+        for (int i = 0; i < restCount && !futile; ++i)
         {
             // UCI option ChanceMixTT: an exact TT entry of the outcome, at least
             // as deep as its shallow search, gives its value without a search
@@ -3351,13 +3408,16 @@ Value Search::Worker::flip_search(
                                     ChanceBound::Exact);
         };
 
-        if (threads.stop.load(std::memory_order_relaxed))
+        if (!futile)
         {
-            value         = VALUE_ZERO;
-            ss->estimated = false;
+            if (threads.stop.load(std::memory_order_relaxed))
+            {
+                value         = VALUE_ZERO;
+                ss->estimated = false;
+            }
+            else
+                value = decideWith(aggregateWith, 0, estimated);
         }
-        else
-            value = decideWith(aggregateWith, 0, estimated);
     }
 
     else

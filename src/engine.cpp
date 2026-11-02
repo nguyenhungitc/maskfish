@@ -368,6 +368,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // ChanceMix: an exact TT entry of an outcome, at least as deep as its
     // shallow search, gives its value without the search
     options.add("ChanceMixTT", Option(false));
+    // ChanceMix (non-PV, depth <= 7, quiescence shallow searches): the node
+    // fails high without any search when the static evaluations of the
+    // outcomes, the most likely one with a reverse futility margin, prove it
+    options.add("ChanceMixFut", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

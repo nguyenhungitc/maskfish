@@ -554,6 +554,9 @@ class Worker {
     // UCI option ChanceMixTT: with ChanceMix, an exact TT entry of an outcome,
     // deep enough, replaces its shallow search
     bool chanceMixTT = false;
+    // UCI option ChanceMixFut: with ChanceMix, a non-PV reveal fails high from
+    // the static evaluations of its outcomes when they make it futile
+    bool chanceMixFut = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
