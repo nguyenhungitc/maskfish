@@ -503,7 +503,6 @@ class Worker {
     bool   stopEarly = false;
     bool   frequentTimeCheck = false;
     bool   rootScoreEMA = false;
-    bool   standPatNoTT = false;
     bool   statScoreNoOffset = false;
     bool   noTTMoveHistoryLMR = false;
     bool   lmrPvNodeSelf = false;

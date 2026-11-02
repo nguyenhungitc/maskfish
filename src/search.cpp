@@ -393,7 +393,6 @@ bool Search::Worker::iterative_deepening() {
     stopEarly = bool(options["StopEarly"]);
     frequentTimeCheck = bool(options["FrequentTimeCheck"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
-    standPatNoTT = bool(options["StandPatNoTT"]);
     bigPawnHistory = bool(options["BigPawnHistory"]);
     statScoreNoOffset = bool(options["StatScoreNoOffset"]);
     noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
@@ -2271,7 +2270,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             bestValue = (bestValue + beta) / 2;
 
             if (!ss->ttHit)
-                ttWriter.write(posKey, standPatNoTT ? VALUE_NONE : value_to_tt(bestValue, ss->ply),
+                ttWriter.write(posKey, value_to_tt(bestValue, ss->ply),
                                false, BOUND_LOWER, DEPTH_UNSEARCHED, Move::none(),
                                unadjustedStaticEval, tt.generation());
             return bestValue;

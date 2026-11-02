@@ -204,8 +204,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("StopEarly", Option(false));
     // Average the scores of a root move with a weight depending on the effort
     options.add("RootScoreEMA", Option(false));
-    // In qsearch, do not store the stand pat value in the TT (only the static evaluation)
-    options.add("StandPatNoTT", Option(false));
     // Restrict the secondary aging of TT entries to decisive values
     options.add("DecisiveTTAging", Option(false, [this](const Option& o) {
                     tt.set_decisive_aging(bool(o));
