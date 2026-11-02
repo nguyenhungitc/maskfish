@@ -24,6 +24,7 @@ as the trainer computes it (`verify.py` checks this).
 9. [Disk space and time](#9-disk-space-and-time)
 10. [Troubleshooting](#10-troubleshooting)
 11. [When the engine's network architecture changes](#11-when-the-engines-network-architecture-changes)
+12. [Measuring the chance nodes (`chance_bias.py`)](#12-measuring-the-chance-nodes-chance_biaspy)
 
 The scripts of [`scripts/`](scripts/README.md) (`pipeline.sh`, `autotune.sh`)
 run the whole workflow below automatically.
@@ -42,6 +43,7 @@ run the whole workflow below automatically.
 | `ftperm.py` | Reorders the feature transformer neurons of a network so that the engine evaluates it faster (same evaluations, [section 7.10](#710-faster-networks-ftpermpy)) |
 | `verify.py` | Compares the engine's evaluation with the trainer's; must be bit-exact |
 | `match.py` | Matches between two networks / option sets / builds, with SPRT |
+| `chance_bias.py` | Measures the bias of the search's value of the reveals (chance nodes) for option sets, against an expectation of the outcomes searched one by one ([section 12](#12-measuring-the-chance-nodes-chance_biaspy)) |
 | `fit_scaling.py` | Fits the score → win probability constant from self-play data |
 | `ranger21.py` | Ranger21 optimizer (`train.py --optimizer ranger21`), the optimizer of nnue-pytorch |
 | `chance_tables.py` | Score ↔ mass tables for the engine option `ChanceModel Tables` (fitted to self-play data, logistic, or copied from a ref-engine network) |
@@ -1053,3 +1055,64 @@ python serialize.py runs/x/epoch_40.pt net.nnue --no-leb128  # export a checkpoi
 ```
 
 The evaluation is the same (bench gives the same node count).
+
+## 12. Measuring the chance nodes (`chance_bias.py`)
+
+A move of a dark piece is a chance node: the search values it by the
+expectation of its outcomes, one per identity the piece can turn out to be,
+weighted by the counts of the pool, in win-rate space. Within alpha-beta that
+expectation is easy to get wrong (an outcome searched in the window of the node
+returns a bound, not a value), and the options of the chance nodes
+(`ChanceChildWindow`, `ChanceTTProbe`, `ChanceMix`, `ChanceMaxLayers`,
+`ChanceCV`, `ChanceQsearchRep`, ...) change both the error and the cost. An SPRT
+says whether an option set plays better; `chance_bias.py` says how far its value
+of a reveal is from the expectation, which helps to choose what to test.
+
+For every position of a set, the reveal is valued two ways, with
+w(v) = 1 / (1 + e^(-v/s)) (s = 360.83524, the engine's `ChanceScaling` default):
+
+* **root**: the score of `go depth D searchmoves <move>` with the option set
+  under test (or `go nodes N` with `--root-nodes N`, to compare option sets at
+  the same cost);
+* **reference**: sum_i p_i w(v_i), where v_i is the value of outcome i, the
+  position after the reveal as identity i (`<move><piece>`), searched alone
+  with an open window at depth D - 1 with the reference options (`--ref-opt`,
+  default: the engine defaults).
+
+error = w(root) - reference, in expected score of the side that reveals: a
+positive bias means that the search overvalues reveals. Every search runs on one
+thread after `ucinewgame`, so a run is reproducible.
+
+```
+python chance_bias.py --engine ../src/maskfish --net nets/best.nnue \
+    --positions reveals.txt --count 72 --depth 10 --ref-cache reveals.ref.jsonl \
+    --config star1 \
+    --config "mix:ChanceMix=6,ChanceQsearchRep=true" \
+    --config "cap:ChanceMaxLayers=1,ChanceCV=3" \
+    --csv bias.csv
+```
+
+* `--positions`: read if the file exists, otherwise generated and written (one
+  `fen | move` per line). The positions are reveals that the engine chose in
+  its own games (`--gen-nodes` per move, `--random-plies` random moves first,
+  real hidden identities, each side seeing what it may know), from ply
+  `--min-ply` on, at most `--per-game` per game, with at least two kinds of
+  piece in the pool, and not capturing a dark piece (its identity would be a
+  second chance event).
+* `--config name[:Name=value,...]`: an option set under test (repeatable). The
+  first one is the base of the paired differences.
+* `--ref-cache`: the reference values (the expensive part: one search per
+  outcome) are written there and reused by later runs with the same positions,
+  depth, scaling and reference options, so new option sets only cost their
+  root searches.
+* `--csv`: one row per position and option set.
+
+The report gives, per option set, the bias with its 95% interval, the RMS
+error, the mean |error|, the mean nodes of the root searches and their ratio to
+the first option set, and the paired difference of the biases with the first
+option set (more precise than the two intervals, since the positions are the
+same). Read it with the nodes: at a fixed depth, an option set that searches
+fewer nodes is cheaper but not necessarily more accurate at the same time; use
+`--root-nodes` for that comparison. The reference is itself a search, so its
+error does not vanish: compare option sets with each other rather than read the
+bias as the absolute error.
