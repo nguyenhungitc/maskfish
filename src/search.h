@@ -541,6 +541,9 @@ class Worker {
     // searches every outcome with an open window this many plies shallower,
     // then the most likely outcome at the full depth (see flip_search())
     int chanceMix = 0;
+    // UCI option ChanceExpandMain: every chance node of the main search is
+    // expanded, ChanceMaxLayers only limits the quiescence search
+    bool chanceExpandMain = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

@@ -431,6 +431,7 @@ bool Search::Worker::iterative_deepening() {
     chanceMaxLayers = int(options["ChanceMaxLayers"]);
     chanceLayers = 0;
     chanceMix = int(options["ChanceMix"]);
+    chanceExpandMain = bool(options["ChanceExpandMain"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3026,8 +3027,9 @@ bool chance_outcome_window(
 }  // namespace
 
 
-bool Search::Worker::chance_capped([[maybe_unused]] bool isQsearch) const {
-    return chanceMaxLayers && chanceLayers >= chanceMaxLayers;
+bool Search::Worker::chance_capped(bool isQsearch) const {
+    // With ChanceExpandMain, the limit only applies to the quiescence search
+    return chanceMaxLayers && chanceLayers >= chanceMaxLayers && (isQsearch || !chanceExpandMain);
 }
 
 

@@ -355,6 +355,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // this many plies shallower, the most likely one also at the full depth,
     // and its deep value replaces its shallow one in the average (0 = off)
     options.add("ChanceMix", Option(0, 0, 30));
+    // Chance nodes: every chance node of the main search is expanded,
+    // ChanceMaxLayers only limits the chance nodes of the quiescence search
+    options.add("ChanceExpandMain", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));
