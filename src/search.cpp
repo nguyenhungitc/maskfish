@@ -432,6 +432,7 @@ bool Search::Worker::iterative_deepening() {
     chanceLayers = 0;
     chanceMix = int(options["ChanceMix"]);
     chanceExpandMain = bool(options["ChanceExpandMain"]);
+    chanceCV = int(options["ChanceCV"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3225,11 +3226,71 @@ Value Search::Worker::flip_search(
 
     Value value;
 
+    // Searches outcome i at the full depth within the window in which its value
+    // decides the node, f(x) being the value of the node when the outcome has
+    // the value x (see chance_outcome_window()), and returns the value of the
+    // node. estimated: whether the other values taken by f are estimates.
+    auto decideWith = [&](auto&& f, int i, bool estimated) {
+        Value a, b, v;
+        if (!chance_outcome_window(f, alpha, beta, nodeType != NonPV, a, b, v))
+        {
+            ss->estimated = false;
+            return v;
+        }
+        const Value deep = searchOutcomeAt(i, a, b, depth);
+        estimated |= ss->estimated;
+        ss->estimated = a < deep && deep < b && estimated;
+        return f(deep);
+    };
+
     // Below ChanceMaxLayers expanded chance nodes: one representative outcome,
     // at the full depth
     if (restCount > 1 && chance_capped(isQsearch))
-        value = searchOutcomeAt(representative_outcome(restPieces, counts.data(), restCount, total),
-                                alpha, beta, isQsearch ? DEPTH_QS : depth);
+    {
+        const int rep = representative_outcome(restPieces, counts.data(), restCount, total);
+
+        // UCI option ChanceCV (control variate), from depth ChanceCV in the main
+        // search, in win-rate space (ChanceModel Winrate): the value of the
+        // representative outcome is corrected by the differences between the
+        // outcomes, measured by open-window quiescence searches of all of them.
+        // With w(v) the win rate of a score, q_i the quiescence values and r the
+        // representative, the node is valued
+        //   w(deep(r)) + sum_i p_i w(q_i) - w(q_r),
+        // its expectation if the difference between the full-depth and the
+        // quiescence values is the same for every outcome.
+        if (chanceCV && !isQsearch && depth >= chanceCV && chanceModel == ChanceModel::Winrate)
+        {
+            double offset = 0.0, repWinrate = 0.0;
+            bool   estimated = false;
+            for (int i = 0; i < restCount; ++i)
+            {
+                const double w = flip_score_to_winrate(openOutcome(i, DEPTH_QS), chanceScaling);
+                estimated |= ss->estimated;
+                offset += w * counts[i] / total;
+                if (i == rep)
+                    repWinrate = w;
+
+                if (threads.stop.load(std::memory_order_relaxed))
+                    break;
+            }
+            offset -= repWinrate;
+
+            auto corrected = [&](Value x) {
+                const double w = flip_score_to_winrate(x, chanceScaling) + offset;
+                return flip_winrate_to_score(std::clamp(w, 0.0, 1.0), chanceScaling);
+            };
+
+            if (threads.stop.load(std::memory_order_relaxed))
+            {
+                value         = VALUE_ZERO;
+                ss->estimated = false;
+            }
+            else
+                value = decideWith(corrected, rep, estimated);
+        }
+        else
+            value = searchOutcomeAt(rep, alpha, beta, isQsearch ? DEPTH_QS : depth);
+    }
 
     // UCI option ChanceMix. Searched within the window of the node, an outcome
     // returns a bound when it fails, and the aggregate of such bounds is biased
@@ -3266,22 +3327,13 @@ Value Search::Worker::flip_search(
                                     ChanceBound::Exact);
         };
 
-        Value a, b;
         if (threads.stop.load(std::memory_order_relaxed))
         {
             value         = VALUE_ZERO;
             ss->estimated = false;
         }
-        else if (!chance_outcome_window(aggregateWith, alpha, beta, nodeType != NonPV, a, b,
-                                        value))
-            ss->estimated = false;
         else
-        {
-            const Value v = searchOutcomeAt(0, a, b, depth);
-            estimated |= ss->estimated;
-            value         = aggregateWith(v);
-            ss->estimated = a < v && v < b && estimated;
-        }
+            value = decideWith(aggregateWith, 0, estimated);
     }
 
     else

@@ -358,6 +358,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes: every chance node of the main search is expanded,
     // ChanceMaxLayers only limits the chance nodes of the quiescence search
     options.add("ChanceExpandMain", Option(false));
+    // Reveals of the main search below the limit of ChanceMaxLayers, from this
+    // depth: the value of the representative outcome is corrected by the
+    // differences between the quiescence values of all the outcomes (0 = off)
+    options.add("ChanceCV", Option(0, 0, 30));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

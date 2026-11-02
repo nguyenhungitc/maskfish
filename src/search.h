@@ -544,6 +544,10 @@ class Worker {
     // UCI option ChanceExpandMain: every chance node of the main search is
     // expanded, ChanceMaxLayers only limits the quiescence search
     bool chanceExpandMain = false;
+    // UCI option ChanceCV (0 = off): from this depth, a reveal of the main
+    // search below the limit of ChanceMaxLayers corrects the value of its
+    // representative outcome with quiescence searches of all the outcomes
+    int chanceCV = 0;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
