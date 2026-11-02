@@ -437,6 +437,9 @@ bool Search::Worker::iterative_deepening() {
     chanceMixTT = bool(options["ChanceMixTT"]);
     chanceMixFut = bool(options["ChanceMixFut"]);
     qsearchDarkPly = int(options["QsearchDarkPly"]);
+    chanceRevealCheck = int(options["ChanceRevealCheck"]);
+    chanceRevealCheckQs = bool(options["ChanceRevealCheckQs"]);
+    chanceRevealSplits = 0;
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3327,7 +3330,69 @@ Value Search::Worker::flip_search(
                 value = decideWith(corrected, rep, estimated);
         }
         else
-            value = searchOutcomeAt(rep, alpha, beta, isQsearch ? DEPTH_QS : depth);
+        {
+            const Depth d = isQsearch ? DEPTH_QS : depth;
+
+            // UCI option ChanceRevealCheck: whether the reveal gives check depends
+            // on the identity of the piece, and a check changes the line more than
+            // the other differences between the outcomes. The identities whose
+            // reveal gives check when the representative's does not (or the
+            // reverse) are outcomes of their own; all the others share the search
+            // and the probability mass of the representative, and the node is a
+            // chance node over these outcomes (chance_node()). At most
+            // ChanceRevealCheck such splits along a line (Worker::
+            // chanceRevealSplits), in the quiescence search with
+            // ChanceRevealCheckQs only. Only when the revealed piece is on a line
+            // of the king or within two squares of it (otherwise no identity
+            // checks, a discovered check being the same for all of them).
+            const Square ksq = pos.king_square(pos.side_to_move());
+
+            std::array<int, Position::MaxRestPieceTypes> splitOutcome{}, splitCount{};
+            int                                          splits = 0;
+            if (chanceRevealCheck && chanceRevealSplits < chanceRevealCheck
+                && (!isQsearch || chanceRevealCheckQs)
+                && (file_of(flipSq) == file_of(ksq) || rank_of(flipSq) == rank_of(ksq)
+                    || distance(flipSq, ksq) <= 2))
+            {
+                auto revealChecks = [&](int i) {
+                    const Piece flippedPiece = pos.do_flip(flipSq, restPieces[i].first);
+                    const bool  check        = bool(pos.checkers());
+                    pos.undo_flip(flipSq, flippedPiece);
+                    return check;
+                };
+                const bool repCheck = revealChecks(rep);
+                splitOutcome[0]     = rep;
+                splitCount[0]       = counts[rep];
+                splits              = 1;
+                for (int i = 0; i < restCount; ++i)
+                    if (i != rep)
+                    {
+                        if (revealChecks(i) != repCheck)
+                        {
+                            splitOutcome[splits] = i;
+                            splitCount[splits++] = counts[i];
+                        }
+                        else
+                            splitCount[0] += counts[i];
+                    }
+            }
+
+            if (splits > 1)
+            {
+                ChanceLayer split(chanceRevealSplits, true);
+                auto        searchSplit = [&](int k, Value a, Value b) {
+                    return searchOutcomeAt(splitOutcome[k], a, b, d);
+                };
+                auto probeSplit = [&](int k, Value& lo, Value& hi) {
+                    tt_outcome_bounds(pos.flip_key(flipSq, restPieces[splitOutcome[k]].first), d,
+                                      ss->ply, pos.rule40_count(), lo, hi);
+                };
+                value = chance_node(ss, splitCount.data(), splits, total, alpha, beta, searchSplit,
+                                    probeSplit, chanceTTProbe && nodeType != PV);
+            }
+            else
+                value = searchOutcomeAt(rep, alpha, beta, d);
+        }
     }
 
     // UCI option ChanceMix. Searched within the window of the node, an outcome

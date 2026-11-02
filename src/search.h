@@ -563,6 +563,14 @@ class Worker {
     // UCI option QsearchDarkPly (0 = off): out of check, the quiescence search
     // does not move dark pieces from this many plies below its first node on
     int qsearchDarkPly = 0;
+    // UCI options ChanceRevealCheck (0 = off) and ChanceRevealCheckQs: a chance
+    // node that searches its representative outcome also searches the
+    // identities whose reveal gives check differently, at most this many times
+    // along a line (counted by chanceRevealSplits), in the quiescence search
+    // with ChanceRevealCheckQs only
+    int  chanceRevealCheck   = 0;
+    bool chanceRevealCheckQs = false;
+    int  chanceRevealSplits  = 0;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

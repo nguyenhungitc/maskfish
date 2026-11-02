@@ -375,6 +375,12 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Quiescence search, out of check: no move of a dark piece from this many
     // plies below its first node on (0 = off)
     options.add("QsearchDarkPly", Option(0, 0, 16));
+    // Chance nodes that search their representative outcome: the identities
+    // whose reveal gives check when the representative's does not (or the
+    // reverse) are outcomes of their own, at most this many times along a line
+    // (0 = off); also in the quiescence search with ChanceRevealCheckQs
+    options.add("ChanceRevealCheck", Option(0, 0, 8));
+    options.add("ChanceRevealCheckQs", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));
