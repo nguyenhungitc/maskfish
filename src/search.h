@@ -90,6 +90,9 @@ struct Stack {
     // within the caller's window, it is not exact and must not be stored as
     // BOUND_EXACT.
     bool estimated;
+    // Plies since the quiescence search was entered (0 at its first node), -1
+    // in the main search (UCI option QsearchDarkPly)
+    int qsPly;
 };
 
 
@@ -557,6 +560,9 @@ class Worker {
     // UCI option ChanceMixFut: with ChanceMix, a non-PV reveal fails high from
     // the static evaluations of its outcomes when they make it futile
     bool chanceMixFut = false;
+    // UCI option QsearchDarkPly (0 = off): out of check, the quiescence search
+    // does not move dark pieces from this many plies below its first node on
+    int qsearchDarkPly = 0;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

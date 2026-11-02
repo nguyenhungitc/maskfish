@@ -372,6 +372,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // fails high without any search when the static evaluations of the
     // outcomes, the most likely one with a reverse futility margin, prove it
     options.add("ChanceMixFut", Option(false));
+    // Quiescence search, out of check: no move of a dark piece from this many
+    // plies below its first node on (0 = off)
+    options.add("QsearchDarkPly", Option(0, 0, 16));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

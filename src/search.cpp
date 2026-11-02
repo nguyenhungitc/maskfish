@@ -436,6 +436,7 @@ bool Search::Worker::iterative_deepening() {
     chanceQsearchRep = bool(options["ChanceQsearchRep"]);
     chanceMixTT = bool(options["ChanceMixTT"]);
     chanceMixFut = bool(options["ChanceMixFut"]);
+    qsearchDarkPly = int(options["QsearchDarkPly"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -967,6 +968,7 @@ Value Search::Worker::search(
 
     // Set again below if the value returned derives from a chance estimate
     ss->estimated = false;
+    ss->qsPly     = -1;
 
     // UCI option SeekMate: when the root score is high enough (relative to the
     // root depth) to suggest a forced mate, prune and extend less to find it.
@@ -2136,6 +2138,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     // Set again below if the value returned derives from a chance estimate
     ss->estimated = false;
+    ss->qsPly     = (ss - 1)->qsPly >= 0 ? (ss - 1)->qsPly + 1 : 0;
 
     // Dive into the hidden capture chance node (see search())
     if (hiddenCaptureModel && (ss - 1)->capturedDark && ~pos.side_to_move() == rootObserver)
@@ -2351,6 +2354,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!pos.see_ge(move, chanceMove && !chanceQsearchRep ? 1 : -114))
                 continue;
         }
+
+        // UCI option QsearchDarkPly: out of check, no move of a dark piece (a
+        // reveal, a chance node) from QsearchDarkPly plies below the first node
+        // of the quiescence search on, so that chains of exchanges of dark
+        // pieces end
+        if (qsearchDarkPly && !ss->inCheck && ss->qsPly >= qsearchDarkPly && pos.move_dark(move))
+            continue;
 
         // Step 7. Make and search the move
         Piece movedPiece = pos.moved_piece(move);
