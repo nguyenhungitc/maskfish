@@ -365,6 +365,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes of the quiescence search: one representative outcome, and
     // the moves that lead to them get the SEE threshold of the other moves
     options.add("ChanceQsearchRep", Option(false));
+    // ChanceMix: an exact TT entry of an outcome, at least as deep as its
+    // shallow search, gives its value without the search
+    options.add("ChanceMixTT", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

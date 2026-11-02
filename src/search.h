@@ -551,6 +551,9 @@ class Worker {
     // UCI option ChanceQsearchRep: every chance node of the quiescence search
     // searches its representative outcome only
     bool chanceQsearchRep = false;
+    // UCI option ChanceMixTT: with ChanceMix, an exact TT entry of an outcome,
+    // deep enough, replaces its shallow search
+    bool chanceMixTT = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

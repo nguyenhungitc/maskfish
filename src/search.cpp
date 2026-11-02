@@ -434,6 +434,7 @@ bool Search::Worker::iterative_deepening() {
     chanceExpandMain = bool(options["ChanceExpandMain"]);
     chanceCV = int(options["ChanceCV"]);
     chanceQsearchRep = bool(options["ChanceQsearchRep"]);
+    chanceMixTT = bool(options["ChanceMixTT"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3320,6 +3321,22 @@ Value Search::Worker::flip_search(
         const Depth shallow   = depth - chanceMix;
         for (int i = 0; i < restCount; ++i)
         {
+            // UCI option ChanceMixTT: an exact TT entry of the outcome, at least
+            // as deep as its shallow search, gives its value without a search
+            // (as the TT cutoffs of search(), not when the 40 moves counter
+            // reaches 70, and not for decisive values)
+            if (chanceMixTT && shallow > 0)
+            {
+                Value lo = -VALUE_INFINITE, hi = VALUE_INFINITE;
+                tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), shallow, ss->ply,
+                                  pos.rule40_count(), lo, hi);
+                if (lo == hi)
+                {
+                    values[i] = lo;
+                    continue;
+                }
+            }
+
             values[i] = openOutcome(i, shallow);
             estimated |= ss->estimated;
 
