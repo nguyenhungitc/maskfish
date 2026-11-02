@@ -215,9 +215,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     tt.set_key_bits(bool(o) ? 21 : 16);
                     return std::nullopt;
                 }));
-    // Pawn history indexed by 10 bits of the pawn key instead of 9 (the table
-    // always has the size for 10), with stronger updates
-    options.add("BigPawnHistory", Option(false));
     // Share the continuation, pawn and correction histories (not the
     // continuation correction history) between the threads of a NUMA node;
     // the pawn and correction histories then grow with the

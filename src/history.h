@@ -37,8 +37,7 @@ namespace Maskfish {
 
 // Number of entries of the pawn history and of the correction histories per
 // thread sharing them (see SharedHistories). Only half of the pawn history is
-// used without the UCI option BigPawnHistory (see
-// Search::Worker::pawn_history_entry()).
+// used (see Search::Worker::pawn_history_entry()).
 constexpr int PAWN_HISTORY_BASE_SIZE   = 1024;   // has to be a power of 2
 constexpr int CORRHIST_BASE_SIZE       = 32768;  // has to be a power of 2
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;

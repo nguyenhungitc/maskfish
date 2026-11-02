@@ -373,17 +373,14 @@ class Worker {
     bool contHistOffset = false;
     bool contCorr6Ply = false;
     bool simplifications    = false;
-    bool bigPawnHistory = false;
     bool bonusPrevStatScore = false;
     bool contHistSingleScale = false;
     bool poolCorrHist = false;
 
-    // Entry of the pawn history for the position (UCI option BigPawnHistory)
-    auto& pawn_history_entry(const Position& pos) {
-        return sharedHistory.pawn_entry(pos, bigPawnHistory);
-    }
+    // Entry of the pawn history for the position (9 bits of the pawn key)
+    auto& pawn_history_entry(const Position& pos) { return sharedHistory.pawn_entry(pos, false); }
     const auto& pawn_history_entry(const Position& pos) const {
-        return sharedHistory.pawn_entry(pos, bigPawnHistory);
+        return sharedHistory.pawn_entry(pos, false);
     }
 
    private:

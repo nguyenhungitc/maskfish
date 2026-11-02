@@ -393,7 +393,6 @@ bool Search::Worker::iterative_deepening() {
     stopEarly = bool(options["StopEarly"]);
     frequentTimeCheck = bool(options["FrequentTimeCheck"]);
     rootScoreEMA = bool(options["RootScoreEMA"]);
-    bigPawnHistory = bool(options["BigPawnHistory"]);
     statScoreNoOffset = bool(options["StatScoreNoOffset"]);
     noTTMoveHistoryLMR = bool(options["NoTTMoveHistoryLMR"]);
     lmrPvNodeSelf = bool(options["LMRPvNodeSelf"]);
@@ -3692,11 +3691,8 @@ void update_quiet_histories(
       workerThread, ss, pos.moved_piece(move), move.to_sq(),
       bonus * (workerThread.contHistSingleScale ? 944 : bonus > 0 ? 1064 : 824) / 1024);
 
-    // With BigPawnHistory, stronger updates, scaled like upstream's (691 / 468
-    // -> 800 / 500)
     workerThread.pawn_history_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (workerThread.bigPawnHistory ? (bonus > 0 ? 873 : 491) : (bonus > 0 ? 754 : 460))
-           / 1024;
+      << bonus * (bonus > 0 ? 754 : 460) / 1024;
 }
 
 }
