@@ -531,6 +531,12 @@ class Worker {
     bool   chanceFarMin = false;
     bool   chanceChildWindow = false;
     bool   chanceTTProbe = false;
+    // UCI option ChanceMaxLayers (0 = no limit): along a line, at most this
+    // many chance nodes are expanded over all their outcomes; the chance
+    // nodes below them search one representative outcome. chanceLayers counts
+    // the expanded chance nodes of the line being searched.
+    int chanceMaxLayers = 0;
+    int chanceLayers    = 0;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
@@ -590,6 +596,9 @@ class Worker {
     // Bounds of the value of a position from its TT entry (UCI option
     // ChanceTTProbe)
     void tt_outcome_bounds(Key key, Depth depth, int ply, int r40c, Value& lo, Value& hi) const;
+    // Whether a chance node with more than one outcome searches only its
+    // representative outcome (UCI option ChanceMaxLayers)
+    bool chance_capped(bool isQsearch) const;
     Reveal::QuietParameters revealQuiet;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;

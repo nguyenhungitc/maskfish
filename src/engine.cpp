@@ -347,6 +347,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // Chance nodes (non-PV): the TT entries of all the outcomes are looked up
     // before any is searched, and their bounds can decide the node at once
     options.add("ChanceTTProbe", Option(false));
+    // Chance nodes: at most this many chance nodes along a line are expanded
+    // over all their outcomes, the others search one representative outcome
+    // (0 = no limit)
+    options.add("ChanceMaxLayers", Option(0, 0, 16));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

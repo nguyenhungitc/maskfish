@@ -428,6 +428,8 @@ bool Search::Worker::iterative_deepening() {
     chanceFarMin = bool(options["ChanceFarMin"]);
     chanceChildWindow = bool(options["ChanceChildWindow"]);
     chanceTTProbe = bool(options["ChanceTTProbe"]);
+    chanceMaxLayers = int(options["ChanceMaxLayers"]);
+    chanceLayers = 0;
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -2904,6 +2906,61 @@ static int sort_outcomes(Position::RestPieceList&                      restPiece
 }
 
 
+// Representative outcome of a chance node (UCI option ChanceMaxLayers): the
+// identity whose piece value is closest to the mean value of the pool, the
+// first one in the order of sort_outcomes() on ties
+static int representative_outcome(const Position::RestPieceList& restPieces,
+                                  const int*                     counts,
+                                  int                            restCount,
+                                  int                            total) {
+    int sum = 0;
+    for (int i = 0; i < restCount; ++i)
+        sum += counts[i] * PieceValue[restPieces[i].first];
+
+    int best = 0, bestDiff = std::numeric_limits<int>::max();
+    for (int i = 0; i < restCount; ++i)
+    {
+        // |value - sum / total|, scaled by total to stay in integers
+        const int diff = std::abs(PieceValue[restPieces[i].first] * total - sum);
+        if (diff < bestDiff)
+        {
+            bestDiff = diff;
+            best     = i;
+        }
+    }
+    return best;
+}
+
+
+namespace {
+
+// Counts an expanded chance node on the line being searched
+// (Worker::chanceLayers) for as long as its outcomes are searched
+class ChanceLayer {
+   public:
+    ChanceLayer(int& c, bool expanded) :
+        count(c),
+        counted(expanded) {
+        count += counted;
+    }
+    ~ChanceLayer() { count -= counted; }
+
+    ChanceLayer(const ChanceLayer&)            = delete;
+    ChanceLayer& operator=(const ChanceLayer&) = delete;
+
+   private:
+    int&       count;
+    const bool counted;
+};
+
+}  // namespace
+
+
+bool Search::Worker::chance_capped([[maybe_unused]] bool isQsearch) const {
+    return chanceMaxLayers && chanceLayers >= chanceMaxLayers;
+}
+
+
 // Chance node over the identity of a dark piece that the root side (the
 // observer) has just captured. In Jieqi the capturer is shown the captured
 // piece, so the observer will know which piece left the pool, while its own
@@ -2966,8 +3023,18 @@ Value Search::Worker::hidden_capture_search(
         pos.restore_rest_piece(piece);
     };
 
-    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
-                                    probeOutcome, chanceTTProbe && nodeType != PV);
+    Value value;
+
+    // Below ChanceMaxLayers expanded chance nodes: one representative outcome
+    if (restCount > 1 && chance_capped(isQsearch))
+        value = searchOutcome(representative_outcome(restPieces, counts.data(), restCount, total),
+                              alpha, beta);
+    else
+    {
+        ChanceLayer layer(chanceLayers, restCount > 1);
+        value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
+                            probeOutcome, chanceTTProbe && nodeType != PV);
+    }
 
     // Leave the capture as the parent made it: its pool is restored, so the
     // top of the accumulator stack must not remove a piece from it any more
@@ -3018,7 +3085,14 @@ Value Search::Worker::flip_search(
     // Give every outcome the same view of the parent's LMR reduction.
     ChanceBranchReduction branchReduction((ss - 1)->reduction);
 
-    auto searchOutcome = [&](int i, Value a, Value b) {
+    // Depth of the search of outcome i: optionally one ply shallower for the
+    // less likely outcomes
+    auto outcomeDepth = [&](int i) {
+        return isQsearch ? DEPTH_QS : chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth;
+    };
+
+    // Searches outcome i at depth d (in the quiescence search at d <= 0)
+    auto searchOutcomeAt = [&](int i, Value a, Value b, Depth d) {
         const Piece piece = restPieces[i].first;
 
         branchReduction.restore();
@@ -3039,28 +3113,36 @@ Value Search::Worker::flip_search(
         accumulatorStack.push(dp);
         assert(pos.key() == flipKey);
 
-        // Optionally search the less likely outcomes one ply shallower
-        const Value value =
-          isQsearch ? qsearch<nodeType>(pos, ss, a, b)
-                    : search<nodeType>(pos, ss, a, b,
-                                       chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth,
-                                       cutNode);
+        const Value value = d <= 0 ? qsearch<nodeType>(pos, ss, a, b)
+                                   : search<nodeType>(pos, ss, a, b, d, cutNode);
 
         pos.undo_flip(flipSq, flippedPiece);
         return value;
     };
 
+    auto searchOutcome = [&](int i, Value a, Value b) {
+        return searchOutcomeAt(i, a, b, outcomeDepth(i));
+    };
+
     // TT bounds of an outcome (ChanceTTProbe), at the depth of its search
     auto probeOutcome = [&](int i, Value& lo, Value& hi) {
-        const Depth d = isQsearch                             ? DEPTH_QS
-                      : chanceBranchDepth && i > 0 && depth > 1 ? depth - 1
-                                                              : depth;
-        tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), d, ss->ply,
+        tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), outcomeDepth(i), ss->ply,
                           pos.rule40_count(), lo, hi);
     };
 
-    const Value value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
-                                    probeOutcome, chanceTTProbe && nodeType != PV);
+    Value value;
+
+    // Below ChanceMaxLayers expanded chance nodes: one representative outcome,
+    // at the full depth
+    if (restCount > 1 && chance_capped(isQsearch))
+        value = searchOutcomeAt(representative_outcome(restPieces, counts.data(), restCount, total),
+                                alpha, beta, isQsearch ? DEPTH_QS : depth);
+    else
+    {
+        ChanceLayer layer(chanceLayers, restCount > 1);
+        value = chance_node(ss, counts.data(), restCount, total, alpha, beta, searchOutcome,
+                            probeOutcome, chanceTTProbe && nodeType != PV);
+    }
 
     // Leave the move of the dark piece as the parent made it, without the
     // reveal (and the refresh flags) of the last outcome: a second search of
