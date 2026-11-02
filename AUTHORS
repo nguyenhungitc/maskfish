@@ -1,10 +1,11 @@
 # Maskfish is derived from Pikafish, which is derived from Stockfish, and
 # contains code ported from AB-JChess (the reveal heuristics, the copy of the
 # Ranger21 optimizer of the trainer, the extraction of the score <-> mass
-# tables) and from jqe (the chance node options ChanceMaxLayers,
-# ChanceExpandMain, ChanceMix, ChanceCV, ChanceQsearchRep, ChanceMixTT and
-# ChanceMixFut). The authors of those projects below keep their copyright on
-# the code they wrote:
+# tables, the option ChanceMixLow) and from jqe (the chance node options
+# ChanceMaxLayers, ChanceExpandMain, ChanceMix, ChanceCV, ChanceQsearchRep,
+# ChanceMixTT, ChanceMixFut, ChanceRevealCheck and ChanceLateDark, and the
+# options QsearchDarkPly, CheckExtension and SMPSkip). The authors of those
+# projects below keep their copyright on the code they wrote:
 #
 #   Copyright (C) 2026 The Maskfish authors
 #   Copyright (C) 2004-2026 The Stockfish developers
@@ -30,3 +31,27 @@ the AB-JChess authors (https://github.com/lxsgx23/AB-JChess)
 
 # Authors of jqe
 Devin O'Keefe (https://github.com/devinokeefe/jieqi)
+
+# jqe licence notice
+#
+# MIT License
+#
+# Copyright (c) 2026 Devin O'Keefe
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
