@@ -351,6 +351,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // over all their outcomes, the others search one representative outcome
     // (0 = no limit)
     options.add("ChanceMaxLayers", Option(0, 0, 16));
+    // Reveals of the main search: every outcome is searched with an open window
+    // this many plies shallower, the most likely one also at the full depth,
+    // and its deep value replaces its shallow one in the average (0 = off)
+    options.add("ChanceMix", Option(0, 0, 30));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

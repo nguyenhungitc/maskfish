@@ -430,6 +430,7 @@ bool Search::Worker::iterative_deepening() {
     chanceTTProbe = bool(options["ChanceTTProbe"]);
     chanceMaxLayers = int(options["ChanceMaxLayers"]);
     chanceLayers = 0;
+    chanceMix = int(options["ChanceMix"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -2956,6 +2957,75 @@ class ChanceLayer {
 }  // namespace
 
 
+namespace {
+
+// Window (a, b) of the outcome that a chance node searches at the full depth
+// once the values of its other outcomes are known (UCI option ChanceMix).
+// f(x) is the value of the node when that outcome has the value x, and is
+// non-decreasing in x. A value of the outcome at or below a proves that the
+// node fails low, at or above b that it fails high; the window may be wider
+// than (alpha, beta). At a non-PV node (null window), a null window at the
+// smallest value of the outcome that makes the node fail high. Returns false
+// when the node fails low or high whatever the value of the outcome: value
+// is then the value of the node.
+template<typename F>
+bool chance_outcome_window(
+  F&& f, Value alpha, Value beta, bool pvNode, Value& a, Value& b, Value& value) {
+
+    const Value lo = f(-VALUE_MATE), hi = f(VALUE_MATE);
+    if (lo >= beta || hi <= alpha)
+    {
+        value = lo >= beta ? lo : hi;
+        return false;
+    }
+
+    // b: the smallest x with f(x) >= beta, if any. (At a non-PV node hi >= beta:
+    // alpha < hi < alpha + 1 is impossible.)
+    b = VALUE_INFINITE;
+    if (hi >= beta)
+    {
+        Value l = -VALUE_MATE, r = VALUE_MATE;  // f(l) < beta <= f(r)
+        while (r - l > 1)
+        {
+            const Value m = l + (r - l) / 2;
+            if (f(m) >= beta)
+                r = m;
+            else
+                l = m;
+        }
+        b = r;
+    }
+
+    if (!pvNode)
+    {
+        assert(b < VALUE_INFINITE);
+        a = b - 1;
+        return true;
+    }
+
+    // a: the largest x with f(x) <= alpha, if any
+    a = -VALUE_INFINITE;
+    if (lo <= alpha)
+    {
+        Value l = -VALUE_MATE, r = VALUE_MATE;  // f(l) <= alpha < f(r)
+        while (r - l > 1)
+        {
+            const Value m = l + (r - l) / 2;
+            if (f(m) <= alpha)
+                l = m;
+            else
+                r = m;
+        }
+        a = l;
+    }
+
+    assert(a < b);
+    return true;
+}
+
+}  // namespace
+
+
 bool Search::Worker::chance_capped([[maybe_unused]] bool isQsearch) const {
     return chanceMaxLayers && chanceLayers >= chanceMaxLayers;
 }
@@ -3091,8 +3161,11 @@ Value Search::Worker::flip_search(
         return isQsearch ? DEPTH_QS : chanceBranchDepth && i > 0 && depth > 1 ? depth - 1 : depth;
     };
 
-    // Searches outcome i at depth d (in the quiescence search at d <= 0)
-    auto searchOutcomeAt = [&](int i, Value a, Value b, Depth d) {
+    // Searches outcome i at depth d (in the quiescence search at d <= 0), as a
+    // node of the type of nt (std::integral_constant<NodeType, ...>)
+    auto searchOutcomeAs = [&](auto nt, int i, Value a, Value b, Depth d, bool cut) {
+        constexpr NodeType NT = decltype(nt)::value;
+
         const Piece piece = restPieces[i].first;
 
         branchReduction.restore();
@@ -3113,10 +3186,28 @@ Value Search::Worker::flip_search(
         accumulatorStack.push(dp);
         assert(pos.key() == flipKey);
 
-        const Value value = d <= 0 ? qsearch<nodeType>(pos, ss, a, b)
-                                   : search<nodeType>(pos, ss, a, b, d, cutNode);
+        const Value value = d <= 0 ? qsearch<NT>(pos, ss, a, b) : search<NT>(pos, ss, a, b, d, cut);
 
         pos.undo_flip(flipSq, flippedPiece);
+        return value;
+    };
+
+    auto searchOutcomeAt = [&](int i, Value a, Value b, Depth d) {
+        return searchOutcomeAs(std::integral_constant<NodeType, nodeType>{}, i, a, b, d, cutNode);
+    };
+
+    // Open-window search of outcome i at depth d, as a PV node whatever the
+    // type of this node, so that it returns a value and not a bound. ss->pv
+    // points to a buffer of its own meanwhile: the PV of this node, if any, is
+    // left to the search at the full depth.
+    auto openOutcome = [&](int i, Depth d) {
+        Move        probePv[MAX_PLY + 1];
+        Move* const nodePv = ss->pv;
+        ss->pv             = probePv;
+        probePv[0]         = Move::none();
+        const Value value  = searchOutcomeAs(std::integral_constant<NodeType, PV>{}, i,
+                                             -VALUE_INFINITE, VALUE_INFINITE, d, false);
+        ss->pv             = nodePv;
         return value;
     };
 
@@ -3137,6 +3228,60 @@ Value Search::Worker::flip_search(
     if (restCount > 1 && chance_capped(isQsearch))
         value = searchOutcomeAt(representative_outcome(restPieces, counts.data(), restCount, total),
                                 alpha, beta, isQsearch ? DEPTH_QS : depth);
+
+    // UCI option ChanceMix. Searched within the window of the node, an outcome
+    // returns a bound when it fails, and the aggregate of such bounds is biased
+    // (an outcome that fails low counts at about alpha, one that fails high
+    // nearer its value: the node is overvalued). Instead, every outcome is
+    // searched with an open window ChanceMix plies shallower (a PV node, in the
+    // quiescence search at depth 0 or below), so that it returns a value; then
+    // the most likely outcome (the first one) is searched at the full depth,
+    // and its value replaces its shallow one in the aggregate. That search
+    // gets the window in which its value decides the node
+    // (chance_outcome_window()); outside the window, the aggregate is a bound
+    // of the node.
+    else if (chanceMix && !isQsearch && restCount > 1)
+    {
+        ChanceLayer layer(chanceLayers, true);
+
+        std::array<Value, Position::MaxRestPieceTypes> values{};
+
+        bool        estimated = false;
+        const Depth shallow   = depth - chanceMix;
+        for (int i = 0; i < restCount; ++i)
+        {
+            values[i] = openOutcome(i, shallow);
+            estimated |= ss->estimated;
+
+            if (threads.stop.load(std::memory_order_relaxed))
+                break;
+        }
+
+        // The aggregate when the first outcome has the value x
+        auto aggregateWith = [&](Value x) {
+            values[0] = x;
+            return aggregate_chance(values.data(), counts.data(), restCount, total,
+                                    ChanceBound::Exact);
+        };
+
+        Value a, b;
+        if (threads.stop.load(std::memory_order_relaxed))
+        {
+            value         = VALUE_ZERO;
+            ss->estimated = false;
+        }
+        else if (!chance_outcome_window(aggregateWith, alpha, beta, nodeType != NonPV, a, b,
+                                        value))
+            ss->estimated = false;
+        else
+        {
+            const Value v = searchOutcomeAt(0, a, b, depth);
+            estimated |= ss->estimated;
+            value         = aggregateWith(v);
+            ss->estimated = a < v && v < b && estimated;
+        }
+    }
+
     else
     {
         ChanceLayer layer(chanceLayers, restCount > 1);
