@@ -449,6 +449,7 @@ bool Search::Worker::iterative_deepening() {
     chanceMixLow = int(options["ChanceMixLow"]);
     chanceMixLowR = int(options["ChanceMixLowR"]);
     checkExtension = bool(options["CheckExtension"]);
+    smpSkip = bool(options["SMPSkip"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -526,6 +527,12 @@ bool Search::Worker::iterative_deepening() {
            && !(limits.depth && mainThread && rootDepth >= limits.depth))
     {
         rootDepth++;
+
+        // UCI option SMPSkip: from depth 3, a helper thread skips the depths d
+        // with (d + thread index) % 3 == 0, so that the threads are spread over
+        // different depths instead of all searching the same one
+        if (smpSkip && !mainThread && rootDepth > 2 && (rootDepth + int(threadIdx)) % 3 == 0)
+            continue;
 
         // UCI option SeekMate: score from which the search looks for a forced
         // mate. Do not tune these values; they are not intended for playing

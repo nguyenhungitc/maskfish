@@ -577,6 +577,8 @@ class Worker {
     int chanceMixLowR = 1;
     // UCI option CheckExtension: nodes in check are searched one ply deeper
     bool checkExtension = false;
+    // UCI option SMPSkip: helper threads skip one depth in three
+    bool smpSkip = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

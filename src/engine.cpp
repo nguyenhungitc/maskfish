@@ -392,6 +392,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // A node in check is searched one ply deeper (also at depth 0), while its
     // ply is below 2 * root depth + 4
     options.add("CheckExtension", Option(false));
+    // Helper threads skip the depths d with (d + thread index) % 3 == 0, from
+    // depth 3 (more than one thread only)
+    options.add("SMPSkip", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));
