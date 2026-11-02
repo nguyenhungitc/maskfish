@@ -446,6 +446,8 @@ bool Search::Worker::iterative_deepening() {
     chanceRevealCheck = int(options["ChanceRevealCheck"]);
     chanceRevealCheckQs = bool(options["ChanceRevealCheckQs"]);
     chanceRevealSplits = 0;
+    chanceMixLow = int(options["ChanceMixLow"]);
+    chanceMixLowR = int(options["ChanceMixLowR"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -3459,14 +3461,22 @@ Value Search::Worker::flip_search(
 
         for (int i = 0; i < restCount && !futile; ++i)
         {
+            // UCI options ChanceMixLow and ChanceMixLowR: an outcome less likely
+            // than ChanceMixLow% (never the first one, searched at the full
+            // depth) gets a shallow search ChanceMixLowR plies shallower, down to
+            // the quiescence search at most
+            const Depth d = i > 0 && counts[i] * 100 < chanceMixLow * total && shallow > 0
+                            ? std::max(shallow - chanceMixLowR, 0)
+                            : shallow;
+
             // UCI option ChanceMixTT: an exact TT entry of the outcome, at least
             // as deep as its shallow search, gives its value without a search
             // (as the TT cutoffs of search(), not when the 40 moves counter
             // reaches 70, and not for decisive values)
-            if (chanceMixTT && shallow > 0)
+            if (chanceMixTT && d > 0)
             {
                 Value lo = -VALUE_INFINITE, hi = VALUE_INFINITE;
-                tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), shallow, ss->ply,
+                tt_outcome_bounds(pos.flip_key(flipSq, restPieces[i].first), d, ss->ply,
                                   pos.rule40_count(), lo, hi);
                 if (lo == hi)
                 {
@@ -3475,7 +3485,7 @@ Value Search::Worker::flip_search(
                 }
             }
 
-            values[i] = openOutcome(i, shallow);
+            values[i] = openOutcome(i, d);
             estimated |= ss->estimated;
 
             if (threads.stop.load(std::memory_order_relaxed))

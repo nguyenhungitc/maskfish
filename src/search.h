@@ -571,6 +571,10 @@ class Worker {
     int  chanceRevealCheck   = 0;
     bool chanceRevealCheckQs = false;
     int  chanceRevealSplits  = 0;
+    // UCI options ChanceMixLow (0 = off) and ChanceMixLowR: with ChanceMix, the
+    // outcomes less likely than ChanceMixLow% get shallower searches
+    int chanceMixLow  = 0;
+    int chanceMixLowR = 1;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

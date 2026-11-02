@@ -385,6 +385,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // dark pieces, of both sides (0 = off)
     options.add("ChanceLateDark", Option(0, 0, 30));
     options.add("ChanceLateAdd", Option(1, 0, 8));
+    // ChanceMix: the outcomes less likely than ChanceMixLow% (0 = off) get a
+    // shallow search ChanceMixLowR plies shallower (at most down to depth 0)
+    options.add("ChanceMixLow", Option(0, 0, 100));
+    options.add("ChanceMixLowR", Option(1, 0, 30));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));
