@@ -433,6 +433,7 @@ bool Search::Worker::iterative_deepening() {
     chanceMix = int(options["ChanceMix"]);
     chanceExpandMain = bool(options["ChanceExpandMain"]);
     chanceCV = int(options["ChanceCV"]);
+    chanceQsearchRep = bool(options["ChanceQsearchRep"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -2342,8 +2343,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             // reveals or captures a dark piece is a chance node of up to 6
             // (36 for both) outcomes: search it only if it wins material
             // on average, otherwise even exchanges of dark pieces make the
-            // quiescence search explode.
-            if (!pos.see_ge(move, pos.move_dark(move) || pos.is_dark(move.to_sq()) ? 1 : -114))
+            // quiescence search explode. (With ChanceQsearchRep, such a chance
+            // node searches one outcome: the threshold of the other moves.)
+            const bool chanceMove = pos.move_dark(move) || pos.is_dark(move.to_sq());
+            if (!pos.see_ge(move, chanceMove && !chanceQsearchRep ? 1 : -114))
                 continue;
         }
 
@@ -3029,6 +3032,10 @@ bool chance_outcome_window(
 
 
 bool Search::Worker::chance_capped(bool isQsearch) const {
+    // With ChanceQsearchRep, every chance node of the quiescence search
+    if (isQsearch && chanceQsearchRep)
+        return true;
+
     // With ChanceExpandMain, the limit only applies to the quiescence search
     return chanceMaxLayers && chanceLayers >= chanceMaxLayers && (isQsearch || !chanceExpandMain);
 }

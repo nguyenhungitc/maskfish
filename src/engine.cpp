@@ -362,6 +362,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // depth: the value of the representative outcome is corrected by the
     // differences between the quiescence values of all the outcomes (0 = off)
     options.add("ChanceCV", Option(0, 0, 30));
+    // Chance nodes of the quiescence search: one representative outcome, and
+    // the moves that lead to them get the SEE threshold of the other moves
+    options.add("ChanceQsearchRep", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

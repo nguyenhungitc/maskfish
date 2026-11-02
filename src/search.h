@@ -548,6 +548,9 @@ class Worker {
     // search below the limit of ChanceMaxLayers corrects the value of its
     // representative outcome with quiescence searches of all the outcomes
     int chanceCV = 0;
+    // UCI option ChanceQsearchRep: every chance node of the quiescence search
+    // searches its representative outcome only
+    bool chanceQsearchRep = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
