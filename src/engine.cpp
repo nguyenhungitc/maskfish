@@ -381,6 +381,10 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // (0 = off); also in the quiescence search with ChanceRevealCheckQs
     options.add("ChanceRevealCheck", Option(0, 0, 8));
     options.add("ChanceRevealCheckQs", Option(false));
+    // ChanceMaxLayers + ChanceLateAdd when the root has at most ChanceLateDark
+    // dark pieces, of both sides (0 = off)
+    options.add("ChanceLateDark", Option(0, 0, 30));
+    options.add("ChanceLateAdd", Option(1, 0, 8));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

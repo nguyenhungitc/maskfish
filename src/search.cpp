@@ -429,6 +429,12 @@ bool Search::Worker::iterative_deepening() {
     chanceChildWindow = bool(options["ChanceChildWindow"]);
     chanceTTProbe = bool(options["ChanceTTProbe"]);
     chanceMaxLayers = int(options["ChanceMaxLayers"]);
+    // UCI options ChanceLateDark and ChanceLateAdd: with few dark pieces left
+    // at the root, expanding the chance nodes costs less, so the limit is
+    // raised for this search
+    if (chanceMaxLayers && int(options["ChanceLateDark"])
+        && popcount(rootPos.pieces(DARK)) <= int(options["ChanceLateDark"]))
+        chanceMaxLayers += int(options["ChanceLateAdd"]);
     chanceLayers = 0;
     chanceMix = int(options["ChanceMix"]);
     chanceExpandMain = bool(options["ChanceExpandMain"]);
