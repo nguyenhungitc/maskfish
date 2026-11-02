@@ -1073,7 +1073,7 @@ w(v) = 1 / (1 + e^(-v/s)) (s = 360.83524, the engine's `ChanceScaling` default):
 
 * **root**: the score of `go depth D searchmoves <move>` with the option set
   under test (or `go nodes N` with `--root-nodes N`, to compare option sets at
-  the same cost);
+  the same number of nodes, see below);
 * **reference**: sum_i p_i w(v_i), where v_i is the value of outcome i, the
   position after the reveal as identity i (`<move><piece>`), searched alone
   with an open window at depth D - 1 with the reference options (`--ref-opt`,
@@ -1112,7 +1112,15 @@ error, the mean |error|, the mean nodes of the root searches and their ratio to
 the first option set, and the paired difference of the biases with the first
 option set (more precise than the two intervals, since the positions are the
 same). Read it with the nodes: at a fixed depth, an option set that searches
-fewer nodes is cheaper but not necessarily more accurate at the same time; use
-`--root-nodes` for that comparison. The reference is itself a search, so its
+fewer nodes is cheaper but not necessarily more accurate at the same time;
+`--root-nodes` compares them at the same number of nodes. That is not the same
+cost: the engine counts a node in `do_move()` only, so the outcomes of a reveal
+(`do_flip()`) and their evaluations are not counted, and an option set that
+expands more outcomes does more work per node (at depth 13 of the bench the
+default option set searches 384k nodes a second, `ChanceMaxLayers 1` with
+`ChanceCV 3` 697k: about 1.8 times as much work per node for the default).
+Compare the nodes per second of `bench` to weigh the result, and test the
+strength with a time control (`match.py --tc`), not a node limit. The
+reference is itself a search, so its
 error does not vanish: compare option sets with each other rather than read the
 bias as the absolute error.

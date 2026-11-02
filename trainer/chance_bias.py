@@ -9,8 +9,9 @@ reveals a piece is valued two ways, in win-rate space w(v) = 1 / (1 + e^(-v/s)):
 
   root:      the score of the search of the position restricted to the move,
              go depth D searchmoves <move> (or go nodes N with --root-nodes,
-             to compare the option sets at the same cost), with the option set
-             under test;
+             to compare the option sets at the same number of nodes, which
+             is not the same cost: the outcomes of a reveal are not counted
+             as nodes), with the option set under test;
   reference: sum_i p_i w(v_i), where v_i is the value of outcome i, the
              position after the reveal as identity i searched alone with an
              open window, go depth D-1, with the reference option set.
@@ -293,8 +294,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="depth of the root searches; the outcomes are searched at depth - 1")
     ap.add_argument("--root-nodes", type=int, default=0,
                     help="root searches limited to this many nodes instead of --depth, to "
-                         "compare the option sets at the same cost (the outcomes of the "
-                         "reference are still searched at --depth - 1)")
+                         "compare the option sets at the same number of nodes (not the same "
+                         "cost: the outcomes of a reveal are not counted as nodes; the "
+                         "outcomes of the reference are still searched at --depth - 1)")
     ap.add_argument("--scaling", type=float, default=DEFAULT_SCALING,
                     help="s of the win rate 1 / (1 + e^(-v/s)) (default: the engine's "
                          "ChanceScaling default)")
