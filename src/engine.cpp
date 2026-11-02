@@ -389,6 +389,9 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // shallow search ChanceMixLowR plies shallower (at most down to depth 0)
     options.add("ChanceMixLow", Option(0, 0, 100));
     options.add("ChanceMixLowR", Option(1, 0, 30));
+    // A node in check is searched one ply deeper (also at depth 0), while its
+    // ply is below 2 * root depth + 4
+    options.add("CheckExtension", Option(false));
     // Correction history of the static evaluation indexed by the pools of
     // unrevealed pieces of both sides (weight 5000, update 96/128)
     options.add("PoolCorrHist", Option(false));

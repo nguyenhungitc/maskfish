@@ -575,6 +575,8 @@ class Worker {
     // outcomes less likely than ChanceMixLow% get shallower searches
     int chanceMixLow  = 0;
     int chanceMixLowR = 1;
+    // UCI option CheckExtension: nodes in check are searched one ply deeper
+    bool checkExtension = false;
     bool   jieqiMaterial      = false;
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;

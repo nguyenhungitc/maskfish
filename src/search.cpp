@@ -448,6 +448,7 @@ bool Search::Worker::iterative_deepening() {
     chanceRevealSplits = 0;
     chanceMixLow = int(options["ChanceMixLow"]);
     chanceMixLowR = int(options["ChanceMixLowR"]);
+    checkExtension = bool(options["CheckExtension"]);
     poolCorrHist = bool(options["PoolCorrHist"]);
     jieqiMaterial      = bool(options["JieqiMaterial"]);
     evalScaling        = Eval::eval_scaling(options);
@@ -980,6 +981,17 @@ Value Search::Worker::search(
     // Set again below if the value returned derives from a chance estimate
     ss->estimated = false;
     ss->qsPly     = -1;
+
+    // UCI option CheckExtension: a node in check is searched one ply deeper,
+    // while ss->ply < 2 * rootDepth + 4, also at depth 0 (a search of depth 1
+    // instead of the quiescence search). Not at a pending chance node (a dark
+    // piece just moved, or a hidden capture): before the reveal the check info
+    // is not valid, and the search of every outcome extends itself.
+    if (checkExtension && !rootNode && ss->ply < 2 * rootDepth + 4
+        && !((ss - 1)->currentMove.is_ok() && pos.is_dark((ss - 1)->currentMove.to_sq()))
+        && !(hiddenCaptureModel && (ss - 1)->capturedDark && ~pos.side_to_move() == rootObserver)
+        && pos.checkers())
+        depth++;
 
     // UCI option SeekMate: when the root score is high enough (relative to the
     // root depth) to suggest a forced mate, prune and extend less to find it.
@@ -3226,7 +3238,10 @@ Value Search::Worker::flip_search(
         const Piece flippedPiece = flipOutcome(i);
         assert(pos.key() == flipKey);
 
-        const Value value = d <= 0 ? qsearch<NT>(pos, ss, a, b) : search<NT>(pos, ss, a, b, d, cut);
+        // (search() hands depth 0 and below to the quiescence search, after the
+        // check extension of CheckExtension)
+        const Value value =
+          isQsearch ? qsearch<NT>(pos, ss, a, b) : search<NT>(pos, ss, a, b, d, cut);
 
         pos.undo_flip(flipSq, flippedPiece);
         return value;
