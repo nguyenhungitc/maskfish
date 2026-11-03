@@ -570,7 +570,6 @@ class Worker {
     Eval::EvalScaling evalScaling = Eval::EvalScaling::Complexity;  // UCI options, see engine.cpp
     bool   optimismSimple     = false;
     bool   optimismMerged     = false;
-    bool   altFutility        = false;
     bool   simpleThreadVote   = false;
     double chanceScaling      = 360.83524;
     double chanceRisk         = 0.0;

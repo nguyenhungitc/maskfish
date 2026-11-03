@@ -389,8 +389,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     // of the agreement boost in one division, (nnue + 4 * optimism) * a / 65536,
     // instead of two (only the rounding differs)
     options.add("OptimismMerged", Option(false));
-    // Alternative futility pruning (margin, depth limit, returned value).
-    options.add("AltFutility", Option(false));
     // Simpler thread selection: votes by score only (Threads > 1).
     options.add("SimpleThreadVote", Option(false));
 #ifdef JIEQI_NNUE_ATT

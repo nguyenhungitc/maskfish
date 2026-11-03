@@ -443,7 +443,6 @@ bool Search::Worker::iterative_deepening() {
     evalScaling        = Eval::eval_scaling(options);
     optimismSimple     = bool(options["OptimismSimple"]);
     optimismMerged     = bool(options["OptimismMerged"]);
-    altFutility        = bool(options["AltFutility"]);
     simpleThreadVote   = bool(options["SimpleThreadVote"]);
     chanceScaling      = int(options["ChanceScaling"]) ? double(int(options["ChanceScaling"])) : 360.83524;
     chanceRisk         = int(options["ChanceRiskAversion"]) / 100.0;
@@ -1300,30 +1299,8 @@ Value Search::Worker::search(
                  + std::abs(correctionValue) / 115091;
         };
 
-        // UCI option AltFutility: an alternative futility pruning (a simpler
-        // futility multiplier, the depth limit 15, the margin without the
-        // parent's statScore, the returned value blended 70/30 between beta
-        // and eval).
-        if (altFutility)
-        {
-            if (!ss->ttPv && depth < (seekMate ? 6 : 15) && eval >= beta
-                && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
-            {
-                Value futilityMult = std::min(41 + depth * 4, 127);
-                futilityMult -= 33 * !ss->ttHit;
-
-                Value futilityMargin = futilityMult * depth
-                                     - (2500 * improving + 333 * opponentWorsening) * futilityMult
-                                         / 1024
-                                     + std::abs(correctionValue) / 133448;
-
-                if (eval - futilityMargin >= beta)
-                    return (718 * beta + 306 * eval) / 1024;
-            }
-        }
-        else if (!ss->ttPv && depth < (seekMate ? 6 : 13) && eval - futility_margin(depth) >= beta
-                 && eval >= beta && (!ttData.move || ttCapture) && !is_loss(beta)
-                 && !is_win(eval))
+        if (!ss->ttPv && depth < (seekMate ? 6 : 13) && eval - futility_margin(depth) >= beta
+            && eval >= beta && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval))
             return beta + (eval - beta) / 3;
     }
 
