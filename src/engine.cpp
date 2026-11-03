@@ -431,12 +431,6 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
                     Position::useThreatCache = bool(o);
                     return std::nullopt;
                 }));
-    // Threats by lesser pieces of the quiet move ordering from the cached
-    // threats (x-raying our king): changes the move ordering.
-    options.add("ThreatCacheMovePick", Option(false, [](const Option& o) {
-                    Position::useThreatCacheMovePick = bool(o);
-                    return std::nullopt;
-                }));
 #ifdef JIEQI_NNUE_THREATS
     // Incremental threat features (DirtyThreats, both perspectives
     // together): the moves record the threats
