@@ -6,7 +6,7 @@ SPRT, to decide whether a change is an improvement.
         --nodes 20000 --workers 15 --sprt 0 5
 
     python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
-        --opt-a TTPenalize=true --nodes 20000 --sprt 0 3
+        --opt-a LMRTweaks=true --nodes 20000 --sprt 0 3
 
     python match.py --engine ../src/maskfish --net-a nets/gen1.nnue \
         --engine-b old/maskfish --tc 10+0.1 --workers 1 --sprt 0 5

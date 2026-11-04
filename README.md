@@ -149,7 +149,8 @@ The usual options of Pikafish are available: `Threads`, `Hash`, `Clear Hash`,
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `HiddenCaptureModel` | `true` | In the search, a capture of a dark piece by the side the engine searches for is a chance node over the identity of the captured piece (any kind left in its owner's pool) |
+| `HiddenCaptureModel` | `false` | In the search, a capture of a dark piece by the side the engine searches for is a chance node over the identity of the captured piece (any kind left in its owner's pool). Off by default since the autotune SPRT (`false`: +31.3 ± 10.9 Elo) |
+| `ChanceBranchDepth` | `true` | Search the less likely outcomes of a reveal one ply shallower (autotune SPRT: +27.4 ± 10.1 Elo) |
 | `ChanceModel` | `Winrate` | How the outcomes of a chance node are averaged: `Winrate` (win rates), `Tables` (score ↔ mass tables of `ChanceTables`; without tables, `Winrate`) or `Linear` (scores clamped to ±2000) |
 | `ChanceScaling` | `0` | Score → win rate scale used by `Winrate` (0: built-in 360.835); `trainer/fit_scaling.py` fits it |
 | `ChanceRiskAversion` | `0` | −100…100, in % of the standard deviation of the outcomes' win rates: > 0 avoids uncertain reveals and captures, < 0 seeks them |
@@ -159,8 +160,8 @@ The usual options of Pikafish are available: `Threads`, `Hash`, `Clear Hash`,
 | `JieqiMaterial` | `false` | Count dark pieces at their expected value in the material scaling of the evaluation (the training data must be prepared with `--jieqi-material`) |
 | `RawScore` | `false` | `info ... score cp` in internal units instead of normalized centipawns (used by the trainer) |
 
-The other options (`ProbCutDarkCapture`, `TTPenalize`, `ChanceBranchDepth`,
-`SeekMate`, `PruningTweaks`, `ThreatCache`, ...) are experimental search
+The other options (`ProbCutDarkCapture`, `SeekMate`, `LMRTweaks`,
+`ThreatCache`, ...) are experimental search
 changes, off by default, to be tested with an SPRT; each one is described by
 a comment in [`src/engine.cpp`](src/engine.cpp).
 

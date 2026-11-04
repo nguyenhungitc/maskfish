@@ -130,11 +130,13 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("RevealQuietHighValue", Option(-12, -96, 96));
     options.add("RevealQuietDiversity", Option(0, -96, 96));
 
+    // Search the less likely outcomes of a reveal one ply shallower (on by
+    // default since the autotune SPRT, +27.4 +- 10.1 Elo).
+    options.add("ChanceBranchDepth", Option(true));
+
     // Experimental, off by default: test with SPRT.
     // ProbCut asks a larger margin (+64) and one ply less for dark captures.
     options.add("ProbCutDarkCapture", Option(false));
-    // Search the less likely outcomes of a reveal one ply shallower.
-    options.add("ChanceBranchDepth", Option(true));
     // Check the time every 64 nodes instead of 512.
     options.add("FrequentTimeCheck", Option(false));
     // Let the threads vote for the best move only when MultiPV is 1: in
