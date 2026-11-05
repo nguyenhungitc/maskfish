@@ -591,10 +591,21 @@ the scripts, can be used in two roles:
 
 Any UCI engine can be a ref-engine (a third-party engine, an older Maskfish
 build or branch, ...) if it understands this engine's protocol: the FEN with
-the pool, the `d` command, `go perft`, the notation of moves with the revealed
-identity, and captures of dark pieces without identity (see the
-[engine's README](../README.md#uci-protocol)). Check it with `go perft` and a
-few `position ... moves ...` commands before using it.
+the pool, the notation of moves with the revealed identity, and captures of
+dark pieces without identity (see the [engine's README](../README.md#uci-protocol)),
+with `go nodes` and `go movetime`. It does not need the Maskfish commands `d`,
+`go perft` or `rule`: a Maskfish process gives the board state and judges the
+rules (`--referee` of `gen_data.py` and `match.py`). `Threads` and `Hash` are
+set only if it has them; its network is given as `EvalFile` (`--net`), or with
+its own option name in `--opt`; `--go` / `--teacher-go` give any limit of its
+search when it has no `go nodes`. With a referee, every move it plays is
+checked (an illegal one discards the game in `gen_data.py`, loses it in
+`match.py`, drops the position in `rescore.py`), and an engine (the ref-engine
+or the referee) without answer after `--engine-timeout` seconds is killed and
+started again; more than `--max-failures` of these in one worker stop with an
+error.
+Check it with a few `position ... moves ...` and `go` commands before using it. With the automation scripts, a ref-engine
+is configuration only ([scripts/README.md, section 4.9](scripts/README.md#49-another-reference-engine-or-none)).
 
 - Do not use as a teacher an engine whose evaluation is biased (e.g. one that
   favors one color in the opening position): the network would learn the bias.
@@ -671,8 +682,11 @@ python prepare_data.py data/gen3_ref.txt --out data/train3_ref --score-scale <36
 - Every position keeps its original game result and gets the ref-engine's
   search score for the side to move.
 - Positions where the ref-engine reports a mate, or whose best move is a
-  capture, are dropped (`--keep-captures` keeps the latter). `--depth` and
-  `--hash` work as in `gen_data.py`.
+  capture, are dropped (`--keep-captures` keeps the latter). `--depth`, `--go`
+  and `--hash` work as in `gen_data.py`.
+- Its best move is checked by `--referee` (default `../src/maskfish`; `""` for
+  no check): an illegal one drops the position, like a timeout
+  (`--engine-timeout`, `--max-failures` as in `gen_data.py`).
 - After an interruption, run the same command again, adding `--resume`.
 
 ## 7. Network architectures and training options

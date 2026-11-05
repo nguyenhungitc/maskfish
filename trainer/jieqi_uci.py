@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import random
 import subprocess
+import threading
 
 import jieqi_features as F
 
@@ -37,14 +38,36 @@ class UnknownOption(RuntimeError):
     pass
 
 
+class EngineTimeout(RuntimeError):
+    """The engine gave no answer (bestmove, readyok, the output of "d" or "go
+    perft", ...) within its timeout: the engine process was killed (start a new
+    one)."""
+
+
+class IllegalMove(RuntimeError):
+    """An engine played a move that is not legal in the position (or is not
+    written in Maskfish's notation)."""
+
+
+# UCI options that an engine may not have: skipped instead of raising UnknownOption
+SKIPPABLE_OPTIONS = ("Threads", "Hash")
+
+
 class Engine:
     """options: set and required to exist (a misspelt option, or a binary built
     before the option was added, raises UnknownOption instead of being silently
-    ignored). optional: set only if the engine has them (e.g. RawScore, which
-    other engines do not have)."""
+    ignored), except Threads and Hash, which another engine may not have.
+    optional: set only if the engine has them (e.g. RawScore, which other
+    engines do not have). timeout: seconds to wait for every answer of the
+    engine (a search, or a command such as "d"); past it the process is killed
+    and EngineTimeout is raised (an engine that ignores the limit of "go", or
+    hangs). None: no limit."""
 
-    def __init__(self, path: str, options: dict | None = None, optional: dict | None = None):
+    def __init__(self, path: str, options: dict | None = None, optional: dict | None = None,
+                 timeout: float | None = None):
         self.path = path
+        self.timeout = timeout or None
+        self.timed_out = False
         self.p = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.send("uci")
@@ -53,7 +76,9 @@ class Engine:
             if line.startswith("option name "):
                 rest = line[len("option name "):]
                 self.option_names.add(rest.split(" type ")[0].strip())
-        unknown = [k for k in (options or {}) if k not in self.option_names]
+        options = {k: v for k, v in (options or {}).items()
+                   if k in self.option_names or k not in SKIPPABLE_OPTIONS}
+        unknown = [k for k in options if k not in self.option_names]
         if unknown:
             self.quit()
             raise UnknownOption(f"{path}: no UCI option {', '.join(unknown)} "
@@ -61,7 +86,7 @@ class Engine:
         for k, v in (optional or {}).items():
             if k in self.option_names:
                 self.send(f"setoption name {k} value {v}")
-        for k, v in (options or {}).items():
+        for k, v in options.items():
             self.send(f"setoption name {k} value {v}")
         self.isready()
 
@@ -78,13 +103,29 @@ class Engine:
             raise RuntimeError("engine terminated")
         return line.rstrip("\n")
 
-    def wait_for(self, prefix: str) -> list[str]:
+    def wait_for(self, prefix: str, what: str = "") -> list[str]:
+        """Lines up to the first one starting with prefix. what: the command
+        waited for, in the EngineTimeout message."""
+        timer = None
+        if self.timeout:
+            timer = threading.Timer(self.timeout, self._kill_on_timeout)
+            timer.daemon = True
+            timer.start()
         lines = []
-        while True:
-            line = self.readline()
-            lines.append(line)
-            if line.startswith(prefix):
-                return lines
+        try:
+            while True:
+                line = self.readline()
+                lines.append(line)
+                if line.startswith(prefix):
+                    return lines
+        except RuntimeError:
+            if self.timed_out:
+                raise EngineTimeout(f"{self.path}: no '{prefix}' {self.timeout:g} s after "
+                                    f"'{what or prefix}' (process killed)") from None
+            raise
+        finally:
+            if timer:
+                timer.cancel()
 
     def isready(self):
         self.send("isready")
@@ -97,7 +138,7 @@ class Engine:
         """FEN of the current position and whether the side to move is in check."""
         self.send("d")
         fen, in_check = None, False
-        for line in self.wait_for("Checkers:"):
+        for line in self.wait_for("Checkers:", "d"):
             if line.startswith("Fen: "):
                 fen = line[5:].strip()
             if line.startswith("Checkers:"):
@@ -111,23 +152,25 @@ class Engine:
             return None
         self.send("rule")
         self.send("isready")
-        verdict = parse_rule(self.wait_for("readyok"))
+        verdict = parse_rule(self.wait_for("readyok", "rule"))
         self.rule_supported = verdict is not None
         return verdict
 
     def legal_moves(self) -> list[str]:
         self.send("go perft 1")
         moves = []
-        for line in self.wait_for("Nodes searched"):
+        for line in self.wait_for("Nodes searched", "go perft 1"):
             if ":" in line and len(line.split(":")[0]) == 4:
                 moves.append(line.split(":")[0])
         return moves
 
     def search(self, go: str) -> tuple[str, int | None, bool]:
-        """Returns (bestmove, score, is_mate) for the side to move."""
+        """Returns (bestmove, score, is_mate) for the side to move (EngineTimeout:
+        see the class)."""
         self.send("go " + go)
+        lines = self.wait_for("bestmove", "go " + go)
         score, mate = None, False
-        for line in self.wait_for("bestmove"):
+        for line in lines:
             if line.startswith("info") and " score " in line and " pv" in line:
                 t = line.split()
                 i = t.index("score")
@@ -136,7 +179,8 @@ class Engine:
                 elif t[i + 1] == "mate":
                     m = int(t[i + 2])
                     score, mate = (32000 if m > 0 else -32000), True
-        best = line.split()[1]
+        t = lines[-1].split()
+        best = t[1] if len(t) > 1 else "(none)"
         return best, score, mate
 
     def evalraw(self) -> tuple[int, int, int]:
@@ -154,6 +198,13 @@ class Engine:
         final = fields.get("final")
         return (int(fields["psqt"]), int(fields["positional"]), int(fields["bucket"]),
                 int(final) if final not in (None, "none") else None)
+
+    def _kill_on_timeout(self):
+        self.timed_out = True
+        self.p.kill()
+
+    def alive(self) -> bool:
+        return not self.timed_out and self.p.poll() is None
 
     def quit(self):
         try:

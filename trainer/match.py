@@ -30,6 +30,25 @@ rules of the engine (third occurrence of a position: a draw, or a loss for
 perpetual check or chase; 40-move rule: a draw after 80 plies without capture,
 or a loss for a side without legal move), as judged by B with the engine
 command "rule", or as a draw after --max-plies.
+
+--referee ENGINE (Maskfish) gives the board state (FEN, check, legal moves)
+and judges the rules instead, in its own process, with the view of the side
+to move. It is needed for an opponent without the Maskfish commands "d",
+"go perft" and "rule", e.g. a reference engine:
+
+    python match.py --engine-a ../src/maskfish --net-a nets/gen3.nnue \
+        --engine-b ../jieqi/ref-engine --net-b ../jieqi/ref-engine.nnue \
+        --referee ../src/maskfish --movetime 200 --pairs 1000
+
+With --referee, every move must be among the referee's legal moves: an
+illegal move (or one in another notation) loses the game. A search without
+bestmove after --engine-timeout seconds loses the game too; a referee (or the
+engine giving the board state) without answer within that time voids the
+pair, which is played again. In both cases the engine is killed and every
+engine of the worker is started again. Each is printed as a warning; more
+than --max-failures in one worker stops the match with an error.
+--go gives any limit of the search instead of --nodes / --depth / --movetime
+(e.g. "depth 12"), for an engine that does not have the usual ones.
 """
 
 from __future__ import annotations
@@ -65,9 +84,12 @@ def make_opening(engine: U.Engine, rng: random.Random, plies: int):
 
 
 def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening: list[str],
-              args, referee: U.Engine | None = None) -> int:
+              args, referee: U.Engine | None = None, board: U.Engine | None = None) -> int:
     """Returns +1 white wins, 0 draw, -1 black wins. referee: the engine that
-    judges the rules (see U.RuleJudge), by default the engine to move."""
+    judges the rules (see U.RuleJudge), by default the engine to move.
+    board: an engine outside the game (--referee) that gives the board state
+    and judges the rules, with the view of the side to move."""
+    global _RESTART
     ids = copy.deepcopy(ids)
     views = ([], [])                 # move lists sent to the white / black engine
     engines = (white, black)
@@ -84,10 +106,14 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
         stm = ply % 2
         eng = engines[stm]
         eng.set_position(views[stm])
-        fen, in_check = eng.board_info()
-        verdict = U.referee_verdict(referee, engines, views, stm)
+        bd = board or eng
+        if bd is not eng:
+            bd.set_position(views[stm])
+        fen, in_check = bd.board_info()
+        verdict = (bd.rule() if board is not None
+                   else U.referee_verdict(referee, engines, views, stm))
         ended = judge.result(fen, in_check, no_capture, verdict,
-                             lambda: bool(eng.legal_moves()))
+                             lambda: bool(bd.legal_moves()))
         if ended is not None:
             return ended[0]
         if ply < len(opening):
@@ -104,8 +130,16 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
                     return -1 if stm == F.WHITE else 1
                 clock[stm] += args.tc_inc
             else:
-                move, score, mate = eng.search(args.go)
+                try:
+                    move, score, mate = eng.search(args.go)
+                except U.EngineTimeout as e:     # loses, as on time; new engines for the next game
+                    note_failure(str(e))
+                    _RESTART = True
+                    return -1 if stm == F.WHITE else 1
             if move in ("(none)", "0000"):
+                return -1 if stm == F.WHITE else 1
+            if board is not None and move not in bd.legal_moves():
+                note_failure(f"{eng.path} played {move!r} in {fen}: the game is lost")
                 return -1 if stm == F.WHITE else 1
         capture = U.is_capture(fen, move)
         w, b = U.annotate_views(ids, move, args.full_info)
@@ -133,31 +167,71 @@ def play_game(white: U.Engine, black: U.Engine, ids: U.HiddenIdentities, opening
     return 0
 
 
-def make_engine(path, net, opts, hash_mb):
+def make_engine(path, net, opts, hash_mb, timeout=None):
     o = {"Threads": 1, "Hash": hash_mb}
     if net:
         o["EvalFile"] = os.path.abspath(net)
     o.update(opts)
     # RawScore only exists in this engine (adjudication compares internal units)
-    return U.Engine(path, o, optional={"RawScore": "true"})
+    return U.Engine(path, o, optional={"RawScore": "true"}, timeout=timeout)
+
+
+_FAILURES = 0
+_RESTART = False
+
+
+def note_failure(what: str):
+    """An illegal move or a timeout in this worker (see the header)."""
+    global _FAILURES
+    _FAILURES += 1
+    if _FAILURES <= 10 or _FAILURES % 100 == 0:
+        print(f"warning: pid {os.getpid()}: {what} ({_FAILURES} engine failure(s))", flush=True)
+    if _FAILURES > _ARGS.max_failures:
+        raise RuntimeError(f"more than {_ARGS.max_failures} engine failures in one worker "
+                           f"(illegal moves or timeouts), last: {what}")
 
 
 def worker_init(args):
-    global _ENGINES, _ARGS
+    global _ENGINES, _BOARD, _ARGS
     _ARGS = args
-    _ENGINES = (make_engine(args.engine_a, args.net_a, args.opt_a, args.hash),
-                make_engine(args.engine_b, args.net_b, args.opt_b, args.hash))
+    tmo = args.engine_timeout
+    _ENGINES = (make_engine(args.engine_a, args.net_a, args.opt_a, args.hash, tmo),
+                make_engine(args.engine_b, args.net_b, args.opt_b, args.hash, tmo))
+    _BOARD = U.Engine(args.referee, {"Threads": 1, "Hash": 1}, timeout=tmo) if args.referee else None
 
 
 def play_pair(seed: int) -> tuple[int, int]:
     """Two games from the same opening and identities, colors swapped.
     Returns the results for A of both games (+1 / 0 / -1)."""
-    a, b = _ENGINES
-    rng = random.Random(seed)
-    ids, opening = make_opening(a, rng, rng.randint(_ARGS.random_plies_min, _ARGS.random_plies))
-    r1 = play_game(a, b, ids, opening, _ARGS, referee=b)        # A white
-    r2 = -play_game(b, a, ids, opening, _ARGS, referee=b)       # A black
-    return r1, r2
+    global _RESTART
+    while True:
+        try:
+            a, b = _ENGINES
+            rng = random.Random(seed)
+            ids, opening = make_opening(_BOARD or a, rng,
+                                        rng.randint(_ARGS.random_plies_min, _ARGS.random_plies))
+            r1 = play_game(a, b, ids, opening, _ARGS, referee=b, board=_BOARD)        # A white
+            a, b = restart_if_needed()
+            r2 = -play_game(b, a, ids, opening, _ARGS, referee=b, board=_BOARD)       # A black
+            restart_if_needed()
+            return r1, r2
+        except U.EngineTimeout as e:    # outside a search (board state, rules): the pair is void
+            note_failure(f"{e}: the pair is played again")
+            _RESTART = True
+            restart_if_needed()
+
+
+def restart_if_needed():
+    """New engine processes after a timeout (one of them was killed)."""
+    global _RESTART
+    if _RESTART:
+        _RESTART = False
+        for e in _ENGINES:
+            e.quit()
+        if _BOARD is not None:
+            _BOARD.quit()
+        worker_init(_ARGS)
+    return _ENGINES
 
 
 # ---------------------------------------------------------------- statistics
@@ -237,6 +311,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--nodes", type=int, default=20000)
     ap.add_argument("--depth", type=int, default=0)
     ap.add_argument("--movetime", type=int, default=0, help="ms per move")
+    ap.add_argument("--go", dest="go_args", help="limit of every search, any 'go' arguments "
+                    "(e.g. 'depth 12'); overrides --nodes / --depth / --movetime")
+    ap.add_argument("--engine-timeout", type=float, default=600,
+                    help="seconds to wait for an answer of an engine before it is killed: in a "
+                         "search it loses, otherwise the pair is played again (0: no limit)")
+    ap.add_argument("--max-failures", type=int, default=20,
+                    help="illegal moves / timeouts allowed per worker before stopping with an error")
     ap.add_argument("--tc", help="time control 'base+inc' in seconds (e.g. 10+0.1), clocks "
                     "kept by match.py: tests the time management; a flag fall loses")
     ap.add_argument("--pairs", type=int, default=10000, help="maximum number of game pairs")
@@ -252,6 +333,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-plies", type=int, default=400)
     ap.add_argument("--adjudicate", type=int, default=3000, help="internal units")
     ap.add_argument("--full-info", action="store_true")
+    ap.add_argument("--referee", help="Maskfish binary giving the board state and judging the rules "
+                    "in its own process (needed against an engine without d / go perft / rule)")
     ap.add_argument("--seed", type=int, default=int(time.time()))
     return ap
 
@@ -270,8 +353,8 @@ def finalize_args(args):
         args.opt_a = parse_opts(args.opt_a)
     if not isinstance(args.opt_b, dict):
         args.opt_b = parse_opts(args.opt_b)
-    args.go = (f"depth {args.depth}" if args.depth else
-               f"movetime {args.movetime}" if args.movetime else f"nodes {args.nodes}")
+    args.go = args.go_args or (f"depth {args.depth}" if args.depth else
+                               f"movetime {args.movetime}" if args.movetime else f"nodes {args.nodes}")
     if args.tc:
         base, _, inc = args.tc.partition("+")
         args.tc_base, args.tc_inc = int(float(base) * 1000), int(float(inc or 0) * 1000)

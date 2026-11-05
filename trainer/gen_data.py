@@ -22,7 +22,7 @@ Typical uses (see scripts/pipeline.sh):
 
   # gen0: reference engine self-play, Maskfish only as the referee
   python gen_data.py --engine ../jieqi/ref-engine --net ../jieqi/ref-engine.nnue \\
-      --opt ChasingRule=github --referee ../src/maskfish --nodes 10000 ...
+      --opt Name=value --referee ../src/maskfish --nodes 10000 ...
   # distillation: Maskfish self-play, positions scored by the reference engine
   python gen_data.py --engine ../src/maskfish --net nets/gen1.nnue --nodes 5000 \\
       --teacher ../jieqi/ref-engine --teacher-net ... --teacher-nodes 20000 ...
@@ -54,6 +54,14 @@ Notes
 * Resumable: every worker appends finished games to OUT.partK and counts them
   in OUT.partK.games; running the same command again only plays the games
   still missing, then joins the parts into OUT.
+* Another engine is checked: a move of a player other than the referee that
+  is not among the referee's legal moves discards the game; a teacher's best
+  move that is not legal leaves the position unscored; an engine (player,
+  teacher or referee) that gives no answer within --engine-timeout seconds is
+  killed, the game is discarded and new engine processes are started. Each is
+  printed as a warning; more than --max-failures in one worker stops gen_data
+  with an error (an engine that does not speak this protocol, ignores the
+  limit of --go, or hangs).
 """
 
 from __future__ import annotations
@@ -77,22 +85,39 @@ def same_engine(a: str | None, b: str | None) -> bool:
     return bool(a and b) and os.path.realpath(a) == os.path.realpath(b)
 
 
+class Failures:
+    """Illegal moves and timeouts of the engines of one worker (see Notes)."""
+
+    def __init__(self, worker: int, limit: int):
+        self.worker, self.limit, self.count = worker, limit, 0
+
+    def note(self, what: str):
+        self.count += 1
+        if self.count <= 10 or self.count % 100 == 0:
+            print(f"warning: worker {self.worker}: {what} ({self.count} engine failure(s))", flush=True)
+        if self.count > self.limit:
+            raise RuntimeError(f"worker {self.worker}: more than {self.limit} engine failures "
+                               f"(illegal moves or timeouts), last: {what}")
+
+
 class Engines:
     """The player / referee / teacher processes of one worker."""
 
-    def __init__(self, args):
+    def __init__(self, args, failures: Failures | None = None):
+        self.failures = failures or Failures(0, args.max_failures)
+        tmo = args.engine_timeout
         popts = {"Threads": 1, "Hash": args.hash}
         if args.net:
             popts["EvalFile"] = os.path.abspath(args.net)
         popts.update(args.opt)
-        self.player = U.Engine(args.engine, popts, optional=SCORE_OPTS)
+        self.player = U.Engine(args.engine, popts, optional=SCORE_OPTS, timeout=tmo)
 
         self.referee = self.player
         if args.referee and not same_engine(args.referee, args.engine):
             ropts = {"Threads": 1, "Hash": 1}
             if args.referee_net:
                 ropts["EvalFile"] = os.path.abspath(args.referee_net)
-            self.referee = U.Engine(args.referee, ropts)
+            self.referee = U.Engine(args.referee, ropts, timeout=tmo)
 
         self.teacher = None
         if args.teacher:
@@ -100,7 +125,7 @@ class Engines:
             if args.teacher_net:
                 topts["EvalFile"] = os.path.abspath(args.teacher_net)
             topts.update(args.teacher_opt)
-            self.teacher = U.Engine(args.teacher, topts, optional=SCORE_OPTS)
+            self.teacher = U.Engine(args.teacher, topts, optional=SCORE_OPTS, timeout=tmo)
 
     def all(self):
         out = []
@@ -153,6 +178,9 @@ def play_game(eng: Engines, rng: random.Random, args) -> list[tuple[str, int, in
             if move in ("(none)", "0000"):
                 result_white = -stm
                 break
+            # another engine as the player: its move must be legal for the referee
+            if eng.player is not eng.referee and move not in eng.referee.legal_moves():
+                raise U.IllegalMove(f"{eng.player.path} played {move!r} in {fen}")
             if score is not None:
                 if mate:
                     result_white = stm if score > 0 else -stm
@@ -164,7 +192,11 @@ def play_game(eng: Engines, rng: random.Random, args) -> list[tuple[str, int, in
                     else:
                         eng.teacher.set_position(view)
                         tmove, tscore, tmate = eng.teacher.search(args.teacher_go)
-                        if (tscore is not None and not tmate and tmove not in ("(none)", "0000")
+                        if (tmove not in ("(none)", "0000")
+                                and tmove not in eng.referee.legal_moves()):
+                            eng.failures.note(f"teacher {eng.teacher.path} answered {tmove!r} "
+                                              f"in {fen}: position not scored")
+                        elif (tscore is not None and not tmate and tmove not in ("(none)", "0000")
                                 and not U.is_capture(fen, tmove)):
                             records.append((fen, tscore, stm))
                 streak = streak + 1 if abs(score) >= args.adjudicate else 0
@@ -197,20 +229,31 @@ def worker(idx: int, args, games: int, out_path: str) -> int:
         return 0
     # a different random stream for the games still to play after a restart
     rng = random.Random(args.seed * 1000003 + idx * 7919 + done * 104729)
-    eng = Engines(args)
+    failures = Failures(idx, args.max_failures)
+    eng = Engines(args, failures)
     n = 0
+    g = done
     with open(out_path, "a") as f:
-        for g in range(done, games):
-            eng.new_game()
-            lines = [f"{fen} | {score} | {result}\n" for fen, score, result in play_game(eng, rng, args)]
+        while g < games:
+            try:
+                eng.new_game()
+                records = play_game(eng, rng, args)
+            except (U.IllegalMove, U.EngineTimeout) as e:
+                failures.note(f"game discarded: {e}")
+                if isinstance(e, U.EngineTimeout) or not all(x.alive() for x in eng.all()):
+                    eng.quit()
+                    eng = Engines(args, failures)
+                continue
+            g += 1
+            lines = [f"{fen} | {score} | {result}\n" for fen, score, result in records]
             f.writelines(lines)
             f.flush()
             n += len(lines)
             with open(done_path + ".tmp", "w") as d:
-                d.write(str(g + 1))
+                d.write(str(g))
             os.replace(done_path + ".tmp", done_path)
-            if idx == 0 and (g + 1) % 10 == 0:
-                print(f"worker 0: {g + 1}/{games} games, {n} new positions", flush=True)
+            if idx == 0 and g % 10 == 0:
+                print(f"worker 0: {g}/{games} games, {n} new positions", flush=True)
     eng.quit()
     return n
 
@@ -227,12 +270,21 @@ def main():
     ap.add_argument("--teacher-opt", nargs="*", default=[], help="UCI options of the teacher")
     ap.add_argument("--teacher-nodes", type=int, default=20000)
     ap.add_argument("--teacher-depth", type=int, default=0)
+    ap.add_argument("--teacher-go", help="limit of the teacher's search, any 'go' arguments "
+                    "(e.g. 'movetime 50'); overrides --teacher-nodes / --teacher-depth")
     ap.add_argument("--teacher-hash", type=int, default=16)
     ap.add_argument("--out", required=True)
     ap.add_argument("--games", type=int, default=100)
     ap.add_argument("--workers", type=int, default=max(1, os.cpu_count() - 1))
     ap.add_argument("--nodes", type=int, default=5000)
     ap.add_argument("--depth", type=int, default=0, help="use go depth N instead of nodes")
+    ap.add_argument("--go", help="limit of the player's search, any 'go' arguments "
+                    "(e.g. 'movetime 50'); overrides --nodes / --depth")
+    ap.add_argument("--engine-timeout", type=float, default=600,
+                    help="seconds to wait for an answer of an engine (a search, or a command of "
+                         "the referee) before it is killed (0: no limit)")
+    ap.add_argument("--max-failures", type=int, default=20,
+                    help="illegal moves / timeouts allowed per worker before stopping with an error")
     ap.add_argument("--hash", type=int, default=16)
     ap.add_argument("--random-plies", type=int, default=8)
     ap.add_argument("--random-plies-min", type=int, default=2)
@@ -244,9 +296,9 @@ def main():
     args = ap.parse_args()
     args.opt = dict(o.split("=", 1) for o in args.opt)
     args.teacher_opt = dict(o.split("=", 1) for o in args.teacher_opt)
-    args.go = f"depth {args.depth}" if args.depth else f"nodes {args.nodes}"
-    args.teacher_go = (f"depth {args.teacher_depth}" if args.teacher_depth
-                       else f"nodes {args.teacher_nodes}")
+    args.go = args.go or (f"depth {args.depth}" if args.depth else f"nodes {args.nodes}")
+    args.teacher_go = args.teacher_go or (f"depth {args.teacher_depth}" if args.teacher_depth
+                                          else f"nodes {args.teacher_nodes}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     try:   # check the engines and options once (see match.py)
