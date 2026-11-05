@@ -76,7 +76,9 @@ or an existing local directory, and `ARCH` a plain word.
    options>`. Builds are cached per commit, options and architecture. It then
    checks that each engine starts and searches with its network, and runs
    `bench` (shown on the test page; with a Jieqi network the bench depends on
-   the network too, so it is not a commit signature as on fishtest).
+   the network too, so it is not a commit signature as on fishtest). A UCI
+   option of the test that an engine does not have (renamed or removed in its
+   branch) stops the test with an error instead of being ignored.
 3. **Play.** Game pairs run in parallel. The referee is the one of
    [`trainer/match.py`](../trainer/match.py) (its helpers are reused), with
    real clocks added:

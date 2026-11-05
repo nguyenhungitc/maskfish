@@ -78,7 +78,9 @@ class Engine:
         self.wait_for("uciok", 30)
         for k, v in self.options.items():
             self.send(f"setoption name {k} value {v}")
-        self.isready(120)
+        # Options the engine does not have (it prints "No such option: X")
+        self.unknown_options = [line.split(":", 1)[1].strip() for line in self.isready(120)
+                                if line.startswith("No such option:")]
 
     @staticmethod
     def _reader(p, q):
@@ -116,9 +118,9 @@ class Engine:
             if line.startswith(prefix):
                 return lines
 
-    def isready(self, timeout: float = 30):
+    def isready(self, timeout: float = 30) -> list[str]:
         self.send("isready")
-        self.wait_for("readyok", timeout)
+        return self.wait_for("readyok", timeout)
 
     def set_options(self, options: dict):
         """Sets UCI options (kept for a restart after a crash)."""
@@ -448,6 +450,13 @@ def check_engine(binary: str, side: dict, threads: int, hash_mb: int) -> str:
     e = None
     try:
         e = Engine(binary, _engine_options(side, threads, hash_mb), "check")
+        # An option of the test that this binary does not have (renamed or
+        # removed in its branch) would be ignored silently
+        unknown = {o.lower() for o in e.unknown_options}
+        missing = [k for k in side.get("options", {}) if k.lower() in unknown]
+        if missing:
+            return ("no such UCI option in this engine: " + ", ".join(missing)
+                    + " (renamed or removed in its branch?)")
         e.send("position startpos")
         e.send("go depth 3")
         lines = e.wait_for("bestmove", 60)
