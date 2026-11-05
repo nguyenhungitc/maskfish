@@ -17,7 +17,10 @@ The **reference engine** ("ref-engine" in file names and messages) is
 another Jieqi engine, stronger than the current network, used as a teacher
 and a yardstick: any engine that speaks Maskfish's protocol (a third-party
 engine, an older Maskfish build, ...), see
-[trainer/README.md, section 6](../README.md#6-using-other-engines).
+[trainer/README.md, section 6](../README.md#6-using-other-engines). The scripts
+never depend on which engine it is: switching to another one, or running
+without one (`REF_MODE`, section 4.2), only changes the configuration
+(section 4.9).
 
 Both scripts report every step to Telegram and can be stopped and restarted
 at any time. Run them from the `trainer/` directory (they `cd` there
@@ -40,10 +43,11 @@ themselves, so any working directory works).
 - Python with `numpy`, `zstandard`, `torch` (`pip install -r requirements.txt`);
   a CUDA build of torch to train on the GPU. A `trainer/.venv` is used
   automatically if it exists.
-- The reference engine, a **Linux** binary, and its network, by default in
-  `jieqi/` at the root of the repository (the directory is in `.gitignore`).
-  `autotune.sh` always needs it; `pipeline.sh` needs it for the data sources
-  `ref` and `distill` (the defaults), not for `--source self`:
+- The reference engine, a **Linux** binary, and its network (if it loads one),
+  by default in `jieqi/` at the root of the repository (the directory is in
+  `.gitignore`). `autotune.sh` needs it unless `REF_MODE=off`; `pipeline.sh`
+  needs it for the data sources `ref` and `distill` (the defaults), not for
+  `--source self`:
 
   ```
   maskfish/
@@ -54,7 +58,9 @@ themselves, so any working directory works).
   ```
 
   Other locations are set with `REF_ENGINE`, `REF_NET` (or `JIEQI_DIR`) in
-  `pipeline.env`.
+  `pipeline.env`. `REF_NET` is sent as the UCI option `EvalFile`; leave it
+  empty for an engine with its network built in, or give the network with
+  another option name in `REF_OPTS`.
 
 ## 2. Configuration
 
@@ -208,18 +214,44 @@ Nothing has to exist before the first run except the reference engine
 | Stage | Data (`pipeline.sh --source`) | Leaves the stage when |
 | --- | --- | --- |
 | **1 · ref** | ref-engine plays both sides (`REF_GEN_NODES`) and scores the positions; Maskfish is only the referee for the board. `GEN0_GAMES` games, then train from scratch → SPRT against the material-only `gen0` | a net wins (→ gen1) |
-| **2 · distill** | The current Maskfish net plays (`DISTILL_NODES`), ref-engine scores every position kept (`REF_LABEL_NODES`) | a new net measures ≥ `NEAR_REF_ELO` against ref-engine, or `DISTILL_PATIENCE` failed attempts in a row |
+| **2 · distill** | The current Maskfish net plays (`DISTILL_NODES`), ref-engine scores every position kept (`REF_LABEL_NODES`) | a new net measures ≥ `NEAR_REF_ELO` against ref-engine, or `DISTILL_PATIENCE` failed attempts in a row at level `DISTILL_LEVEL_CAP` (4.3) |
 | **3 · self** | The net plays and scores its own games (`SELF_NODES`) | — (runs until the end) |
 | **4 · options** | Option cycles (4.4), interleaved with stages 2–3 | — |
 
-Every new net is measured against ref-engine (`EXT_PAIRS` pairs at
-`EXT_MOVETIME` ms per move, same openings every time).
+`REF_MODE` (autotune.env) chooses how much of this uses the reference engine:
 
-The reference engine prints its scores on a win-probability scale of its own. Its scale
-is fitted once on its own games (gen0, saved in `data/ref.scale`) and every
-file it scored is prepared with `--score-scale SCALING / ref.scale`, so all
-the data is in Maskfish units. Each text file says who scored it in
-`FILE.src`; the scale used for each prepared prefix is in `PREFIX.scale`.
+| `REF_MODE` | Stages | The reference engine |
+| --- | --- | --- |
+| `teach` (default) | ref → distill → self | plays gen0, scores the distill data, measures every new net |
+| `measure` | self only, from the material-only gen0 (`GEN0_EPOCHS` for the first net) | only measures every new net (report, `OPT_START_ELO`) |
+| `off` | self only | not used: `REF_ENGINE` is not needed, no Elo against it; option cycles from `OPT_START_GEN` |
+
+A run in stage ref or distill goes to stage self (level 0) at its next start
+when `REF_MODE` is not `teach`; nets and data are kept. `pipeline.sh` needs no
+switch: `--source self` never calls the reference engine. From zero without
+the reference engine, set `OPT_START_GEN` (e.g. 6) so the first weak nets do
+not start a week of option tests.
+
+Every new net is measured against the reference engine (`EXT_PAIRS` pairs at
+`EXT_MOVETIME` ms per move, same openings every time). A separate Maskfish
+process (`EXT_REFEREE`, default the engine itself, `match.py --referee`) gives
+the board state and judges the rules, so the reference engine only needs
+`go`. The result names and `ST[ext_ref]` carry `REF_NAME` (default: the file
+name of `REF_ENGINE`): when it changes, the Elo values against the old engine
+are kept as `<old>_ext_gN` and every net is measured again.
+
+The reference engine prints its scores on a win-probability scale of its own.
+That scale is fitted once on its own games and saved in `data/REF_NAME.scale`:
+from the gen0 data (stage ref), or, when the file is missing in stage distill
+(a new reference engine), from `REF_SCALE_GAMES` games of its own played first
+(`data/REF_NAME-scale.txt`, not used for training). Every file it scored is
+prepared with `--score-scale SCALING / scale`, so all the data is in Maskfish
+units. Each text file names the engine that scored it in `FILE.src`
+(`scorer=`), so files scored by an earlier reference engine keep its scale
+(`data/<scorer>.scale`); the scale used for each prepared prefix is in
+`PREFIX.scale`. The adjudication of its games (`REF_ADJUDICATE`, empty by
+default) is `ADJUDICATE` converted with that scale, or `ADJUDICATE` itself
+before the first fit.
 
 ### 4.3. One round
 
@@ -229,13 +261,21 @@ the data is in Maskfish units. Each text file says who scored it in
    Later attempts of the same generation add a new batch (`--tag aK`).
 4. **Train → verify → SPRT → promote**: `pipeline.sh -g N --train-only`, on
    the data of the last `TRAIN_WINDOW` generations, with the options in use.
-   A candidate is promoted on SPRT H1, or, when the SPRT has no decision
-   after `MATCH_MAX_PAIRS` pairs, if its Elo − 95 % error is above 0.
-5. A new net is measured against ref-engine. Failed attempts change strategy in
+   The candidate is the last epoch (`MATCH_EARLIER="4 8"` also tries
+   `EPOCHS` − 4 and − 8 when it loses). It is promoted on SPRT H1, or, when
+   the SPRT has no decision after `MATCH_MAX_PAIRS` pairs, if its Elo − 95 %
+   error is above 0.
+5. A new net is measured against ref-engine. In stage distill, a net that is
+   clearly weaker than the previous one there (the difference is above the
+   combined 95 % errors) is taken back (`EXT_VETO`): moved to `nets/archive/`
+   and counted as a failed attempt. Failed attempts change strategy in
    turn: more data and continue training → more data, from scratch with 1.5×
    the epochs → more data, half the learning rate and λ 0.9.
-6. In stage self, `PATIENCE` failures in a row raise the level (games ×
-   (1 + level/2), nodes × (1 + level/4), up to `LEVEL_CAP`).
+6. `PATIENCE` failures in a row in stage self raise the level (games ×
+   (1 + level/2), nodes × (1 + level/4), up to `LEVEL_CAP`). In stage
+   distill, `DISTILL_PATIENCE` failures raise the level up to
+   `DISTILL_LEVEL_CAP` (failures there are more often too little data than the
+   ref-engine scores running out); the next ones go to stage self, from level 0.
 
 ### 4.4. Engine option tests
 
@@ -253,8 +293,13 @@ management only (`StopEarly`, `SimpleMtg`, `TMEffortFactor`,
 the speed with `bench`; a fixed-node SPRT would see 0 Elo and remove them),
 data format (`JieqiMaterial`), network format (`MidMirrorPawnTieBreak`,
 `MidMirrorNoKingFlag`: a network trained with the same setting is needed,
-the engine does not load the others), and `SeekMate` with
-`SeekMatePrevScore`, which do not aim at playing strength.
+the engine does not load the others), `SeekMate` with
+`SeekMatePrevScore`, which do not aim at playing strength, `OptimismMerged`
+unless `EVAL_SCALING` is `Alignment` or `Correlation` (no effect otherwise),
+and the chance node options (`ChanceExpandMain`, `ChanceMixTT`,
+`ChanceMixFut`, `ChanceRevealCheckQs`: no effect alone; `ChanceQsearchRep`,
+`CheckExtension`, `ChanceChildWindow`, `ChanceTTProbe`, `SMPSkip`), which are
+tested on the clock instead (below).
 Accepted options are used for the data too, except `NO_DATA_OPTS`
 (`RevealQuiet*` and `RevealQsearchEvasions`, and `EvalScaling`: the data
 is made with the scaling the training uses, `EVAL_SCALING` of pipeline.env;
@@ -264,7 +309,33 @@ that the data and the training use it too).
 
 Each value plays an SPRT `OPT_SPRT` (default `[0, 3]`) with the current net,
 at `OPT_NODES` nodes per move, against the options in use, for at most
-`OPT_MAX_PAIRS` pairs:
+`OPT_MAX_PAIRS` pairs.
+
+**Chance node options on the clock (`OPT_TC_TESTS`).** Maskfish counts nodes
+in `do_move()` only: the outcomes of a reveal (`do_flip`) and their NNUE
+evaluations are not counted, so a fixed-node match misjudges the options that
+change how many outcomes are searched.
+These configurations play with `match.py --tc`: `OPT_TC` (STC, `10+0.1`), then,
+if they win, `OPT_LTC` (`40+0.4`; empty = the STC decides), with
+`OPT_TC_WORKERS` workers (physical cores − 1) and at most `OPT_TC_MAX_PAIRS`
+pairs. Only a win at both makes them the default (verified patch); they are
+never removed from the code. Each word of `OPT_TC_TESTS` is
+`id:Opt=V+Opt=V[:need=Name][:alt=id][:sprt=E0,E1][:both=Opt=V+…][:workers=N]`,
+tested in order, against the options in use:
+
+| Default test | Options | Notes |
+| --- | --- | --- |
+| `cap` | `ChanceMaxLayers=1 ChanceCV=3` | `[0, 5]` |
+| `mix` | `ChanceMix=6 ChanceQsearchRep ChanceMixTT ChanceMixFut` | `[0, 5]`; `alt=cap`: if `cap` won, plays against it with `cap`'s options set back to their defaults |
+| `capcheck`, `caplate`, `capqsrep` | `ChanceRevealCheck=2`, `ChanceLateDark=12`, `ChanceQsearchRep` | `[0, 3]`, only with `ChanceMaxLayers` in use (`need=`) |
+| `mixlow` | `ChanceMixLow=15` | `[0, 3]`, only with `ChanceMix` in use |
+| `qsdark`, `checkext` | `QsearchDarkPly=4`, `CheckExtension` | `[0, 3]` |
+| `childwindow`, `ttprobe` | `ChanceChildWindow`, `ChanceTTProbe` | `[0, 3]` |
+| `smpskip` | `SMPSkip` | `[0, 3]`, `Threads=4` on both sides, 1 worker |
+
+A test whose `need=` option is not in use is skipped and looked at again in
+the next cycle. Clock games take much longer than node games: an STC SPRT
+of a few thousand pairs on 3 workers is about a day, an LTC one several days.
 
 | Result | Action |
 | --- | --- |
@@ -307,16 +378,24 @@ settings come from `pipeline.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `REF_ENGINE`, `REF_NET`, `REF_OPTS` | `../jieqi/ref-engine`, newest `ref-engine*.nnue`, `ChasingRule=github` | Reference engine, its network and its UCI options (also in `pipeline.env`; set `REF_OPTS` for your engine, empty for none) |
-| `REF_GEN_NODES` / `REF_LABEL_NODES` / `REF_ADJUDICATE` (pipeline.env) | 10000 / 20000 / 1500 | ref-engine nodes when it plays / when it scores; adjudication threshold in ref-engine units |
+| `REF_MODE` | `teach` | How the reference engine is used: `teach` / `measure` / `off` (4.2) |
+| `REF_ENGINE`, `REF_NET`, `REF_OPTS` | `../jieqi/ref-engine`, newest `ref-engine*.nnue`, empty | Reference engine, its network (`EvalFile`; empty: none) and its UCI options (also in `pipeline.env`) |
+| `REF_NAME` | file name of `REF_ENGINE` | Names its score scale (`data/REF_NAME.scale`), the scorer of its data and its Elo results |
+| `REF_GEN_NODES` / `REF_LABEL_NODES` / `REF_HASH` | 10000 / 20000 / 16 | ref-engine nodes when it plays / when it scores; its hash (MB) |
+| `REF_ADJUDICATE` / `REF_SCALE_GAMES` | empty / 2000 | Adjudication of its games in its units (empty: from its scale); its games to fit the scale of a new reference engine |
+| `REF_GEN_GO` / `REF_LABEL_GO` / `EXT_GO` | empty | Any `go` arguments instead of `REF_GEN_NODES` / `REF_LABEL_NODES` / `EXT_MOVETIME` (4.9) |
+| `ENGINE_TIMEOUT` / `MAX_ENGINE_FAILURES` (pipeline.env) | 600 / 20 | Seconds to wait for an answer of an engine (a search, or a command of the referee) before it is killed; illegal moves / timeouts per worker before a step stops (4.9) |
 | `GEN0_GAMES` / `GEN0_EPOCHS` | `GAMES` / `EPOCHS` | Stage ref |
 | `DISTILL_NODES` | `NODES` | Maskfish nodes per move in stage distill |
-| `NEAR_REF_ELO` / `DISTILL_PATIENCE` | -30 / 3 | End of stage distill |
+| `NEAR_REF_ELO` / `DISTILL_PATIENCE` / `DISTILL_LEVEL_CAP` | -30 / 3 / 2 | End of stage distill; failures before a scale-up there / its highest level |
 | `SELF_NODES` | 2 × `NODES` | Maskfish nodes per move in stage self |
 | `PATIENCE` / `LEVEL_CAP` | 3 / 4 | Failures before a scale-up / highest level |
 | `TRAIN_WINDOW` | 4 | Train on the data of the last N generations (0 = all) |
 | `EXT_MOVETIME` / `EXT_PAIRS` / `EXT_SEED` | 200 / 400 / 20261017 | Measurement against ref-engine |
-| `OPT_START_ELO` / `OPT_EVERY` | `NEAR_REF_ELO` / 3 | When option cycles run |
+| `EXT_REFEREE` | the engine | Maskfish giving the board state and judging the rules in matches against ref-engine (empty: ref-engine itself, which then needs `d` / `go perft` / `rule`) |
+| `EXT_VETO` | 1 | Stage distill: take back a promoted net clearly weaker against ref-engine |
+| `MATCH_EARLIER` | empty | Also SPRT epochs `EPOCHS` − k (e.g. `4 8`) when the last epoch loses |
+| `OPT_START_ELO` / `OPT_START_GEN` / `OPT_EVERY` | `NEAR_REF_ELO` / 1 / 3 | When option cycles run (Elo vs ref-engine or stage self, and net ≥ genN; then every N new nets) |
 | `OPT_NODES` / `OPT_SPRT` / `OPT_MAX_PAIRS` | `MATCH_NODES` / `0 3` / 12000 | Option SPRT |
 | `OPT_RETRY` / `OPT_GROUP` | 2 / 1 | Undecided options: retests, group test |
 | `OPT_EXCLUDE`, `OPT_INT_TESTS`, `OPT_INT_REMOVABLE`, `OPT_GROUP_TESTS`, `OPT_ONLY` | see the example | What is tested |
@@ -350,6 +429,62 @@ minutes) but not when ref-engine or a file is missing (exit code 5).
 | ⏸ ❌ | Stopped / error / automatic restart |
 | 🏁 | Finished: final results, report and combined patch |
 
+### 4.9. Another reference engine, or none
+
+Nothing in the scripts depends on which engine the reference engine is. The
+engine only needs UCI (`uci`, `setoption`, `isready`, `ucinewgame`,
+`position fen ... moves ...`, `go ...`, `info ... score cp|mate ... pv`,
+`bestmove`), Maskfish's FEN with the pool and its move notation
+([trainer/README.md, section 6](../README.md#6-using-other-engines)).
+Maskfish itself gives the board state and judges the rules (`gen_data.py
+--referee`, `match.py --referee`), so the Maskfish commands `d`, `go perft` and
+`rule` are not needed; `Threads` and `Hash` are set only if the engine has
+them.
+
+What the engine lacks, and what happens:
+
+| Missing | Result | Setting |
+| --- | --- | --- |
+| `Threads`, `Hash` | not sent | — |
+| `EvalFile` | stops at once (`no UCI option EvalFile`) | `REF_NET=""`, and its own option for the network in `REF_OPTS` |
+| an option of `REF_OPTS` | stops at once (`no UCI option X`), on purpose | fix `REF_OPTS` |
+| `go nodes` / `go movetime` (ignored: the search never ends) | killed after `ENGINE_TIMEOUT` s, see below | `REF_GEN_GO`, `REF_LABEL_GO`, `EXT_GO`: any `go` arguments, e.g. `depth 10` |
+| a score with `pv` in its `info` lines | it scores no position: the step stops with "empty" data | — (cannot be a teacher; can be an opponent) |
+| Maskfish's move notation | every move is checked, see below | — |
+
+Every move of the reference engine is checked against Maskfish's legal moves.
+When it plays (stage ref, `REF_SCALE_GAMES`), an illegal move or one in another
+notation discards the game; as a teacher, its best move must be legal or the
+position is not scored; in a match, the move loses the game. An engine without
+answer after `ENGINE_TIMEOUT` seconds (default 600) is killed and new engine
+processes are started: a search discards the game (a loss in a match); the
+referee (`d`, `go perft`, `rule`) discards the game too (in a match the pair
+is void and played again). Each case is a `warning:` line in the log, and more than `MAX_ENGINE_FAILURES`
+(default 20) in one worker stop the step with an error (Telegram ❌), so an
+engine that does not speak the protocol is found at once instead of
+spoiling the data.
+
+Switching to another reference engine, in `pipeline.env` (or `autotune.env`):
+
+```bash
+REF_ENGINE="$HOME/maskfish/jieqi/other-engine"
+REF_NET="$HOME/maskfish/jieqi/other-engine.bin"   # EvalFile; empty: none
+REF_OPTS="Name=value"                              # its UCI options, if any
+#REF_NAME=other-engine                             # default: the file name of REF_ENGINE
+REF_GEN_NODES=10000; REF_LABEL_NODES=20000         # or REF_GEN_GO / REF_LABEL_GO="depth 10"
+```
+
+At the next start `autotune.sh` keeps the Elo values against the previous
+engine (`<old>_ext_gN`) and measures the current net again; the first distill
+data of the new engine is preceded by `REF_SCALE_GAMES` games of its own to
+fit its score scale (`data/REF_NAME.scale`). Data scored by the previous engine
+keeps its own scale. The node counts (`REF_GEN_NODES`, `REF_LABEL_NODES`) are
+per engine: set them for the speed of the new one.
+
+Without a reference engine: `REF_MODE=off` in `autotune.env` (self-play only;
+`REF_ENGINE` is not needed), or `REF_MODE=measure` to keep it as a yardstick
+only. For `pipeline.sh` alone, `--source self`.
+
 ## 5. Files and directories
 
 All in `trainer/`:
@@ -357,7 +492,7 @@ All in `trainer/`:
 | Path | Content |
 | --- | --- |
 | `nets/genN.nnue` | Promoted networks (`gen0` = material only); the highest N is the current net |
-| `data/ref.scale` | Score scale of ref-engine (fitted on its gen0 games) |
+| `data/<REF_NAME>.scale` | Score scale of a reference engine, fitted on its gen0 games or on `data/<REF_NAME>-scale.txt` |
 | `data/genN*.txt`, `data/valN*.txt`, `data/prep-<arch>/` | Text and prepared data; `FILE.src` = who played / scored it |
 | `runs/gen(N+1)/` | Training output of the current attempt (`runs/gen(N+1).tryK` = earlier attempts) |
 | `logs/genN/` | `pipeline.sh` logs, one file per step |

@@ -23,11 +23,18 @@
 #                                                  cycles (OPT_RETRY times); the options
 #                                                  that leaned positive are also tested
 #                                                  together (small gains may add up)
+#                     The chance node options are tested on the clock instead
+#                     (OPT_TC_TESTS: the node count misses the work of the
+#                     reveal outcomes), STC then LTC, never removed from the code.
 #  Stage 5 · loop     stages 3 + 4 repeat. After PATIENCE failed attempts in a
 #                     row the data and search depth are scaled up (level +1,
 #                     up to LEVEL_CAP). At LEVEL_CAP, PATIENCE more failures
 #                     and an option cycle without any gain → finished: the
 #                     Elo is at its maximum for this setup.
+#
+#  REF_MODE (autotune.env) chooses how the reference engine is used: teach (all the
+#  stages above), measure (stage self from the start, the reference engine only
+#  measures every new net) or off (stage self only, no reference engine at all).
 #
 #  Every generation is one call of scripts/pipeline.sh (gen → prepare → train →
 #  verify → SPRT → promote). Every step is saved in trainer/autotune/state.sh:
@@ -77,7 +84,7 @@ while [[ $# -gt 0 ]]; do
     --init-config)   ACTION="initcfg"; shift ;;
     --config)        CONFIG_AT="${2:-}"; shift 2 ;;
     --dry-run)       DRY_RUN=1; shift ;;
-    -h|--help)       sed -n '2,52p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,59p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -106,8 +113,22 @@ fi
 # --- reference engine (same defaults as pipeline.sh) ---
 : "${JIEQI_DIR:=$ROOT_DIR/jieqi}"
 : "${REF_ENGINE:=$JIEQI_DIR/ref-engine}"
-: "${REF_NET:=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"
-: "${REF_OPTS=ChasingRule=github}"
+: "${REF_NET=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"   # empty: none
+: "${REF_OPTS=}"
+: "${REF_NAME:=$(basename "$REF_ENGINE")}"   # in the result names; a new name → nets measured again
+# REF_MODE: how the reference engine is used, one switch for the whole loop
+#   teach    stages ref → distill → self: it plays the gen0 games, scores the distill data and
+#            measures every new net (NEAR_REF_ELO, OPT_START_ELO, EXT_VETO)
+#   measure  no data from it: Maskfish plays and scores its own games from the start (stage
+#            self); the reference engine only measures every new net (report, OPT_START_ELO)
+#   off      not used at all (REF_ENGINE is not needed): stage self only, no Elo against an
+#            engine outside the loop; option cycles from net OPT_START_GEN
+# A stage ref / distill in the state goes to stage self as soon as REF_MODE is not teach.
+: "${REF_MODE:=teach}"
+case "$REF_MODE" in
+  teach|measure|off) ;;
+  *) echo "Invalid REF_MODE: $REF_MODE (teach | measure | off)" >&2; exit 5 ;;
+esac
 
 # --- stages (autotune.env) ---
 : "${GEN0_GAMES:=$GAMES}"            # reference engine games for gen0
@@ -115,7 +136,8 @@ fi
 : "${DISTILL_NODES:=$NODES}"         # Maskfish nodes per move in the distillation games
 : "${SELF_NODES:=$(( NODES * 2 ))}"  # Maskfish nodes per move when it scores its own games
 : "${NEAR_REF_ELO:=-30}"              # distill → self once the net is this close to the reference engine
-: "${DISTILL_PATIENCE:=3}"           # … or after this many failed attempts in a row
+: "${DISTILL_PATIENCE:=3}"           # failed attempts in a row before scaling up (level +1) …
+: "${DISTILL_LEVEL_CAP:=2}"          # … and at this level, before going to stage self
 : "${PATIENCE:=3}"                   # stage self: failed attempts in a row before scaling up
 : "${LEVEL_CAP:=4}"                  # scale-up levels: games ×(1+level/2), nodes ×(1+level/4)
 : "${TRAIN_WINDOW:=4}"               # train on the data of the last N generations (0 = all)
@@ -127,16 +149,32 @@ fi
 : "${EXT_PAIRS:=400}"                # game pairs per measurement (about ±25 Elo)
 : "${EXT_HASH:=64}"
 : "${EXT_SEED:=20261017}"            # fixed: every net plays the same openings
+# EXT_REFEREE: match.py --referee, unset = $ENGINE; set it empty to let the reference engine judge
+: "${EXT_GO:=}"                      # instead of EXT_MOVETIME: any limit of both engines' searches
+                                     # as "go" arguments (an engine without movetime), e.g. "depth 12"
+: "${ENGINE_TIMEOUT:=600}"           # seconds to wait for an answer of an engine before it is killed
+: "${MAX_ENGINE_FAILURES:=20}"       # illegal moves / timeouts per worker before a match stops
+: "${EXT_VETO:=1}"                   # stage distill: a new net clearly weaker than the current one
+                                     # against the reference engine is not promoted
+: "${MATCH_EARLIER:=}"               # when the last epoch loses its SPRT, also try EPOCHS - k for
+                                     # each k (e.g. "4 8"); empty = the last epoch only
 
 # --- engine option tests ---
 : "${OPT_START_ELO:=$NEAR_REF_ELO}"    # start once Elo vs the reference engine ≥ this (or in stage self)
+: "${OPT_START_GEN:=1}"              # … and not before net genN (e.g. 6 with REF_MODE=off from zero:
+                                     # the first nets are too weak to be worth a week of option tests)
 : "${OPT_EVERY:=3}"                  # a new option cycle every N new nets
 : "${OPT_NODES:=$MATCH_NODES}"
 : "${OPT_SPRT:=0 3}"
 : "${OPT_MAX_PAIRS:=12000}"
 : "${OPT_RETRY:=2}"                  # later cycles in which an undecided option is tested again
 : "${OPT_GROUP:=1}"                  # test the undecided options that leaned positive together
-: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial SeekMate SimpleThreadVote SimpleMtg ThreatCache ThreatsIncremental VoteSinglePVOnly FrequentTimeCheck TMEffortFactor TMReductionInterp NMPOddThreads SeekMatePrevScore MidMirrorPawnTieBreak MidMirrorNoKingFlag}"
+: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial SeekMate SimpleThreadVote SimpleMtg ThreatCache ThreatsIncremental VoteSinglePVOnly FrequentTimeCheck TMEffortFactor TMReductionInterp NMPOddThreads SeekMatePrevScore MidMirrorPawnTieBreak MidMirrorNoKingFlag ChanceExpandMain ChanceMixTT ChanceMixFut ChanceRevealCheckQs SMPSkip ChanceQsearchRep CheckExtension ChanceChildWindow ChanceTTProbe}"
+                                     # not tested at fixed nodes: output, threads, time management,
+                                     # speed, data or network format, SeekMate*, and the chance node
+                                     # options (no effect alone, or the node count misses their work:
+                                     # tested on the clock by OPT_TC_TESTS); OptimismMerged is added
+                                     # below unless EVAL_SCALING is Alignment / Correlation
 # options that change the evaluation in a way the trainer does not model: never in the data
 # (EvalScaling: the data must be made with the scaling the training uses, EVAL_SCALING)
 : "${NO_DATA_OPTS:=RevealQuiet RevealQsearchEvasions EvalScaling}"
@@ -146,6 +184,27 @@ fi
                                      # option groups tested together: Name:Opt=V+Opt=V
                                      # (a winning combo value is applied by hand: no verified patch)
 : "${OPT_ONLY:=}"                    # only test these options (space separated)
+# Chance node options, tested on the clock (scripts/README.md 4.4): every test is an
+# SPRT at OPT_TC (STC) and, if it wins, at OPT_LTC; on by default (verified patch) only when
+# both win. A = options in use + the test's options, B = options in use. In order, one word each:
+#   id:Opt=V+Opt=V[:need=Name][:alt=id][:sprt=E0,E1][:both=Opt=V+Opt=V][:workers=N]
+#   need=Name  only when the option Name is in use with a non-default value (else skipped,
+#              looked at again in the next cycle)
+#   alt=id     an alternative to the test id: if id was accepted, its options are set back to
+#              their defaults in A (a head-to-head match; the winner stays in use)
+#   both=…     options of A and B (e.g. Threads=4 for SMPSkip), not part of the result
+# They are never removed from the code: no gain → left as it is (retested OPT_RETRY times if
+# undecided).
+: "${OPT_TC_TESTS=cap:ChanceMaxLayers=1+ChanceCV=3 mix:ChanceMix=6+ChanceQsearchRep=true+ChanceMixTT=true+ChanceMixFut=true:alt=cap capcheck:ChanceRevealCheck=2:need=ChanceMaxLayers:sprt=0,3 caplate:ChanceLateDark=12:need=ChanceMaxLayers:sprt=0,3 capqsrep:ChanceQsearchRep=true:need=ChanceMaxLayers:sprt=0,3 mixlow:ChanceMixLow=15:need=ChanceMix:sprt=0,3 qsdark:QsearchDarkPly=4:sprt=0,3 checkext:CheckExtension=true:sprt=0,3 childwindow:ChanceChildWindow=true:sprt=0,3 ttprobe:ChanceTTProbe=true:sprt=0,3 smpskip:SMPSkip=true:both=Threads=4:workers=1:sprt=0,3}"
+: "${OPT_TC:=10+0.1}"                # STC of OPT_TC_TESTS (match.py --tc)
+: "${OPT_LTC:=40+0.4}"               # LTC, after an STC win (empty: the STC decides)
+: "${OPT_TC_SPRT:=0 5}"              # default bounds of OPT_TC_TESTS (sprt=… per test)
+: "${OPT_TC_MAX_PAIRS:=6000}"
+if [[ -z "${OPT_TC_WORKERS:-}" ]]; then   # physical cores − 1: games on the clock need a core each
+  _pc=$(lscpu -p=Core,Socket 2>/dev/null | grep -v '^#' | sort -u | wc -l)
+  (( _pc > 0 )) || _pc=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
+  OPT_TC_WORKERS=$(( _pc > 1 ? _pc - 1 : 1 ))
+fi
 : "${BENCH_ARGS:=16 1 13}"           # bench that every patch must reproduce exactly
 : "${PIPELINE:=$SCRIPT_DIR/pipeline.sh}"
 
@@ -157,6 +216,8 @@ ENGINE="${ENGINE:-$SRC_DIR/$BIN_BASE}"
 # the engine option EvalScaling of pipeline.env (README 7.13) in every match
 : "${EVAL_SCALING:=Complexity}"
 EVAL_OPT=""; [[ "$EVAL_SCALING" != Complexity ]] && EVAL_OPT="EvalScaling=$EVAL_SCALING"
+# OptimismMerged only changes EvalScaling Alignment / Correlation: no effect to test otherwise
+[[ "$EVAL_SCALING" == Complexity && " $OPT_EXCLUDE " != *" OptimismMerged "* ]] && OPT_EXCLUDE+=" OptimismMerged"
 
 AT_DIR="$TRAINER_DIR/autotune"
 WORK="$AT_DIR/work"
@@ -239,6 +300,20 @@ state_save() {
 }
 st() { printf '%s' "${ST[$1]:-${2:-}}"; }
 st_set() { ST[$1]="$2"; state_save; }
+
+# The ext_g* / best_ext values are Elo against one reference engine (ST[ext_ref]). With another
+# REF_NAME they are kept as <old name>_ext_g* … and every net is measured again (evaluate_net).
+ref_switch() {
+  local old; old=$(st ext_ref)
+  [[ "$old" == "$REF_NAME" ]] && return 0
+  [[ -z "$old" ]] && { st_set ext_ref "$REF_NAME"; return 0; }
+  local k keys=("${!ST[@]}")
+  for k in "${keys[@]}"; do
+    case "$k" in ext_g*|exterr_g*|best_ext|best_ext_gen) ST[${old}_$k]="${ST[$k]}"; unset "ST[$k]" ;; esac
+  done
+  ST[ext_ref]=$REF_NAME; state_save
+  say "🔄 Reference engine changed: ${old} → ${REF_NAME}. Elo values against ${old} kept as ${old}_ext_g*; nets are measured again against ${REF_NAME}"
+}
 gt() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a + 0 > b + 0)}'; }    # gt A B: A > B (decimals)
 ge() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a + 0 >= b + 0)}'; }
 
@@ -305,9 +380,16 @@ run_match() {   # run_match NAME match.py-args...   (a finished result is reused
 # Elo of a net against the reference engine → X_ELO, X_ERR, X_LINE
 ref_gauntlet() {   # ref_gauntlet NAME NET "OPTS" PAIRS
   local name="$1" net="$2" opts="$3" pairs="$4"
-  local args=(--engine-a "$ENGINE" --net-a "$net" --engine-b "$REF_ENGINE" --net-b "$REF_NET"
+  local args=(--engine-a "$ENGINE" --net-a "$net" --engine-b "$REF_ENGINE"
               --movetime "$EXT_MOVETIME" --pairs "$pairs" --workers "$MATCH_WORKERS"
-              --hash "$EXT_HASH" --seed "$EXT_SEED")
+              --hash "$EXT_HASH" --seed "$EXT_SEED"
+              --engine-timeout "$ENGINE_TIMEOUT" --max-failures "$MAX_ENGINE_FAILURES")
+  [[ -n "$EXT_GO" ]] && args+=(--go "$EXT_GO")
+  [[ -n "$REF_NET" ]] && args+=(--net-b "$REF_NET")
+  # Maskfish (default options, own process) gives the board state and judges the rules, so
+  # the reference engine needs none of the Maskfish commands "d" / "go perft" / "rule"
+  local referee="${EXT_REFEREE-$ENGINE}"
+  [[ -n "$referee" ]] && args+=(--referee "$referee")
   local oa; read -r -a oa <<< "$opts"; (( ${#oa[@]} )) && args+=(--opt-a "${oa[@]}")
   local ob; read -r -a ob <<< "$REF_OPTS"; (( ${#ob[@]} )) && args+=(--opt-b "${ob[@]}")
   run_match "$name" "${args[@]}" || return 1
@@ -316,9 +398,11 @@ ref_gauntlet() {   # ref_gauntlet NAME NET "OPTS" PAIRS
 
 evaluate_net() {   # $1 = gen: strength of a promoted net against the reference engine
   local g="$1" net; net=$(net_of "$g")
+  [[ "$REF_MODE" == off ]] && return 0
   [[ -n "$(st "ext_g$g")" ]] && return 0
-  say "🎯 Measuring <b>gen$g</b> against the reference engine (${EXT_PAIRS} pairs, ${EXT_MOVETIME} ms/move)…"
-  ref_gauntlet "ext-g${g}-$(opts_hash "$(match_opts)")" "$net" "$(match_opts)" "$EXT_PAIRS" || return 1
+  say "🎯 Measuring <b>gen$g</b> against the reference engine (${EXT_PAIRS} pairs, $( [[ -n "$EXT_GO" ]] && echo "go $(html "$EXT_GO")" || echo "${EXT_MOVETIME} ms/move"))…"
+  # EXT_GO in the name (when set): a result with another search limit is not reused
+  ref_gauntlet "ext-${REF_NAME}-g${g}-$(opts_hash "$(match_opts)${EXT_GO:+|$EXT_GO}")" "$net" "$(match_opts)" "$EXT_PAIRS" || return 1
   (( DRY_RUN )) && return 0
   ST[ext_g$g]=$X_ELO; ST[exterr_g$g]=$X_ERR
   if [[ -z "$(st best_ext)" ]] || gt "$X_ELO" "$(st best_ext)"; then ST[best_ext]=$X_ELO; ST[best_ext_gen]=$g; fi
@@ -340,7 +424,8 @@ write_run_env() {   # $1 = source → pipeline config for this call, on top of p
   case "$source" in
     ref)      games=$GEN0_GAMES; epochs=$GEN0_EPOCHS ;;
     distill) nodes=$(( DISTILL_NODES + DISTILL_NODES * lvl / 4 )) ;;
-    self)    nodes=$(( SELF_NODES + SELF_NODES * lvl / 4 )) ;;
+    self)    nodes=$(( SELF_NODES + SELF_NODES * lvl / 4 ))
+             (( g == 0 )) && epochs=$GEN0_EPOCHS ;;   # REF_MODE measure / off: the first net, from material
   esac
   case $(( att <= 1 ? 0 : (att - 2) % 3 + 1 )) in
     1) : ;;                                                    # more data, continue from the current net
@@ -362,8 +447,13 @@ write_run_env() {   # $1 = source → pipeline config for this call, on top of p
     printf 'GAMES=%q\nNODES=%q\nEPOCHS=%q\nLR=%q\nLAMBDA=%q\nINIT_FROM_CURRENT=%q\nTRAIN_FROM=%q\n' \
       "$games" "$nodes" "$epochs" "$lr" "$lambda" "$init" "$from"
     printf 'GEN_OPTS=%q\nMATCH_OPTS=%q\nCHANCE_SCALING=\n' "$gen_opts" "$(pipeline_match_opts)"
-    printf 'REF_ENGINE=%q\nREF_NET=%q\nREF_OPTS=%q\n' "$REF_ENGINE" "$REF_NET" "$REF_OPTS"
-    local me="$epochs" k; for k in 4 8; do (( epochs - k > 0 )) && me+=" $(( epochs - k ))"; done
+    # the reference engine settings, also those set in autotune.env only
+    local v; for v in REF_ENGINE REF_NET REF_OPTS REF_NAME REF_GEN_NODES REF_LABEL_NODES REF_HASH \
+                      REF_ADJUDICATE REF_SCALE_FILE REF_SCALE_GAMES REF_GEN_GO REF_LABEL_GO \
+                      ENGINE_TIMEOUT MAX_ENGINE_FAILURES; do
+      [[ -n "${!v+x}" ]] && printf '%s=%q\n' "$v" "${!v}"
+    done
+    local me="$epochs" k; for k in $MATCH_EARLIER; do (( epochs - k > 0 )) && me+=" $(( epochs - k ))"; done
     printf 'MATCH_EPOCHS=%q\nAUTO_PROMOTE=1\nENGINE=%q\nSOURCE=%q\n' "$me" "$ENGINE" "$source"
   } > "$f"
   RUN_INFO="${games} games, $(case $source in
@@ -468,9 +558,10 @@ patch_files_from_head() {
 
 # ----------------------------------------------------------------------------- engine options (stage 4)
 build_option_catalog() {   # CATALOG lines: id|kind|values (space separated, each Name=V+Name=V)|removable|option
-  CATALOG=()
+  CATALOG=(); OPT_DEF=()
   local name kind def lo hi
   while IFS=$'\t' read -r name kind def lo hi; do
+    OPT_DEF[$name]=$def
     [[ "$kind" == bool ]] || continue
     [[ " $OPT_EXCLUDE " == *" $name "* ]] && continue
     local alt=true; [[ "$def" == true ]] && alt=false
@@ -483,6 +574,7 @@ build_option_catalog() {   # CATALOG lines: id|kind|values (space separated, eac
     CATALOG+=("$n|int|$v|$rem|$n")
   done
   for t in $OPT_GROUP_TESTS; do CATALOG+=("${t%%:*}|group|${t#*:}|0|${t%%:*}"); done
+  for t in $OPT_TC_TESTS; do CATALOG+=("${t%%:*}|tc|${t#*:}|0|${t%%:*}"); done
   if [[ -n "$OPT_ONLY" ]]; then
     local keep=() c; for c in "${CATALOG[@]}"; do [[ " $OPT_ONLY " == *" ${c%%|*} "* ]] && keep+=("$c"); done
     CATALOG=("${keep[@]}")
@@ -519,6 +611,88 @@ Elo $(html "$elo")$( ((okp)) || echo '
 <code>$(html "$line")</code>"
 }
 
+# ---- tests on the clock (OPT_TC_TESTS)
+declare -A OPT_DEF=()   # option → default (build_option_catalog)
+tc_parse() {   # tc_parse "Opt=V+Opt=V:mod=…" → TC_OPTS TC_NEED TC_ALT TC_SPRT TC_BOTH TC_WORKERS
+  local spec="$1" m
+  TC_OPTS="${spec%%:*}"; TC_OPTS="${TC_OPTS//+/ }"
+  TC_NEED=""; TC_ALT=""; TC_SPRT="$OPT_TC_SPRT"; TC_BOTH=""; TC_WORKERS="$OPT_TC_WORKERS"
+  [[ "$spec" == *:* ]] || return 0
+  local IFS=':'; local mods=(${spec#*:}); unset IFS
+  for m in "${mods[@]}"; do
+    case "$m" in
+      need=*)    TC_NEED="${m#need=}" ;;
+      alt=*)     TC_ALT="${m#alt=}" ;;
+      sprt=*)    TC_SPRT="${m#sprt=}"; TC_SPRT="${TC_SPRT//,/ }" ;;
+      both=*)    TC_BOTH="${m#both=}"; TC_BOTH="${TC_BOTH//+/ }" ;;
+      workers=*) TC_WORKERS="${m#workers=}" ;;
+      *) log "⚠ OPT_TC_TESTS: unknown modifier '$m' (ignored)" ;;
+    esac
+  done
+}
+opt_value() {   # value of option $1 in the options in use (empty: not set)
+  local o v=""; for o in $(best_opts); do [[ "${o%%=*}" == "$1" ]] && v="${o#*=}"; done; printf '%s' "$v"
+}
+opt_in_use() {   # 0 if option $1 is in use with a value other than its default
+  local v; v=$(opt_value "$1")
+  [[ -n "$v" && "$v" != "${OPT_DEF[$1]:-}" ]]
+}
+opt_sprt_tc() {   # opt_sprt_tc NAME "TRY-OPTS" TC → M_*  (uses TC_SPRT TC_BOTH TC_WORKERS)
+  local name="$1" tryopts="$2" tc="$3" g net; g=$(cur_gen); net=$(net_of "$g")
+  local base; base=$(match_opts)
+  local sprt; read -r -a sprt <<< "$TC_SPRT"
+  local a=(--engine "$ENGINE" --net-a "$net" --tc "$tc" --workers "$TC_WORKERS"
+           --pairs "$OPT_TC_MAX_PAIRS" --sprt "${sprt[@]}")
+  local oa ob
+  read -r -a oa <<< "$(opts_merge "$(opts_merge "$base" "$tryopts")" "$TC_BOTH")"
+  read -r -a ob <<< "$(opts_merge "$base" "$TC_BOTH")"
+  (( ${#oa[@]} )) && a+=(--opt-a "${oa[@]}")
+  (( ${#ob[@]} )) && a+=(--opt-b "${ob[@]}")
+  run_match "opt-c$(st opt_cycles 0)-g${g}-tc-${name}-$(opts_hash "$base|$TC_BOTH|$tc")" "${a[@]}"
+}
+tc_test() {   # tc_test I N CYCLE GEN ID SPEC STATE: one OPT_TC_TESTS entry (STC, then LTC)
+  local i="$1" n="$2" cyc="$3" g="$4" id="$5" spec="$6" stv="$7"
+  tc_parse "$spec"
+  if [[ -n "$TC_NEED" ]] && ! opt_in_use "$TC_NEED"; then
+    log "  [$i/$n] $id: skipped, $TC_NEED is not in use"; return 0
+  fi
+  local tryopts="$TC_OPTS" o vs=""
+  if [[ -n "$TC_ALT" && "$(st "opt_$TC_ALT")" == default:* ]]; then   # head-to-head with the winner
+    for o in $(opt_value_list "$TC_ALT"); do vs+=" ${o%%=*}=${OPT_DEF[${o%%=*}]}"; done
+    tryopts="$(opts_merge "$vs" "$TC_OPTS")"
+  fi
+  tryopts=$(echo $tryopts)
+  local res="" elo="" line="" tcv lvl
+  for lvl in STC LTC; do
+    tcv=$OPT_TC; [[ $lvl == LTC ]] && tcv=$OPT_LTC
+    [[ -z "$tcv" ]] && break
+    say "⏱ [$i/$n] <b>$(html "$id")</b> on the clock (${lvl} ${tcv}, SPRT [${TC_SPRT}], ${TC_WORKERS} workers): <code>$(html "$tryopts")</code>"
+    opt_sprt_tc "${id}-$(tr 'A-Z' 'a-z' <<< "$lvl")" "$tryopts" "$tcv" || return 1
+    res=$M_DEC; elo="$(printf '%+.1f' "$M_ELO")±$M_ERR"; line=$M_LINE
+    decision "$cyc" "$g" "$id" "$tryopts @$lvl $tcv" "$res" "$elo" "-" "-"
+    log "  [$i/$n] $id [$tryopts] $lvl $tcv: $res $elo"
+    [[ "$res" == H1 ]] || break
+  done
+  (( DRY_RUN )) && return 0
+  ST[opt_${id}_c]=$cyc; state_save
+  if [[ "$res" == H1 ]]; then accept_opts "$id" "$tryopts" "$elo (clock)" "$line"; return 0; fi
+  local act what
+  if [[ "$res" == NONE ]]; then
+    local k; k=$(( $(inc_count "$stv") + 1 ))
+    act="inc:$k"; st_set "opt_$id" "inc:$k:$M_ELO"
+    what="no decision after ${M_PAIRS} pairs → left as it is$( (( k <= OPT_RETRY )) && echo ', tested again in a later cycle')"
+  else
+    act=kept; st_set "opt_$id" kept
+    what="no gain → left as it is (chance node options are never removed automatically)"
+  fi
+  decision "$cyc" "$g" "$id" "$tryopts" REJECT "$elo" "$act" "-"
+  tg_send "$TAG · ❎ [$i/$n] <b>$(html "$id")</b> (clock): ${what}
+Elo $(html "$elo") <code>$(html "$line")</code>"
+}
+opt_value_list() {   # options accepted for the test id $1 (from its state default:…)
+  local s; s=$(st "opt_$1"); printf '%s' "${s#default:}"
+}
+
 inc_count() { local s="$1"; [[ "$s" == inc:* ]] || { echo 0; return; }; s=${s#inc:}; echo "${s%%:*}"; }
 
 option_cycle() {
@@ -540,13 +714,14 @@ option_cycle() {
       inc:*) (( $(inc_count "$stv") <= OPT_RETRY )) && todo+=("$c") ;;
     esac
   done
-  say "🔬 Option cycle ${cyc} with net gen$g: ${#todo[@]} option(s) to test (SPRT [${OPT_SPRT}], ${OPT_NODES} nodes, ≤ ${OPT_MAX_PAIRS} pairs)"
+  say "🔬 Option cycle ${cyc} with net gen$g: ${#todo[@]} option(s) to test (SPRT [${OPT_SPRT}], ${OPT_NODES} nodes, ≤ ${OPT_MAX_PAIRS} pairs; chance node options on the clock: ${OPT_TC}${OPT_LTC:+ then $OPT_LTC}, ${OPT_TC_WORKERS} workers)"
   local i=0 kind values removable optname
   for c in "${todo[@]}"; do
     IFS='|' read -r id kind values removable optname <<< "$c"
     i=$((i + 1))
     stv=$(st "opt_$id")
     if [[ "$stv" == accepting:* ]]; then accept_opts "$id" "${stv#accepting:}" "(resumed)" ""; continue; fi
+    if [[ "$kind" == tc ]]; then tc_test "$i" "${#todo[@]}" "$cyc" "$g" "$id" "$values" "$stv" || return 1; continue; fi
     local v accepted="" best_elo="" lastline="" res="" elo="" anynone=0
     for v in $values; do
       local tryopts="${v//+/ }" vname; vname=$(printf '%s' "$v" | tr -c 'A-Za-z0-9=_-' '_')
@@ -612,7 +787,7 @@ Elo $(html "$elo") <code>$(html "$lastline")</code>"
 
 option_cycle_due() {   # 0 if an option cycle should run now
   [[ "$(st opt_running)" == 1 ]] && return 0
-  local g; g=$(cur_gen); (( g >= 1 )) || return 1
+  local g; g=$(cur_gen); (( g >= 1 && g >= OPT_START_GEN )) || return 1
   local strong=0
   [[ "$(st stage)" == self ]] && strong=1
   [[ -n "$(st "ext_g$g")" ]] && ge "$(st "ext_g$g")" "$OPT_START_ELO" && strong=1
@@ -627,8 +802,11 @@ round() {
   local g; g=$(cur_gen); (( g < 0 )) && g=0
   local stage; stage=$(st stage ref)
   if [[ "$stage" == ref ]] && (( g >= 1 )); then stage=distill; st_set stage distill; fi
-  # a net that was promoted but not measured yet (stopped in between)
-  (( g >= 1 )) && { evaluate_net "$g" || return 1; }
+  # a net that was promoted but not measured or checked yet (stopped in between)
+  if (( g >= 1 )); then
+    evaluate_net "$g" || return 1
+    check_new_net "$g" "$stage" || return 0
+  fi
 
   if option_cycle_due; then option_cycle || return 1; fi
 
@@ -654,25 +832,60 @@ round() {
   (( DRY_RUN )) && return 0
 
   if [[ -f "$(net_of "$next")" ]]; then
-    ST[promos]=$(( $(st promos 0) + 1 )); ST[fails]=0; state_save
+    ST[promos]=$(( $(st promos 0) + 1 )); state_save
     say "🏆 <b>gen$next</b> won the SPRT against gen$g (stage $stage)"
     evaluate_net "$next" || return 1
-    if [[ "$(st stage)" == distill ]] && ge "$(st "ext_g$next")" "$NEAR_REF_ELO"; then
-      st_set stage self
+    if check_new_net "$next" "$stage" && [[ "$(st stage)" == distill ]] && ge "$(st "ext_g$next")" "$NEAR_REF_ELO"; then
+      ST[stage]=self; ST[level]=0; state_save
       say "🔁 gen$next is close to the reference engine ($(st "ext_g$next") ≥ ${NEAR_REF_ELO} Elo) → stage <b>self</b>: the net plays and scores its own games (${SELF_NODES} nodes)"
     fi
   else
-    ST[attempt_g$g]=$(( att + 1 )); ST[fails]=$(( $(st fails 0) + 1 )); state_save
-    say "↩ gen$g · attempt $att: no epoch won the SPRT ($(st fails) failure(s) in a row)"
-    if [[ "$stage" == distill ]] && (( $(st fails) >= DISTILL_PATIENCE )); then
-      ST[stage]=self; ST[fails]=0; state_save
-      say "🔁 ${DISTILL_PATIENCE} failures in a row with the reference engine's scores → stage <b>self</b> (the net scores its own games)"
-    elif [[ "$stage" == self ]] && (( $(st fails) >= PATIENCE && $(st level 0) < LEVEL_CAP )); then
-      ST[level]=$(( $(st level 0) + 1 )); ST[fails]=0; state_save
-      say "⛰ ${PATIENCE} failures in a row → scaling up to level $(st level): more games, deeper search"
-    fi
+    count_failure "$g" "$stage" "↩ gen$g · attempt $att: no epoch won the SPRT"
   fi
   write_report >/dev/null
+}
+
+count_failure() {   # count_failure GEN STAGE "MESSAGE": one more failed attempt for net GEN
+  local g="$1" stage="$2"
+  ST[attempt_g$g]=$(( $(st "attempt_g$g" 1) + 1 )); ST[fails]=$(( $(st fails 0) + 1 )); state_save
+  say "$3 ($(st fails) failure(s) in a row)"
+  if [[ "$stage" == distill ]] && (( $(st fails) >= DISTILL_PATIENCE )); then
+    # failures in stage distill are more often too little data than the reference engine's
+    # scores running out: scale up first, then go to stage self (from level 0)
+    if (( $(st level 0) < DISTILL_LEVEL_CAP )); then
+      ST[level]=$(( $(st level 0) + 1 )); ST[fails]=0; state_save
+      say "⛰ ${DISTILL_PATIENCE} failures in a row → scaling up to level $(st level) (stage distill): more games, deeper search"
+    else
+      ST[stage]=self; ST[fails]=0; ST[level]=0; state_save
+      say "🔁 ${DISTILL_PATIENCE} failures in a row at level ${DISTILL_LEVEL_CAP} with the reference engine's scores → stage <b>self</b> (the net scores its own games)"
+    fi
+  elif [[ "$stage" == self ]] && (( $(st fails) >= PATIENCE && $(st level 0) < LEVEL_CAP )); then
+    ST[level]=$(( $(st level 0) + 1 )); ST[fails]=0; state_save
+    say "⛰ ${PATIENCE} failures in a row → scaling up to level $(st level): more games, deeper search"
+  fi
+}
+
+# A net promoted in stage distill that is clearly weaker than the previous one against the
+# reference engine (difference above the combined 95% errors) is taken back: the SPRT is
+# self-play, the reference engine is the goal of the stage. Returns 1 if the net was taken back.
+check_new_net() {   # check_new_net GEN STAGE
+  local n="$1" stage="$2" p=$(( $1 - 1 ))
+  [[ "$(st "checked_g$n")" == 1 ]] && return 0
+  if (( EXT_VETO )) && [[ "$stage" == distill && -n "$(st "ext_g$p")" && -n "$(st "ext_g$n")" ]] && \
+     awk -v a="$(st "ext_g$p")" -v ea="$(st "exterr_g$p" 0)" -v b="$(st "ext_g$n")" -v eb="$(st "exterr_g$n" 0)" \
+         'BEGIN{exit !(a - b > sqrt(ea * ea + eb * eb))}'; then
+    local ts; ts=$(date +%s)
+    local dst="nets/archive/${LP}gen$n.vetoed-$ts.nnue" elo="$(st "ext_g$n") ± $(st "exterr_g$n")" f
+    mkdir -p nets/archive && mv -f "$(net_of "$n")" "$dst" || return 0
+    # a later gen$n is measured again (run_match reuses a finished result of the same name)
+    for f in "$RES_DIR/ext-${REF_NAME}-g${n}-"*.log; do [[ -f "$f" ]] && mv -f "$f" "${f%.log}.vetoed-$ts.log"; done
+    unset "ST[ext_g$n]" "ST[exterr_g$n]"
+    ST[promos]=$(( $(st promos 0) - 1 )); state_save
+    count_failure "$p" "$stage" "🚫 gen$n won the SPRT against gen$p but is clearly weaker against the reference engine ($elo vs $(st "ext_g$p") ± $(st "exterr_g$p") Elo) → not promoted, moved to $(html "$dst")"
+    return 1
+  fi
+  ST[fails]=0; ST[checked_g$n]=1; state_save
+  return 0
 }
 
 check_stop() {   # returns 0 if finished
@@ -739,8 +952,10 @@ preflight() {
   [[ -f "$OPTPATCH" ]] || err+=("$OPTPATCH not found")
   command -v "$PYTHON" >/dev/null || err+=("python not found: $PYTHON")
   command -v git >/dev/null || err+=("git is needed to make the patches")
-  [[ -x "$REF_ENGINE" ]] || err+=("Reference engine not found: $REF_ENGINE (put it in jieqi/ or set REF_ENGINE)")
-  [[ -n "$REF_NET" && -f "$REF_NET" ]] || err+=("Reference engine network not found (jieqi/ref-engine*.nnue or REF_NET)")
+  if [[ "$REF_MODE" != off ]]; then
+    [[ -x "$REF_ENGINE" ]] || err+=("Reference engine not found: $REF_ENGINE (put it in jieqi/, set REF_ENGINE, or REF_MODE=off)")
+    [[ -z "$REF_NET" || -f "$REF_NET" ]] || err+=("Reference engine network not found: $REF_NET (set REF_NET, or empty for none)")
+  fi
   if (( ${#err[@]} )); then
     local e; for e in "${err[@]}"; do log "ERROR: $e"; done
     tg_send "$TAG · ❌ Cannot start:
@@ -752,6 +967,7 @@ $(html "$(printf '• %s\n' "${err[@]}")")"
     run_logged "$AT_DIR/logs/build.log" make -C "$SRC_DIR" -j"$NCPU" build ARCH="$MAKE_ARCH" \
       "${MAKE_FLAGS[@]}" || return 1
   fi
+  [[ "$REF_MODE" == off ]] && return 0
   printf 'uci\nisready\nquit\n' | timeout 60 "$REF_ENGINE" 2>/dev/null | grep -q readyok \
     || { say "❌ The reference engine ($REF_ENGINE) does not answer uci/isready"; return 1; }
   return 0
@@ -789,7 +1005,7 @@ mkdir -p "$AT_DIR" "$PATCH_DIR" "$RES_DIR" "$AT_DIR/logs" nets data runs
 case "$ACTION" in
   status)
     state_load
-    echo "Stage: $(st stage ref) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
+    echo "REF_MODE: $REF_MODE · stage: $(st stage ref) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
     echo "Current net: gen$(cur_gen) · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best: gen$(st best_ext_gen '?') ($(st best_ext '?'))"
     echo "Option cycles: $(st opt_cycles 0)$( [[ "$(st opt_running)" == 1 ]] && echo ' (one running)') · options in use: $(best_opts)"
     [[ -f "$AT_DIR/.pid" ]] && kill -0 "$(cat "$AT_DIR/.pid")" 2>/dev/null && echo "Running (pid $(cat "$AT_DIR/.pid"))" || echo "Not running"
@@ -826,9 +1042,14 @@ if command -v flock >/dev/null && ! flock -n 9; then echo "autotune is already r
 echo $$ > "$AT_DIR/.pid"
 rm -f "$AT_DIR/.stop"
 state_load
+[[ "$REF_MODE" == off ]] || ref_switch
 [[ "$(st finished)" == 1 ]] && { echo "Already finished (remove ST[finished] from $STATE_FILE to continue)."; write_report; exit 0; }
 [[ -n "$(st start_ts)" ]] || st_set start_ts "$(date +%s)"
 case "$(st stage)" in ref|distill|self) ;; *) st_set stage ref ;; esac
+if [[ "$REF_MODE" != teach && "$(st stage)" != self ]]; then
+  old_stage=$(st stage); ST[stage]=self; ST[level]=0; ST[fails]=0; state_save
+  say "🔁 REF_MODE=${REF_MODE}: no data from the reference engine → stage ${old_stage} → <b>self</b> (the net plays and scores its own games)"
+fi
 
 STOPPING=0
 on_signal() {
@@ -843,7 +1064,12 @@ trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap on_exit EXIT
 
 preflight || exit 5
 RESUMED=""; (( $(cur_gen) >= 1 )) && RESUMED=" (resuming)"
-say "🚀 Started${RESUMED}: stage <b>$(st stage)</b>, current net gen$(cur_gen). Plan: reference engine games (gen0) → the reference engine scores Maskfish games until ≥ ${NEAR_REF_ELO} Elo vs the reference engine → self-play → engine options from ${OPT_START_ELO} Elo → loop until no gain at level ${LEVEL_CAP}."
+case "$REF_MODE" in
+  teach)   PLAN="reference engine games (gen0) → the reference engine scores Maskfish games until ≥ ${NEAR_REF_ELO} Elo vs the reference engine → self-play → engine options from ${OPT_START_ELO} Elo" ;;
+  measure) PLAN="self-play from the start (the reference engine only measures every new net) → engine options from gen${OPT_START_GEN}" ;;
+  off)     PLAN="self-play only, no reference engine → engine options from gen${OPT_START_GEN}" ;;
+esac
+say "🚀 Started${RESUMED} (REF_MODE=${REF_MODE}): stage <b>$(st stage)</b>, current net gen$(cur_gen). Plan: ${PLAN} → loop until no gain at level ${LEVEL_CAP}."
 
 while :; do
   check_stop && exit 0

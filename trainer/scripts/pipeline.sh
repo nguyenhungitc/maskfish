@@ -12,9 +12,18 @@
 #              kept (the reference engine re-scores the Maskfish net's games).
 #     self     Maskfish (current net) plays and scores its own positions.
 #  Scores of the reference engine are converted to Maskfish units: the score → win
-#  probability scale of the reference engine is fitted once on its own games (gen0 data,
-#  saved in data/ref.scale) and every file it scored is prepared with
-#  --score-scale SCALING / that scale (stored next to the file in FILE.src).
+#  probability scale of the reference engine is fitted once on its own games (the gen0
+#  data, or REF_SCALE_GAMES games played before the first distill data of a new reference
+#  engine), saved in data/REF_NAME.scale, and every file it scored is prepared with
+#  --score-scale SCALING / that scale. FILE.src names the engine that scored FILE
+#  (scorer=REF_NAME), so files scored by an earlier reference engine keep its scale.
+#  Any reference engine works through the configuration only (REF_* in pipeline.env):
+#  it needs UCI and Maskfish's FEN and move notation; the limit of its searches is any "go"
+#  arguments (REF_GEN_GO, REF_LABEL_GO, EXT_GO of autotune.sh; default "nodes N" / "movetime
+#  T"). Maskfish gives the board state, judges the rules and checks every move of it
+#  (gen_data.py / match.py --referee); an engine (also the referee) without answer after
+#  ENGINE_TIMEOUT seconds is killed, and more than MAX_ENGINE_FAILURES illegal moves /
+#  timeouts in one worker stop the step with an error.
 #
 #  Sends a Telegram ✅ after every step; on error sends ❌ at once with the
 #  tail of the log, then stops.
@@ -116,13 +125,23 @@ fi
 # Reference engine (gen0 games, scores of the distillation data, reference opponent)
 : "${JIEQI_DIR:=$TRAINER_DIR/../jieqi}"
 : "${REF_ENGINE:=$JIEQI_DIR/ref-engine}"
-: "${REF_NET:=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"
-: "${REF_OPTS=ChasingRule=github}"
+: "${REF_NET=$(ls "$JIEQI_DIR"/ref-engine*.nnue 2>/dev/null | sort | tail -1)}"   # sent as EvalFile;
+                                 # empty: none (an engine with its network built in, or another
+                                 # option name for it in REF_OPTS)
+: "${REF_OPTS=}"                 # its UCI options, e.g. its repetition / chasing rules closest to Maskfish's
 : "${REF_GEN_NODES:=10000}"      # the reference engine nodes per move when it plays the games (--source ref)
 : "${REF_LABEL_NODES:=20000}"    # the reference engine nodes per scored position (--source distill)
+: "${REF_GEN_GO:=}"              # instead of REF_GEN_NODES / REF_LABEL_NODES: any limit of its
+: "${REF_LABEL_GO:=}"            # search as "go" arguments, e.g. "depth 10" or "movetime 100"
+: "${ENGINE_TIMEOUT:=600}"       # seconds to wait for an answer of an engine (search, or a command
+                                 # of the referee) before it is killed (0: no limit)
+: "${MAX_ENGINE_FAILURES:=20}"   # illegal moves / timeouts per worker before a step stops with an error
 : "${REF_HASH:=16}"
-: "${REF_ADJUDICATE:=1500}"     # its scores are on a ~2× smaller scale than Maskfish's
-: "${REF_SCALE_FILE:=data/ref.scale}"
+: "${REF_ADJUDICATE:=}"          # adjudication of its games, in its units; empty: ADJUDICATE
+                                 # converted with its score scale (ADJUDICATE itself before the fit)
+: "${REF_NAME:=$(basename "$REF_ENGINE")}"   # names its score scale file and the scorer in FILE.src
+: "${REF_SCALE_FILE:=data/$REF_NAME.scale}"
+: "${REF_SCALE_GAMES:=2000}"     # its own games to fit that scale when the file is missing (--source distill)
 : "${GEN_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"; : "${ADJUDICATE:=3000}"; : "${GEN_OPTS:=}"
 : "${CHANCE_SCALING:=}"; : "${SEED_BASE:=}"
 : "${SHARD_SIZE:=2000000}"; : "${MAX_SCORE:=10000}"; : "${SCORE_SCALE:=1.0}"; : "${PREP_WORKERS:=}"
@@ -319,8 +338,8 @@ print('python', sys.version.split()[0], 'OK:', '$mods')
   if [[ "$MODE" != train && "$SOURCE" != self ]]; then
     [[ -f "$REF_ENGINE" && ! -x "$REF_ENGINE" ]] && chmod +x "$REF_ENGINE" 2>/dev/null
     [[ -x "$REF_ENGINE" ]] || fail "Reference engine not found: $REF_ENGINE (set REF_ENGINE / JIEQI_DIR)" || return 1
-    [[ -n "$REF_NET" && -f "$REF_NET" ]] || fail "Reference engine network not found: '${REF_NET}' (set REF_NET)" || return 1
-    info "Reference engine: $(html_escape "$REF_ENGINE") · net $(html_escape "$(basename "$REF_NET")")$( [[ -n "$REF_OPTS" ]] && printf ' · %s' "$(html_escape "$REF_OPTS")")"
+    [[ -z "$REF_NET" || -f "$REF_NET" ]] || fail "Reference engine network not found: '${REF_NET}' (set REF_NET, or empty for none)" || return 1
+    info "Reference engine $(html_escape "$REF_NAME"): $(html_escape "$REF_ENGINE") · net $(html_escape "$( [[ -n "$REF_NET" ]] && basename "$REF_NET" || echo none)")$( [[ -n "$REF_OPTS" ]] && printf ' · %s' "$(html_escape "$REF_OPTS")")"
   fi
   autotune
 }
@@ -512,9 +531,29 @@ s_init() {
 }
 
 # Score scale of the reference engine → SCORE_SCALE for the files it scored (see the header)
-ref_score_scale() {   # prints SCALING / s_ref, or nothing if data/ref.scale does not exist
-  [[ -s "$REF_SCALE_FILE" ]] || return 0
-  awk -v sc="$SCALING" -v f="$(cat "$REF_SCALE_FILE")" 'BEGIN{ if (f > 0) printf "%.4f", sc / f }'
+ref_score_scale() {   # [scale file] → prints SCALING / s_ref, or nothing if the file does not exist
+  local file="${1:-$REF_SCALE_FILE}"
+  [[ -s "$file" ]] || return 0
+  awk -v sc="$SCALING" -v f="$(cat "$file")" 'BEGIN{ if (f > 0) printf "%.4f", sc / f }'
+}
+
+scorer_scale_file() {   # $1 = scorer in FILE.src → its score scale file (data/<scorer>.scale)
+  # (scorer=ref: files written before REF_NAME existed, data/ref.scale)
+  if [[ "$1" == "$REF_NAME" ]]; then echo "$REF_SCALE_FILE"; else echo "$(dirname "$REF_SCALE_FILE")/$1.scale"; fi
+}
+
+ref_adjudicate() {   # adjudication threshold of reference engine games, in its units
+  if [[ -n "$REF_ADJUDICATE" ]]; then echo "$REF_ADJUDICATE"; return 0; fi
+  local f=0; [[ -s "$REF_SCALE_FILE" ]] && f=$(cat "$REF_SCALE_FILE")
+  awk -v a="$ADJUDICATE" -v f="$f" -v sc="$SCALING" 'BEGIN{ if (f > 0) printf "%d", a * f / sc + 0.5; else print a }'
+}
+
+ref_gen_go() { echo "${REF_GEN_GO:-nodes $REF_GEN_NODES}"; }        # its search when it plays
+ref_label_go() { echo "${REF_LABEL_GO:-nodes $REF_LABEL_NODES}"; }  # its search when it scores
+
+ref_net_args() {   # $1 = gen_data.py / match.py option for the network → its arguments (none if REF_NET is empty)
+  [[ -n "$REF_NET" ]] && printf '%s\n%s\n' "$1" "$REF_NET"
+  return 0
 }
 
 gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
@@ -530,12 +569,14 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
   [[ -n "$CHANCE_SCALING" ]] && mopts+=("ChanceScaling=$CHANCE_SCALING")
   local refopts; words refopts "$REF_OPTS"
   local cmd=("$PYTHON" -u gen_data.py --games "$games" --workers "$GEN_WORKERS"
-             --adjudicate "$ADJUDICATE" --seed "$seed" --out "$out")
+             --adjudicate "$ADJUDICATE" --seed "$seed" --out "$out"
+             --engine-timeout "$ENGINE_TIMEOUT" --max-failures "$MAX_ENGINE_FAILURES")
   mopts+=("${EVAL_OPT[@]}")
   case "$SOURCE" in
     ref)
-      cmd+=(--engine "$REF_ENGINE" --net "$REF_NET" --nodes "$REF_GEN_NODES" --hash "$REF_HASH"
-            --referee "$ENGINE" --adjudicate "$REF_ADJUDICATE")
+      local netargs; mapfile -t netargs < <(ref_net_args --net)
+      cmd+=(--engine "$REF_ENGINE" "${netargs[@]}" --go "$(ref_gen_go)" --hash "$REF_HASH"
+            --referee "$ENGINE" --adjudicate "$(ref_adjudicate)")
       (( ${#refopts[@]} )) && cmd+=(--opt "${refopts[@]}") ;;
     distill|self)
       [[ -f "$NET_CUR" ]] || (( DRY_RUN )) || fail "Current net $NET_CUR not found" || return 1
@@ -543,7 +584,8 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
       (( DEPTH > 0 )) && cmd+=(--depth "$DEPTH")
       (( ${#mopts[@]} )) && cmd+=(--opt "${mopts[@]}")
       if [[ "$SOURCE" == distill ]]; then
-        cmd+=(--teacher "$REF_ENGINE" --teacher-net "$REF_NET" --teacher-nodes "$REF_LABEL_NODES"
+        local netargs; mapfile -t netargs < <(ref_net_args --teacher-net)
+        cmd+=(--teacher "$REF_ENGINE" "${netargs[@]}" --teacher-go "$(ref_label_go)"
               --teacher-hash "$REF_HASH")
         (( ${#refopts[@]} )) && cmd+=(--teacher-opt "${refopts[@]}")
       fi ;;
@@ -553,13 +595,30 @@ gen_common() {   # $1 = output file, $2 = number of games, $3 = seed
   local n; n=$(count_lines "$out")
   (( n > 0 )) || fail "gen_data finished but $out is empty" || return 1
   # who scored the file: prepare_one converts the reference engine's scores with the scale in FILE.src
-  local scorer=maskfish; [[ "$SOURCE" != self ]] && scorer=ref
+  local scorer=maskfish; [[ "$SOURCE" != self ]] && scorer=$REF_NAME
   printf 'source=%s\nscorer=%s\n' "$SOURCE" "$scorer" > "$out.src"
   info "$(fmt_num "$n") positions from $(fmt_num "$games") games ($(html_escape "$SOURCE")) → $(html_escape "$out") ($(du -h "$out" | cut -f1))"
 }
 
 s_gendata() { gen_common "$GEN_TXT" "$GAMES" "$SEED_TRAIN"; }
 s_genval()  { gen_common "$VAL_TXT" "$VAL_GAMES" "$SEED_VAL"; }
+
+# Score scale of a reference engine without data/REF_NAME.scale (e.g. a new one in stage
+# distill): REF_SCALE_GAMES games of its own (as --source ref, Maskfish as the referee) in
+# data/REF_NAME-scale.txt, not used for training; fit_scaling.py on them → REF_SCALE_FILE.
+s_refscale() {
+  local out="data/${REF_NAME}-scale.txt"
+  local SOURCE=ref                               # gen_common: the reference engine plays both sides
+  gen_common "$out" "$REF_SCALE_GAMES" "$(( SEED_BASE + 7 ))" || return 1
+  (( DRY_RUN )) && return 0
+  run "$CUR_LOG" "$PYTHON" -u fit_scaling.py "$out" || fail "fit_scaling.py failed on $out" || return 1
+  local line fitted; line=$(grep -h 'fitted scale' "$CUR_LOG" | tail -1)
+  fitted=$(sed -n 's/.*fitted scale: \([0-9.]*\).*/\1/p' <<< "$line")
+  awk -v s="${fitted:-0}" 'BEGIN{exit !(s >= 5 && s <= 10000)}' \
+    || fail "Unusual score scale of the reference engine: '${line}' (see $CUR_LOG); write $REF_SCALE_FILE by hand" || return 1
+  echo "$fitted" > "$REF_SCALE_FILE"
+  info "Reference engine $(html_escape "$REF_NAME"): $(html_escape "$line") → $(html_escape "$REF_SCALE_FILE") (its scores × $(ref_score_scale) in Maskfish units)"
+}
 
 s_fit() {   # informational, except for reference engine games: their fit is its score scale
   [[ -s "$GEN_TXT" ]] || (( DRY_RUN )) || { info "No $GEN_TXT to fit"; return 0; }
@@ -575,7 +634,7 @@ s_fit() {   # informational, except for reference engine games: their fit is its
         info "Reference engine score scale kept from $(html_escape "$REF_SCALE_FILE"): $(cat "$REF_SCALE_FILE") (this data: ${fitted})"
       fi
     fi
-    [[ "$SOURCE" == distill && ! -s "$REF_SCALE_FILE" ]] &&       info "⚠ $(html_escape "$REF_SCALE_FILE") missing (no gen0 reference engine games): its scores are converted with the scale fitted on this data"
+    [[ "$SOURCE" == distill && ! -s "$REF_SCALE_FILE" ]] &&       info "⚠ $(html_escape "$REF_SCALE_FILE") missing: its scores are converted with the scale fitted on this data"
     info "Using SCALING=${SCALING}${CHANCE_SCALING:+, ChanceScaling=$CHANCE_SCALING} (change it in scripts/pipeline.env if needed)"
   else
     info "⚠ fit_scaling failed (ignored, training is not affected)"
@@ -592,8 +651,8 @@ file_score_scale() {   # $1 = text file → prints the --score-scale value
   src="$(txt_base "$txt").src"
   [[ -f "$src" ]] && scorer=$(sed -n 's/^scorer=//p' "$src")
   if [[ -z "$scorer" || "$scorer" == maskfish ]]; then echo "$SCORE_SCALE"; return 0; fi
-  local sc; sc=$(ref_score_scale)
-  if [[ -z "$sc" ]]; then      # no gen0 fit: fit on this file (its results come from Maskfish games)
+  local sc; sc=$(ref_score_scale "$(scorer_scale_file "$scorer")")
+  if [[ -z "$sc" ]]; then      # no fit of that engine: fit on this file (biased up if Maskfish played the games)
     local f; f=$("$PYTHON" fit_scaling.py "$txt" 2>/dev/null | sed -n 's/.*fitted scale: \([0-9.]*\).*/\1/p')
     sc=$(awk -v a="$SCALING" -v f="${f:-0}" 'BEGIN{ if (f > 0) printf "%.4f", a / f; else print 1.0 }')
   fi
@@ -801,7 +860,8 @@ s_match() {
   for e in $(candidates); do
     net="$RUN_DIR/epoch_${e}.nnue"
     local cmd=("$PYTHON" -u match.py --engine "$ENGINE" --net-a "$net" --net-b "$NET_CUR"
-               --workers "$MATCH_WORKERS" --pairs "$MATCH_MAX_PAIRS")
+               --workers "$MATCH_WORKERS" --pairs "$MATCH_MAX_PAIRS"
+               --engine-timeout "$ENGINE_TIMEOUT" --max-failures "$MAX_ENGINE_FAILURES")
     if (( MATCH_MOVETIME > 0 )); then cmd+=(--movetime "$MATCH_MOVETIME"); else cmd+=(--nodes "$MATCH_NODES"); fi
     (( ${#sprt[@]} == 2 )) && cmd+=(--sprt "${sprt[@]}")
     (( ${#mopts[@]} )) && cmd+=(--opt-a "${mopts[@]}" --opt-b "${mopts[@]}")
@@ -868,7 +928,7 @@ case "$MODE" in
   train) MODE_TXT="TRAINING ONLY" ;;
 esac
 tg_send "🚀 ${NAME_TAG} · Pipeline started: <b>${MODE_TXT}</b>
-net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata (%s): %s games + %s val, %s, seed %s' "$SOURCE" "$GAMES" "$VAL_GAMES" "$(case $SOURCE in ref) echo "the reference engine plays ${REF_GEN_NODES} nodes";; distill) echo "Maskfish plays ${NODES} nodes, the reference engine scores ${REF_LABEL_NODES} nodes";; self) echo "Maskfish plays and scores, ${NODES} nodes";; esac)" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
+net: $(html_escape "$NET_CUR") · arch: $(html_escape "$ARCH_FULL")$( [[ $MODE != train ]] && printf '\ndata (%s): %s games + %s val, %s, seed %s' "$SOURCE" "$GAMES" "$VAL_GAMES" "$(case $SOURCE in ref) echo "the reference engine plays: go $(ref_gen_go)";; distill) echo "Maskfish plays ${NODES} nodes, the reference engine scores: go $(ref_label_go)";; self) echo "Maskfish plays and scores, ${NODES} nodes";; esac)" "$SEED_BASE")$( [[ $MODE != gen ]] && printf '\ntrain: %s epoch × %s, lr %s, λ %s, scaling %s → %s' "$EPOCHS" "$EPOCH_SIZE" "$LR" "$LAMBDA" "$SCALING" "$(html_escape "$RUN_DIR")")"
 
 step "Environment check" s_preflight
 step "Build engine" s_build
@@ -879,6 +939,9 @@ fi
 
 if [[ "$MODE" != train ]]; then
   (( GEN == 0 )) && step "Create gen0 net$( [[ -n "$INIT_NET" ]] && echo " (from INIT_NET)" || echo " (material)" )" s_init
+  if [[ "$SOURCE" == distill && ! -s "$REF_SCALE_FILE" ]]; then
+    step "Score scale of the reference engine ($REF_SCALE_GAMES games)" s_refscale
+  fi
   step "Generate training data ($SOURCE)" s_gendata
   step "Generate validation data ($SOURCE)" s_genval
   step "Fit scaling (informational)" s_fit
