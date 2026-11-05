@@ -54,6 +54,7 @@
     </td></tr>
     <tr><th>Openings</th><td>{{ run.plies_min }}–{{ run.plies_max }} random plies, random hidden identities, game pairs with colors swapped</td></tr>
     <tr><th>Adjudication</th><td>|score| ≥ {{ run.adjudicate }} internal units for 4 moves of each side, or a mate score</td></tr>
+    <tr><th>Referee</th><td>{{ 'the test' if run.referee == 'new' else 'the base' }} engine (board state, legal moves, rules); an illegal move loses</td></tr>
     <tr><th>Information</th><td>{{ 'full (both sides learn captured dark pieces)' if run.full_info else 'hidden (only the capturer learns a captured dark piece)' }}</td></tr>
     <tr><th>Bench</th><td class="mono">new {{ run.new_bench or '-' }}<br>base {{ run.base_bench or '-' }}</td></tr>
     <tr><th>Seed</th><td class="mono">{{ run.seed }}</td></tr>

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS runs (
     plies_max     INTEGER NOT NULL DEFAULT 6,
     adjudicate    INTEGER NOT NULL DEFAULT 3000,
     full_info     INTEGER NOT NULL DEFAULT 0,
+    referee       TEXT NOT NULL DEFAULT 'base',   -- binary of the referee process: base / new
     seed          INTEGER NOT NULL,
     penta         TEXT NOT NULL DEFAULT '[0, 0, 0, 0, 0]',
     wins          INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS runs (
     draws         INTEGER NOT NULL DEFAULT 0,
     crashes       INTEGER NOT NULL DEFAULT 0,
     time_losses   INTEGER NOT NULL DEFAULT 0,
+    illegal_moves INTEGER NOT NULL DEFAULT 0,
     llr           REAL NOT NULL DEFAULT 0,
     llr_history   TEXT NOT NULL DEFAULT '[]',
     base_bench    TEXT NOT NULL DEFAULT '',
@@ -80,8 +82,11 @@ class DB:
         con.executescript(SCHEMA)
         # Columns added after the first version
         have = {r[1] for r in con.execute("PRAGMA table_info(runs)")}
-        if "spsa" not in have:
-            con.execute("ALTER TABLE runs ADD COLUMN spsa TEXT NOT NULL DEFAULT '{}'")
+        for col, decl in (("spsa", "TEXT NOT NULL DEFAULT '{}'"),
+                          ("referee", "TEXT NOT NULL DEFAULT 'base'"),
+                          ("illegal_moves", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in have:
+                con.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         con.close()
 
     def _connect(self):

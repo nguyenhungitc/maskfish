@@ -10,10 +10,18 @@ trainer/match.py (whose helpers are reused):
 * games end by mate / no legal move, adjudication (the side to move reports
   that it is mated, or both sides agree on a large score; a mate claimed by
   the winning side alone is played out), the rules of the engine as judged by
-  the base engine with the command "rule" (third occurrence of a position: a
+  the referee with the command "rule" (third occurrence of a position: a
   draw, or a loss for perpetual check or chase; 40-move rule: a draw after 80
   plies without capture, or a loss for a side without legal move), or the
   maximum number of plies.
+
+The referee is a separate process of one of the two binaries (the base one by
+default, or the new one for a branch that changes the rules), with the view of
+that side: it gives the board state and the legal moves, makes the random
+openings, judges the rules, and checks every move. An illegal move loses the
+game for the side that played it, so that a move generation bug of the engine
+tested cannot make its opponent refuse to search. A referee without answer
+voids the pair, which is played again with a new referee process.
 
 In addition, the referee runs real clocks for time controls such as "10+0.1"
 (a loss on time when an engine exceeds its time by more than the margin), and
@@ -56,6 +64,14 @@ class EngineError(Exception):
 
 class EngineTimeout(EngineError):
     """The engine did not answer in time."""
+
+
+class RefereeError(Exception):
+    """The referee process failed: the pair is void and played again."""
+
+
+REFEREE_RETRIES = 3       # new referee processes for one pair before giving up
+REFEREE_OPTIONS = {"Threads": 1, "Hash": 1}
 
 
 class Engine:
@@ -237,6 +253,8 @@ RESULT_STR = {1: "1-0", 0: "1/2-1/2", -1: "0-1"}
 
 
 def make_opening(engine: Engine, rng: random.Random, plies: int):
+    """Random legal opening moves (raw moves, listed by the referee engine)
+    and the hidden identities."""
     ids = U.HiddenIdentities(rng)
     probe = copy.deepcopy(ids)
     moves = []
@@ -250,11 +268,13 @@ def make_opening(engine: Engine, rng: random.Random, plies: int):
 
 
 def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict,
-              referee: Engine | None = None) -> dict:
+              referee: Engine, judge_view: int) -> dict:
     """Plays one game. Returns {'result': +1/0/-1 for white, 'reason',
     'moves' (full information), 'plies', 'fault': color of a crash / time
-    loss or None, 'fault_kind'}. referee: the engine that judges the rules
-    (see U.RuleJudge), by default the engine to move."""
+    loss / illegal move or None, 'fault_kind'}. referee: the process that
+    gives the board state and the legal moves and judges the rules (see
+    U.RuleJudge), with the view of the color judge_view (0 white, 1 black).
+    Raises RefereeError when the referee fails."""
     ids = copy.deepcopy(ids)
     engines = (white, black)
     views = ([], [])
@@ -267,6 +287,12 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict,
     def finish(result, reason):
         out.update(result=result, reason=reason, moves=" ".join(record), plies=len(record))
         return out
+
+    def ask_referee(fn):
+        try:
+            return fn()
+        except EngineError as e:
+            raise RefereeError(str(e)) from e
 
     stm = 0
     try:
@@ -281,17 +307,20 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict,
             stm = ply % 2
             eng = engines[stm]
             eng.set_position(views[stm])
-            fen, in_check = eng.board_info()
-            try:
-                verdict = U.referee_verdict(referee, engines, views, stm)
-            except EngineError as e:
-                # The fault is the one of the engine that failed (its name
-                # starts the message), which may be the referee
-                stm = next((i for i, x in enumerate(engines) if str(e).startswith(f"{x.name}:")),
-                           stm)
-                raise
-            ended = judge.result(fen, in_check, no_capture, verdict,
-                                 lambda: bool(eng.legal_moves()))
+            ask_referee(lambda: referee.set_position(views[judge_view]))
+            fen, in_check = ask_referee(referee.board_info)
+            verdict = ask_referee(referee.rule)
+            if verdict is None:
+                # A referee built before the command "rule": the engine to
+                # move judges, as before the referee process
+                verdict = eng.rule()
+            legal = []
+
+            def legal_moves():
+                if not legal:
+                    legal.append(ask_referee(referee.legal_moves))
+                return legal[0]
+            ended = judge.result(fen, in_check, no_capture, verdict, lambda: bool(legal_moves()))
             if ended is not None:
                 return finish(*ended)
             score, mate = None, False
@@ -321,6 +350,10 @@ def play_game(white: Engine, black: Engine, ids, opening: list[str], cfg: dict,
                     return finish(-1 if stm == 0 else 1, "timeout")
             if move in ("(none)", "0000"):
                 return finish(-1 if stm == 0 else 1, "no legal move")
+            if ply >= len(opening) and move not in legal_moves():
+                out.update(fault=stm, fault_kind="illegal")
+                record.append(move + "?")
+                return finish(-1 if stm == 0 else 1, f"illegal move {move}")
             capture = U.is_capture(fen, move)
             w, b = U.annotate_views(ids, move, cfg["full_info"])
             views[0].append(w)
@@ -369,17 +402,28 @@ def _engine_options(side: dict, threads: int, hash_mb: int) -> dict:
     return o
 
 
+def _referee_side(cfg: dict) -> str:
+    """'base' (default) or 'new': the binary whose process is the referee."""
+    return "new" if cfg.get("referee") == "new" else "base"
+
+
+def _start_referee(cfg: dict) -> Engine:
+    # No network: the referee only uses "d", "go perft 1" and "rule"
+    return Engine(cfg[_referee_side(cfg)]["binary"], REFEREE_OPTIONS, "referee")
+
+
 def worker_init(cfg: dict):
     _W["cfg"] = cfg
     _W["error"] = None
     try:
         _W["new"] = Engine(cfg["new"]["binary"], _engine_options(cfg["new"], cfg["threads"], cfg["hash"]), "new")
         _W["base"] = Engine(cfg["base"]["binary"], _engine_options(cfg["base"], cfg["threads"], cfg["hash"]), "base")
+        _W["referee"] = _start_referee(cfg)
     except Exception as e:      # reported by play_pair (a failing initializer would loop)
         _W["error"] = f"cannot start the engines: {e}"
 
     def on_term(*_):
-        for k in ("new", "base"):
+        for k in ("new", "base", "referee"):
             if k in _W:
                 _W[k].kill()
         os._exit(0)
@@ -393,7 +437,8 @@ def play_pair(index: int, seed: int, opts_new: dict | None = None,
               opts_base: dict | None = None) -> dict:
     """Two games from the same opening and identities, colors swapped.
     'scores' are the results of the new engine (+1 / 0 / -1). opts_new /
-    opts_base are UCI options set before the pair (SPSA)."""
+    opts_base are UCI options set before the pair (SPSA). A pair whose
+    referee fails is played again with a new referee process."""
     if _W.get("error"):
         raise RuntimeError(_W["error"])
     cfg, new, base = _W["cfg"], _W["new"], _W["base"]
@@ -403,22 +448,32 @@ def play_pair(index: int, seed: int, opts_new: dict | None = None,
                 eng.set_options(opts)
             except EngineError:
                 eng.restart()           # restart() applies the options again
-    rng = random.Random(seed)
-    plies = rng.randint(cfg["plies_min"], max(cfg["plies_min"], cfg["plies_max"]))
-    try:
-        ids, opening = make_opening(new, rng, plies)
-    except EngineError:
-        new.restart()
-        ids, opening = make_opening(new, rng, plies)
-    # The base engine judges the rules: the patch tested does not judge its
-    # own games
-    g1 = play_game(new, base, ids, opening, cfg, referee=base)      # new has white
-    g2 = play_game(base, new, ids, opening, cfg, referee=base)      # new has black
+    # The referee has the view of its side: the base engine by default, so
+    # that the patch tested does not judge its own games
+    judge_new = _referee_side(cfg) == "new"
+    for attempt in range(REFEREE_RETRIES + 1):
+        referee = _W["referee"]
+        try:
+            rng = random.Random(seed)
+            plies = rng.randint(cfg["plies_min"], max(cfg["plies_min"], cfg["plies_max"]))
+            ids, opening = make_opening(referee, rng, plies)
+            g1 = play_game(new, base, ids, opening, cfg, referee,       # new has white
+                           judge_view=0 if judge_new else 1)
+            g2 = play_game(base, new, ids, opening, cfg, referee,       # new has black
+                           judge_view=1 if judge_new else 0)
+            break
+        except (RefereeError, EngineError) as e:
+            referee.kill()
+            if attempt == REFEREE_RETRIES:
+                raise RuntimeError(f"the referee failed {attempt + 1} times in a row "
+                                   f"(pair {index}), the last time: {e}") from None
+            _W["referee"] = _start_referee(cfg)
     g1["white"], g1["black"] = "new", "base"
     g2["white"], g2["black"] = "base", "new"
     scores = (g1["result"], -g2["result"])
     crashes = sum(1 for g in (g1, g2) if g["fault_kind"] == "crash")
     time_losses = sum(1 for g in (g1, g2) if g["fault_kind"] == "time")
+    illegal_moves = sum(1 for g in (g1, g2) if g["fault_kind"] == "illegal")
     games = []
     for k, g in enumerate((g1, g2)):
         games.append(f"[pair {index} game {k + 1} seed {seed}] white={g['white']} black={g['black']} "
@@ -426,7 +481,7 @@ def play_pair(index: int, seed: int, opts_new: dict | None = None,
                      + (f" error={g['error']!r}" if g.get("error") else "")
                      + f"\n{g['moves']}\n")
     return {"index": index, "scores": scores, "crashes": crashes,
-            "time_losses": time_losses, "games": games}
+            "time_losses": time_losses, "illegal_moves": illegal_moves, "games": games}
 
 
 def spin_options(binary: str) -> dict:
@@ -473,6 +528,24 @@ def check_engine(binary: str, side: dict, threads: int, hash_mb: int) -> str:
                 pass
             tail = [l for l in e.tail if not l.startswith("option name")]
         return f"{ex}\n" + "\n".join(tail[-20:])
+    finally:
+        if e is not None:
+            e.quit()
+
+
+def check_referee(binary: str) -> str:
+    """Starts the referee and asks it the board state and the legal moves of
+    the start position: returns '' when it works, or the error."""
+    e = None
+    try:
+        e = Engine(binary, REFEREE_OPTIONS, "referee")
+        e.set_position([])
+        e.board_info()
+        if not e.legal_moves():
+            return "no legal move in the start position (go perft 1)"
+        return ""
+    except (EngineError, OSError) as ex:
+        return str(ex)
     finally:
         if e is not None:
             e.quit()

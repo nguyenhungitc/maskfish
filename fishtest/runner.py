@@ -164,6 +164,11 @@ class Runner:
                     self.db.update_run(rid, **{f"{side}_bench": f"{b['nodes']} ({b['nps']} nps)"})
                     log(f"{side} bench: {b['nodes']} nodes, {b['nps']} nps\n")
             self.check_status(rid)
+        referee = run["referee"] if run["referee"] == "new" else "base"
+        err = G.check_referee(sides[referee]["binary"])
+        if err:
+            raise ValueError(f"the referee ({referee} engine) does not work:\n{err}")
+        log(f"referee: the {referee} engine\n")
 
         if run["test_type"] == "spsa" and not run["spsa"].get("params"):
             params = P.resolve(P.parse_params(run["spsa"].get("text", "")),
@@ -181,6 +186,7 @@ class Runner:
             "move_timeout": 600, "max_plies": 400,
             "adjudicate": run["adjudicate"], "full_info": bool(run["full_info"]),
             "plies_min": run["plies_min"], "plies_max": run["plies_max"],
+            "referee": referee,
         }
         if not self.db.update_run(rid, only_if_status="building", status="running",
                                   started=run["started"] or time.time()):
@@ -194,6 +200,7 @@ class Runner:
         penta = list(run["penta"])
         w, l, d = run["wins"], run["losses"], run["draws"]
         crashes, time_losses = run["crashes"], run["time_losses"]
+        illegal_moves = run["illegal_moves"]
         history = list(run["llr_history"])
         sprt = run["test_type"] == "sprt"
         spsa = run["spsa"] if run["test_type"] == "spsa" else None
@@ -256,10 +263,12 @@ class Runner:
                     w, l, d = w + (x == 1), l + (x == -1), d + (x == 0)
                 crashes += r["crashes"]
                 time_losses += r["time_losses"]
+                illegal_moves += r["illegal_moves"]
                 games_file.write("".join(r["games"]))
                 games_file.flush()
                 fields = {"penta": penta, "wins": w, "losses": l, "draws": d,
                           "crashes": crashes, "time_losses": time_losses,
+                          "illegal_moves": illegal_moves,
                           "play_seconds": base_seconds + time.time() - play_t0}
                 decision = None
                 if spsa:

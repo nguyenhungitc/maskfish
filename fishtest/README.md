@@ -88,19 +88,29 @@ or an existing local directory, and `ARCH` a plain word.
    * each engine only knows what its side knows: reveals are public, a
      captured dark piece is only told to the capturer (option *full
      information* to tell both);
+   * a **referee**, a separate process of the base binary (option *Referee*
+     of the form: the test binary instead, for a branch that changes the
+     rules), with the view of that side, gives the board state and the legal
+     moves, makes the random openings, judges the rules and checks every
+     move. An illegal move loses the game for the side that played it
+     (counted on the test page), so a move generation bug of the patch cannot
+     make the other engine refuse to search. A referee without answer voids
+     the pair, which is played again with a new referee process;
    * games end by mate / no legal move, adjudication (the side to move
      reports that it is mated, or both sides agree on |score| ≥ 3000
      internal units for 4 moves each; a mate claimed by the winning side
      alone is played out), the rules of the engine, or 400 plies. The rules
-     are judged by the base engine (command `rule`, so that the patch
-     tested does not judge its own games): third occurrence of a position (a
-     draw, or a loss for perpetual check or perpetual chase), 40-move rule (a
-     draw after 80 plies without capture, or a loss for a side without legal
-     move). Engines built before the command get the same rules from the
-     referee, except that a perpetual chase is a draw;
+     are judged by the referee (command `rule`; by default the base engine,
+     so that the patch tested does not judge its own games): third
+     occurrence of a position (a draw, or a loss for perpetual check or
+     perpetual chase), 40-move rule (a draw after 80 plies without capture,
+     or a loss for a side without legal move). With a referee built before
+     the command, the engine to move judges with `rule`; engines without it
+     get the same rules from the referee script, except that a perpetual
+     chase is a draw;
    * time controls: `10+0.1` (seconds + increment), `nodes=N`, `depth=N`,
-     `movetime=MS`. A crash, a timeout or a loss on time loses the game and is
-     counted on the test page.
+     `movetime=MS`. A crash, a timeout, a loss on time or an illegal move
+     loses the game and is counted on the test page.
 4. **Stop.** After every pair the LLR is updated; the test stops when it
    reaches a bound, when the number of games is reached, or when it is
    stopped from the page. A stopped test can be resumed: it keeps its games.

@@ -35,7 +35,7 @@ PER_PAGE = 25
 DEFAULTS = {
     "tc": "10+0.1", "threads": 1, "hash": 16, "test_type": "sprt", "elo0": 0.0, "elo1": 2.0,
     "elo_model": "normalized", "alpha": 0.05, "beta": 0.05, "num_games": 0, "priority": 0,
-    "plies_min": 2, "plies_max": 6, "adjudicate": 3000, "full_info": 0,
+    "plies_min": 2, "plies_max": 6, "adjudicate": 3000, "full_info": 0, "referee": "base",
     "base_net": B.NET_NAME, "new_net": B.NET_NAME, "base_options": "", "new_options": "",
     "base_make": "", "new_make": "", "info": "",
     "spsa_params": "", "spsa_A": P.DEFAULT_A_RATIO, "spsa_alpha": P.DEFAULT_ALPHA,
@@ -223,8 +223,9 @@ def create_app(settings: dict) -> Flask:
                     cls = "finished"
         lines.append(f"Total: {games} W: {run['wins']} L: {run['losses']} D: {run['draws']}")
         lines.append("Ptnml(0-2): " + ", ".join(str(c) for c in penta))
-        if run["crashes"] or run["time_losses"]:
-            lines.append(f"Crashes: {run['crashes']} Time losses: {run['time_losses']}")
+        if run["crashes"] or run["time_losses"] or run["illegal_moves"]:
+            lines.append(f"Crashes: {run['crashes']} Time losses: {run['time_losses']}"
+                         + (f" Illegal moves: {run['illegal_moves']}" if run["illegal_moves"] else ""))
         return {"lines": lines, "cls": cls, "games": games, "elo": es}
 
     app.jinja_env.globals.update(results=results)
@@ -433,6 +434,7 @@ def create_app(settings: dict) -> Flask:
             for k in ("ref", "net", "options", "make"):
                 v[f"base_{k}"] = v[f"new_{k}"]
         fields["elo_model"] = "logistic" if v["elo_model"] == "logistic" else "normalized"
+        fields["referee"] = "new" if v["referee"] == "new" else "base"
         if fields["test_type"] == "sprt" and fields["elo1"] <= fields["elo0"]:
             errors.append("SPRT: elo1 must be greater than elo0")
         if fields["test_type"] in ("numgames", "spsa") and fields["num_games"] < 2:

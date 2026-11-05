@@ -101,6 +101,12 @@
       <label>max <input type="number" name="plies_max" value="{{ v.plies_max }}" min="0"></label>
       <label>Adjudication (internal units) <input type="number" name="adjudicate" value="{{ v.adjudicate }}" min="100"></label>
       <label class="check"><input type="checkbox" name="full_info" {{ 'checked' if v.full_info|int }}> Full information (both sides learn captured dark pieces)</label>
+      <label class="base-side">Referee (board state, legal moves, rules)
+        <select name="referee" title="A separate process of this binary checks every move and judges the rules. Choose the test branch when it changes the rules.">
+          <option value="base" {{ 'selected' if v.referee != 'new' }}>base engine (default)</option>
+          <option value="new" {{ 'selected' if v.referee == 'new' }}>test engine (a branch that changes the rules)</option>
+        </select>
+      </label>
     </div>
   </section>
 
