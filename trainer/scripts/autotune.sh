@@ -23,9 +23,11 @@
 #                                                  cycles (OPT_RETRY times); the options
 #                                                  that leaned positive are also tested
 #                                                  together (small gains may add up)
-#                     The chance node options are tested on the clock instead
-#                     (OPT_TC_TESTS: the node count misses the work of the
-#                     reveal outcomes), STC then LTC, never removed from the code.
+#                     What is tested lives in the option plan (OPT_PLAN, default
+#                     scripts/option-plan.env), not in this script: exclusions,
+#                     numeric values, groups and tests on the clock (OPT_TC_TESTS:
+#                     STC then LTC, never removed from the code). Without a plan
+#                     no option cycle runs.
 #  Stage 5 · loop     stages 3 + 4 repeat. After PATIENCE failed attempts in a
 #                     row the data and search depth are scaled up (level +1,
 #                     up to LEVEL_CAP). At LEVEL_CAP, PATIENCE more failures
@@ -50,12 +52,13 @@
 #     scripts/autotune.sh --stop          # stop safely (resume later)
 #     scripts/autotune.sh --report        # write autotune/REPORT.md and send it to Telegram
 #     scripts/autotune.sh --install-cron  # restart after a reboot
-#     scripts/autotune.sh --init-config   # write scripts/autotune.env from the example
+#     scripts/autotune.sh --init-config   # write scripts/autotune.env, option-plan.env from the examples
 #     scripts/autotune.sh --dry-run       # print what the next round would run
 #
 #  Configuration: scripts/pipeline.env (Telegram, hardware, data, training,
-#  the reference engine paths) and scripts/autotune.env (stages, options; see
-#  scripts/autotune.env.example).
+#  the reference engine paths), scripts/autotune.env (stages, how options are
+#  tested; see scripts/autotune.env.example) and scripts/option-plan.env (which
+#  options are tested; see scripts/option-plan.env.example).
 # =============================================================================
 set -uo pipefail
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
@@ -84,7 +87,7 @@ while [[ $# -gt 0 ]]; do
     --init-config)   ACTION="initcfg"; shift ;;
     --config)        CONFIG_AT="${2:-}"; shift 2 ;;
     --dry-run)       DRY_RUN=1; shift ;;
-    -h|--help)       sed -n '2,59p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,62p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -98,6 +101,11 @@ if [[ -n "$CONFIG_AT" ]]; then
   [[ -f "$CONFIG_AT" ]] || { echo "Config file not found: $CONFIG_AT" >&2; exit 2; }
   source "$CONFIG_AT"
 fi
+# The option plan: which engine options the option cycles test and how (scripts/README.md 4.4).
+# Its tests are temporary (an entry is deleted once decided), so none is defined in this script.
+: "${OPT_PLAN:=$SCRIPT_DIR/option-plan.env}"
+OPT_PLAN_OK=0
+if [[ -f "$OPT_PLAN" ]]; then source "$OPT_PLAN"; OPT_PLAN_OK=1; fi
 
 NCPU=$(nproc 2>/dev/null || echo 2)
 if [[ -z "${PYTHON:-}" ]]; then
@@ -169,42 +177,42 @@ esac
 : "${OPT_MAX_PAIRS:=12000}"
 : "${OPT_RETRY:=2}"                  # later cycles in which an undecided option is tested again
 : "${OPT_GROUP:=1}"                  # test the undecided options that leaned positive together
-: "${OPT_EXCLUDE:=Ponder UCI_ShowWDL RawScore SharedHistory StopEarly JieqiMaterial SeekMate SimpleThreadVote SimpleMtg ThreatCache ThreatsIncremental VoteSinglePVOnly FrequentTimeCheck TMEffortFactor TMReductionInterp NMPOddThreads SeekMatePrevScore MidMirrorPawnTieBreak MidMirrorNoKingFlag ChanceExpandMain ChanceMixTT ChanceMixFut ChanceRevealCheckQs SMPSkip ChanceQsearchRep CheckExtension ChanceChildWindow ChanceTTProbe}"
-                                     # not tested at fixed nodes: output, threads, time management,
-                                     # speed, data or network format, SeekMate*, and the chance node
-                                     # options (no effect alone, or the node count misses their work:
-                                     # tested on the clock by OPT_TC_TESTS); OptimismMerged is added
-                                     # below unless EVAL_SCALING is Alignment / Correlation
-# options that change the evaluation in a way the trainer does not model: never in the data
-# (EvalScaling: the data must be made with the scaling the training uses, EVAL_SCALING)
-: "${NO_DATA_OPTS:=RevealQuiet RevealQsearchEvasions EvalScaling}"
-: "${OPT_INT_TESTS:=ChanceRiskAversion:10,20,-10}"   # numeric options: Name:value,value
-: "${OPT_INT_REMOVABLE:=}"                           # numeric options that may be removed
-: "${OPT_GROUP_TESTS:=EvalCorrelation:EvalScaling=Correlation ChanceLinear:ChanceModel=Linear+ChanceRiskAversion=3}"
-                                     # option groups tested together: Name:Opt=V+Opt=V
-                                     # (a winning combo value is applied by hand: no verified patch)
 : "${OPT_ONLY:=}"                    # only test these options (space separated)
-# Chance node options, tested on the clock (scripts/README.md 4.4): every test is an
-# SPRT at OPT_TC (STC) and, if it wins, at OPT_LTC; on by default (verified patch) only when
-# both win. A = options in use + the test's options, B = options in use. In order, one word each:
-#   id:Opt=V+Opt=V[:need=Name][:alt=id][:sprt=E0,E1][:both=Opt=V+Opt=V][:workers=N]
-#   need=Name  only when the option Name is in use with a non-default value (else skipped,
-#              looked at again in the next cycle)
-#   alt=id     an alternative to the test id: if id was accepted, its options are set back to
-#              their defaults in A (a head-to-head match; the winner stays in use)
-#   both=…     options of A and B (e.g. Threads=4 for SMPSkip), not part of the result
-# They are never removed from the code: no gain → left as it is (retested OPT_RETRY times if
-# undecided).
-: "${OPT_TC_TESTS=cap:ChanceMaxLayers=1+ChanceCV=3 mix:ChanceMix=6+ChanceQsearchRep=true+ChanceMixTT=true+ChanceMixFut=true:alt=cap capcheck:ChanceRevealCheck=2:need=ChanceMaxLayers:sprt=0,3 caplate:ChanceLateDark=12:need=ChanceMaxLayers:sprt=0,3 capqsrep:ChanceQsearchRep=true:need=ChanceMaxLayers:sprt=0,3 mixlow:ChanceMixLow=15:need=ChanceMix:sprt=0,3 qsdark:QsearchDarkPly=4:sprt=0,3 checkext:CheckExtension=true:sprt=0,3 childwindow:ChanceChildWindow=true:sprt=0,3 ttprobe:ChanceTTProbe=true:sprt=0,3 smpskip:SMPSkip=true:both=Threads=4:workers=1:sprt=0,3}"
+# From the option plan (empty without one; see option-plan.env.example):
+#   OPT_EXCLUDE        boolean options never tested at fixed nodes (output, threads, time
+#                      management, speed, data or network format, no effect alone, or tested on
+#                      the clock instead)
+#   NO_DATA_OPTS       accepted options (name prefixes) never used to generate data
+#   OPT_INT_TESTS      numeric options: Name:value,value     OPT_INT_REMOVABLE: those that may go
+#   OPT_GROUP_TESTS    options tested together: id:Opt=V+Opt=V (a winning group is applied by hand)
+#   OPT_TC_TESTS       tests on the clock, in order: every one is an SPRT at OPT_TC (STC) and,
+#                      if it wins, at OPT_LTC; on by default (verified patch) only when both win;
+#                      never removed from the code. A = options in use + the test's options,
+#                      B = options in use. One word each:
+#     id:Opt=V+Opt=V[:need=[!]Name,...][:alt=id][:sprt=E0,E1][:both=Opt=V+Opt=V][:workers=N]
+#     need=Name    only when Name is in use with a non-default value; need=!Name: only when it
+#                  is not (else skipped, looked at again in the next cycle)
+#     alt=id       an alternative to the test id: if id was accepted, its options are set back
+#                  to their defaults in A (a head-to-head match; the winner stays in use)
+#     both=…       options of A and B (e.g. Threads=4), not part of the result; with Threads=T
+#                  the default workers are physical cores / T
+#     workers=N    workers of this test
+#   A test whose options are all in use already is skipped.
+: "${OPT_EXCLUDE:=}"; : "${NO_DATA_OPTS:=}"; : "${OPT_INT_TESTS:=}"; : "${OPT_INT_REMOVABLE:=}"
+: "${OPT_GROUP_TESTS:=}"; : "${OPT_TC_TESTS:=}"
+# the plan may write a list over several lines: one space between the words
+for _v in OPT_EXCLUDE NO_DATA_OPTS OPT_INT_TESTS OPT_INT_REMOVABLE OPT_GROUP_TESTS OPT_TC_TESTS OPT_ONLY; do
+  read -r -d '' -a _w <<< "${!_v}"; printf -v "$_v" '%s' "${_w[*]}"
+done
 : "${OPT_TC:=10+0.1}"                # STC of OPT_TC_TESTS (match.py --tc)
 : "${OPT_LTC:=40+0.4}"               # LTC, after an STC win (empty: the STC decides)
 : "${OPT_TC_SPRT:=0 5}"              # default bounds of OPT_TC_TESTS (sprt=… per test)
 : "${OPT_TC_MAX_PAIRS:=6000}"
-if [[ -z "${OPT_TC_WORKERS:-}" ]]; then   # physical cores − 1: games on the clock need a core each
-  _pc=$(lscpu -p=Core,Socket 2>/dev/null | grep -v '^#' | sort -u | wc -l)
-  (( _pc > 0 )) || _pc=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
-  OPT_TC_WORKERS=$(( _pc > 1 ? _pc - 1 : 1 ))
-fi
+PHYS_CORES=$(lscpu -p=Core,Socket 2>/dev/null | grep -v '^#' | sort -u | wc -l)
+(( PHYS_CORES > 0 )) || PHYS_CORES=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
+(( PHYS_CORES > 0 )) || PHYS_CORES=1
+# physical cores − 1: games on the clock need a core each
+: "${OPT_TC_WORKERS:=$(( PHYS_CORES > 1 ? PHYS_CORES - 1 : 1 ))}"
 : "${BENCH_ARGS:=16 1 13}"           # bench that every patch must reproduce exactly
 : "${PIPELINE:=$SCRIPT_DIR/pipeline.sh}"
 
@@ -216,8 +224,6 @@ ENGINE="${ENGINE:-$SRC_DIR/$BIN_BASE}"
 # the engine option EvalScaling of pipeline.env (README 7.13) in every match
 : "${EVAL_SCALING:=Complexity}"
 EVAL_OPT=""; [[ "$EVAL_SCALING" != Complexity ]] && EVAL_OPT="EvalScaling=$EVAL_SCALING"
-# OptimismMerged only changes EvalScaling Alignment / Correlation: no effect to test otherwise
-[[ "$EVAL_SCALING" == Complexity && " $OPT_EXCLUDE " != *" OptimismMerged "* ]] && OPT_EXCLUDE+=" OptimismMerged"
 
 AT_DIR="$TRAINER_DIR/autotune"
 WORK="$AT_DIR/work"
@@ -279,16 +285,6 @@ run_logged() {   # run_logged LOGFILE cmd...  (background + wait: signals are ha
 declare -A ST=()
 state_load() {
   [[ -f "$STATE_FILE" ]] && source "$STATE_FILE"
-  # A state written when EvalCorrelation was a bool option: it is now the value
-  # Correlation of EvalScaling (same evaluation; the test keeps its id)
-  local k v
-  for k in "${!ST[@]}"; do
-    v="${ST[$k]}"
-    [[ "$v" == *EvalCorrelation=* ]] || continue
-    v="${v//EvalCorrelation=true/EvalScaling=Correlation}"
-    v="${v//EvalCorrelation=false/}"
-    ST[$k]="$v"
-  done
   return 0
 }
 state_save() {
@@ -559,11 +555,14 @@ patch_files_from_head() {
 # ----------------------------------------------------------------------------- engine options (stage 4)
 build_option_catalog() {   # CATALOG lines: id|kind|values (space separated, each Name=V+Name=V)|removable|option
   CATALOG=(); OPT_DEF=()
-  local name kind def lo hi
+  local name kind def lo hi t o spec
+  # the options of the clock tests are not tested at fixed nodes as well
+  local skip=" $OPT_EXCLUDE "
+  for t in $OPT_TC_TESTS; do spec=${t#*:}; spec=${spec%%:*}; for o in ${spec//+/ }; do skip+="${o%%=*} "; done; done
   while IFS=$'\t' read -r name kind def lo hi; do
     OPT_DEF[$name]=$def
     [[ "$kind" == bool ]] || continue
-    [[ " $OPT_EXCLUDE " == *" $name "* ]] && continue
+    [[ "$skip" == *" $name "* ]] && continue
     local alt=true; [[ "$def" == true ]] && alt=false
     CATALOG+=("$name|bool|$name=$alt|1|$name")
   done < <("$PYTHON" "$OPTPATCH" list --src "$SRC_DIR")
@@ -575,6 +574,7 @@ build_option_catalog() {   # CATALOG lines: id|kind|values (space separated, eac
   done
   for t in $OPT_GROUP_TESTS; do CATALOG+=("${t%%:*}|group|${t#*:}|0|${t%%:*}"); done
   for t in $OPT_TC_TESTS; do CATALOG+=("${t%%:*}|tc|${t#*:}|0|${t%%:*}"); done
+  plan_check
   if [[ -n "$OPT_ONLY" ]]; then
     local keep=() c; for c in "${CATALOG[@]}"; do [[ " $OPT_ONLY " == *" ${c%%|*} "* ]] && keep+=("$c"); done
     CATALOG=("${keep[@]}")
@@ -611,17 +611,44 @@ Elo $(html "$elo")$( ((okp)) || echo '
 <code>$(html "$line")</code>"
 }
 
+# Names of the option plan that are no options of the engine (any more, e.g. removed after their
+# SPRT): reported once per cycle, so that the entry is deleted from the plan.
+plan_check() {
+  local names=() t spec m o w p unknown=""
+  names+=($OPT_EXCLUDE)
+  for t in $OPT_INT_TESTS; do names+=("${t%%:*}"); done
+  for t in $OPT_GROUP_TESTS $OPT_TC_TESTS; do
+    local IFS=':'; local parts=(${t#*:}); unset IFS
+    for o in ${parts[0]//+/ }; do names+=("${o%%=*}"); done
+    for m in "${parts[@]:1}"; do
+      case "$m" in
+        need=*) w=${m#need=}; for o in ${w//,/ }; do names+=("${o#!}"); done ;;
+        both=*) w=${m#both=}; for o in ${w//+/ }; do names+=("${o%%=*}"); done ;;
+      esac
+    done
+  done
+  for w in "${names[@]}"; do
+    [[ -n "$w" && -z "${OPT_DEF[$w]+x}" && " $unknown " != *" $w "* ]] && unknown+=" $w"
+  done
+  for p in $NO_DATA_OPTS; do   # name prefixes
+    local hit=0; for w in "${!OPT_DEF[@]}"; do [[ "$w" == "$p"* ]] && { hit=1; break; }; done
+    (( hit )) || unknown+=" $p*"
+  done
+  [[ -n "$unknown" ]] && say "⚠ Option plan $(html "$OPT_PLAN"): no such engine option (delete these entries):<code>$(html "$unknown")</code>"
+  return 0
+}
+
 # ---- tests on the clock (OPT_TC_TESTS)
 declare -A OPT_DEF=()   # option → default (build_option_catalog)
 tc_parse() {   # tc_parse "Opt=V+Opt=V:mod=…" → TC_OPTS TC_NEED TC_ALT TC_SPRT TC_BOTH TC_WORKERS
   local spec="$1" m
   TC_OPTS="${spec%%:*}"; TC_OPTS="${TC_OPTS//+/ }"
-  TC_NEED=""; TC_ALT=""; TC_SPRT="$OPT_TC_SPRT"; TC_BOTH=""; TC_WORKERS="$OPT_TC_WORKERS"
-  [[ "$spec" == *:* ]] || return 0
-  local IFS=':'; local mods=(${spec#*:}); unset IFS
+  TC_NEED=""; TC_ALT=""; TC_SPRT="$OPT_TC_SPRT"; TC_BOTH=""; TC_WORKERS=""
+  local mods=()
+  if [[ "$spec" == *:* ]]; then local IFS=':'; mods=(${spec#*:}); unset IFS; fi
   for m in "${mods[@]}"; do
     case "$m" in
-      need=*)    TC_NEED="${m#need=}" ;;
+      need=*)    TC_NEED="${m#need=}"; TC_NEED="${TC_NEED//,/ }" ;;
       alt=*)     TC_ALT="${m#alt=}" ;;
       sprt=*)    TC_SPRT="${m#sprt=}"; TC_SPRT="${TC_SPRT//,/ }" ;;
       both=*)    TC_BOTH="${m#both=}"; TC_BOTH="${TC_BOTH//+/ }" ;;
@@ -629,6 +656,18 @@ tc_parse() {   # tc_parse "Opt=V+Opt=V:mod=…" → TC_OPTS TC_NEED TC_ALT TC_SP
       *) log "⚠ OPT_TC_TESTS: unknown modifier '$m' (ignored)" ;;
     esac
   done
+  if [[ -z "$TC_WORKERS" ]]; then   # several threads per engine: fewer games at a time
+    local t=1 o; for o in $TC_BOTH; do [[ "${o%%=*}" == Threads ]] && t="${o#*=}"; done
+    if (( t > 1 )); then TC_WORKERS=$(( PHYS_CORES / t > 0 ? PHYS_CORES / t : 1 )); else TC_WORKERS=$OPT_TC_WORKERS; fi
+  fi
+}
+tc_need_ok() {   # 0 if every need= condition of the test holds (TC_NEED); else prints the first that fails
+  local c; for c in $TC_NEED; do
+    if [[ "$c" == '!'* ]]; then opt_in_use "${c#!}" && { printf '%s is in use' "${c#!}"; return 1; }
+    else opt_in_use "$c" || { printf '%s is not in use' "$c"; return 1; }
+    fi
+  done
+  return 0
 }
 opt_value() {   # value of option $1 in the options in use (empty: not set)
   local o v=""; for o in $(best_opts); do [[ "${o%%=*}" == "$1" ]] && v="${o#*=}"; done; printf '%s' "$v"
@@ -653,15 +692,15 @@ opt_sprt_tc() {   # opt_sprt_tc NAME "TRY-OPTS" TC → M_*  (uses TC_SPRT TC_BOT
 tc_test() {   # tc_test I N CYCLE GEN ID SPEC STATE: one OPT_TC_TESTS entry (STC, then LTC)
   local i="$1" n="$2" cyc="$3" g="$4" id="$5" spec="$6" stv="$7"
   tc_parse "$spec"
-  if [[ -n "$TC_NEED" ]] && ! opt_in_use "$TC_NEED"; then
-    log "  [$i/$n] $id: skipped, $TC_NEED is not in use"; return 0
-  fi
+  local why; if ! why=$(tc_need_ok); then log "  [$i/$n] $id: skipped, $why"; return 0; fi
   local tryopts="$TC_OPTS" o vs=""
   if [[ -n "$TC_ALT" && "$(st "opt_$TC_ALT")" == default:* ]]; then   # head-to-head with the winner
     for o in $(opt_value_list "$TC_ALT"); do vs+=" ${o%%=*}=${OPT_DEF[${o%%=*}]}"; done
     tryopts="$(opts_merge "$vs" "$TC_OPTS")"
   fi
   tryopts=$(echo $tryopts)
+  local inuse=1; for o in $tryopts; do [[ "$(opt_value "${o%%=*}")" == "${o#*=}" ]] || inuse=0; done
+  if (( inuse )); then log "  [$i/$n] $id: skipped, its options are in use already"; return 0; fi
   local res="" elo="" line="" tcv lvl
   for lvl in STC LTC; do
     tcv=$OPT_TC; [[ $lvl == LTC ]] && tcv=$OPT_LTC
@@ -714,7 +753,7 @@ option_cycle() {
       inc:*) (( $(inc_count "$stv") <= OPT_RETRY )) && todo+=("$c") ;;
     esac
   done
-  say "🔬 Option cycle ${cyc} with net gen$g: ${#todo[@]} option(s) to test (SPRT [${OPT_SPRT}], ${OPT_NODES} nodes, ≤ ${OPT_MAX_PAIRS} pairs; chance node options on the clock: ${OPT_TC}${OPT_LTC:+ then $OPT_LTC}, ${OPT_TC_WORKERS} workers)"
+  say "🔬 Option cycle ${cyc} with net gen$g: ${#todo[@]} option(s) to test (SPRT [${OPT_SPRT}], ${OPT_NODES} nodes, ≤ ${OPT_MAX_PAIRS} pairs; tests on the clock: ${OPT_TC}${OPT_LTC:+ then $OPT_LTC}, ${OPT_TC_WORKERS} workers)"
   local i=0 kind values removable optname
   for c in "${todo[@]}"; do
     IFS='|' read -r id kind values removable optname <<< "$c"
@@ -786,6 +825,7 @@ Elo $(html "$elo") <code>$(html "$lastline")</code>"
 }
 
 option_cycle_due() {   # 0 if an option cycle should run now
+  (( OPT_PLAN_OK )) || return 1                                               # no option plan
   [[ "$(st opt_running)" == 1 ]] && return 0
   local g; g=$(cur_gen); (( g >= 1 && g >= OPT_START_GEN )) || return 1
   local strong=0
@@ -891,7 +931,7 @@ check_new_net() {   # check_new_net GEN STAGE
 check_stop() {   # returns 0 if finished
   if [[ "$(st stage)" == self ]] && (( $(st level 0) >= LEVEL_CAP && $(st fails 0) >= PATIENCE )); then
     # last chance: an option cycle with the current net (unless one already ran on it)
-    if [[ "$(st opt_last_gen)" != "$(cur_gen)" || "$(st opt_running)" == 1 ]]; then
+    if (( OPT_PLAN_OK )) && [[ "$(st opt_last_gen)" != "$(cur_gen)" || "$(st opt_running)" == 1 ]]; then
       say "⛰ Level ${LEVEL_CAP} and ${PATIENCE} failures in a row → one more option cycle before stopping"
       option_cycle || { say "❌ Option cycle failed — see $(html "$LOGF")"; exit 1; }
       if [[ "$(st "opt_gain_c$(st opt_cycles)")" == 1 ]]; then st_set fails 0; return 1; fi
@@ -976,8 +1016,12 @@ $(html "$(printf '• %s\n' "${err[@]}")")"
 # ----------------------------------------------------------------------------- actions
 case "$ACTION" in
   initcfg)
-    if [[ -e "$SCRIPT_DIR/autotune.env" ]]; then echo "$SCRIPT_DIR/autotune.env already exists" >&2; exit 2; fi
-    cp "$SCRIPT_DIR/autotune.env.example" "$SCRIPT_DIR/autotune.env" && echo "Created $SCRIPT_DIR/autotune.env"; exit $? ;;
+    rc=0
+    for f in autotune.env option-plan.env; do
+      if [[ -e "$SCRIPT_DIR/$f" ]]; then echo "$SCRIPT_DIR/$f already exists (kept)" >&2
+      else cp "$SCRIPT_DIR/$f.example" "$SCRIPT_DIR/$f" && echo "Created $SCRIPT_DIR/$f" || rc=1; fi
+    done
+    exit $rc ;;
   tgtest)
     tg_send "$TAG · 🔔 Telegram works!" && echo "Sent."; exit $? ;;
   reset)
@@ -1008,6 +1052,9 @@ case "$ACTION" in
     echo "REF_MODE: $REF_MODE · stage: $(st stage ref) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
     echo "Current net: gen$(cur_gen) · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best: gen$(st best_ext_gen '?') ($(st best_ext '?'))"
     echo "Option cycles: $(st opt_cycles 0)$( [[ "$(st opt_running)" == 1 ]] && echo ' (one running)') · options in use: $(best_opts)"
+    if (( OPT_PLAN_OK )); then
+      echo "Option plan: $OPT_PLAN ($(wc -w <<< "$OPT_TC_TESTS") clock tests, $(wc -w <<< "$OPT_GROUP_TESTS") groups, $(wc -w <<< "$OPT_INT_TESTS") numeric)"
+    else echo "Option plan: none ($OPT_PLAN missing): no option cycle"; fi
     [[ -f "$AT_DIR/.pid" ]] && kill -0 "$(cat "$AT_DIR/.pid")" 2>/dev/null && echo "Running (pid $(cat "$AT_DIR/.pid"))" || echo "Not running"
     [[ -f "$DEC_FILE" ]] && { echo; column -t -s $'\t' "$DEC_FILE" 2>/dev/null || cat "$DEC_FILE"; }
     exit 0 ;;
@@ -1070,6 +1117,7 @@ case "$REF_MODE" in
   off)     PLAN="self-play only, no reference engine → engine options from gen${OPT_START_GEN}" ;;
 esac
 say "🚀 Started${RESUMED} (REF_MODE=${REF_MODE}): stage <b>$(st stage)</b>, current net gen$(cur_gen). Plan: ${PLAN} → loop until no gain at level ${LEVEL_CAP}."
+(( OPT_PLAN_OK )) || say "⚠ No option plan ($(html "$OPT_PLAN")): no option cycle will run (see scripts/option-plan.env.example)"
 
 while :; do
   check_stop && exit 0

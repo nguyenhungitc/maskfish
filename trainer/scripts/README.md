@@ -11,6 +11,7 @@ without manual steps:
 | `hw_probe.py` | Hardware probe used by `pipeline.sh` (CPU, RAM, disk, GPU, largest batch that fits in VRAM) |
 | `pipeline.env.example` | Configuration template shared by both scripts |
 | `autotune.env.example` | Settings of the stages and option tests |
+| `option-plan.env.example` | Option plan: which engine options the option cycles test, and how |
 | `optpatch.py` | Source rewriting used for the option patches |
 
 The **reference engine** ("ref-engine" in file names and messages) is
@@ -67,6 +68,7 @@ themselves, so any working directory works).
 ```
 cp scripts/pipeline.env.example scripts/pipeline.env     # shared settings, holds the Telegram token
 scripts/autotune.sh --init-config                        # optional: writes scripts/autotune.env
+                                                         # and scripts/option-plan.env
 ```
 
 `pipeline.env` holds the Telegram bot, the build architecture, the data
@@ -75,8 +77,10 @@ generation, training and SPRT parameters. Hardware values left empty
 machine by `hw_probe.py`. Every variable is documented in the file.
 
 `autotune.env` only holds the settings of the loop (reference engines, stop
-criteria, which options to test). Without it, the defaults listed in
-[section 4.6](#46-settings) are used.
+criteria, how options are tested). Without it, the defaults listed in
+[section 4.6](#46-settings) are used. Which options are tested lives in a
+third file, the option plan `option-plan.env` ([section 4.4](#44-engine-option-tests)):
+its entries are temporary, so none is written into the scripts.
 
 **Telegram.** Create a bot with @BotFather (`/newbot`), send it a message,
 then read your chat id from
@@ -200,7 +204,7 @@ scripts/autotune.sh --install-cron     # also restart after a reboot (@reboot cr
 scripts/autotune.sh --status           # stage, current net, Elo vs ref-engine, every decision
 scripts/autotune.sh --stop             # stop safely; run again to resume
 scripts/autotune.sh --report           # rewrite autotune/REPORT.md and send it to Telegram
-scripts/autotune.sh --init-config      # write scripts/autotune.env from autotune.env.example
+scripts/autotune.sh --init-config      # write scripts/autotune.env and option-plan.env from the examples
 scripts/autotune.sh --dry-run          # print what the next round would run
 scripts/autotune.sh --test-telegram
 scripts/autotune.sh --config FILE      # another settings file instead of scripts/autotune.env
@@ -280,62 +284,63 @@ before the first fit.
 ### 4.4. Engine option tests
 
 The first cycle starts once a net reaches `OPT_START_ELO` against ref-engine
-(or in stage self); then a new cycle runs every `OPT_EVERY` new nets, and once
-more before stopping. The options are read from `src/engine.cpp`
-(`options.add(...)`), so new options are picked up automatically: booleans are
-tested with the opposite of their default, numeric options with the values
-of `OPT_INT_TESTS`, groups from `OPT_GROUP_TESTS`. `OPT_EXCLUDE` are never
-tested: output only, several threads only (`SharedHistory`,
-`SimpleThreadVote`, `NMPOddThreads`: the matches use one thread), time
-management only (`StopEarly`, `SimpleMtg`, `TMEffortFactor`,
-`TMReductionInterp`: no effect with a node limit, test them with `match.py
---tc`), speed only (`ThreatCache`, `ThreatsIncremental`: same search, compare
-the speed with `bench`; a fixed-node SPRT would see 0 Elo and remove them),
-data format (`JieqiMaterial`), network format (`MidMirrorPawnTieBreak`,
-`MidMirrorNoKingFlag`: a network trained with the same setting is needed,
-the engine does not load the others), `SeekMate` with
-`SeekMatePrevScore`, which do not aim at playing strength, `OptimismMerged`
-unless `EVAL_SCALING` is `Alignment` or `Correlation` (no effect otherwise),
-and the chance node options (`ChanceExpandMain`, `ChanceMixTT`,
-`ChanceMixFut`, `ChanceRevealCheckQs`: no effect alone; `ChanceQsearchRep`,
-`CheckExtension`, `ChanceChildWindow`, `ChanceTTProbe`, `SMPSkip`), which are
-tested on the clock instead (below).
-Accepted options are used for the data too, except `NO_DATA_OPTS`
-(`RevealQuiet*` and `RevealQsearchEvasions`, and `EvalScaling`: the data
-is made with the scaling the training uses, `EVAL_SCALING` of pipeline.env;
-the group `EvalCorrelation` tests `EvalScaling=Correlation` with the
-current net; to adopt it, set `EVAL_SCALING="Correlation"` in pipeline.env so
-that the data and the training use it too).
+(or in stage self) and net `OPT_START_GEN`; then a new cycle runs every
+`OPT_EVERY` new nets, and once more before stopping.
+
+**The option plan.** What a cycle tests is not written in the scripts: an
+engine option is tested until its SPRT decides, and is then made the
+default, removed or left as it is, so every entry is temporary. The plan is
+`scripts/option-plan.env` (`OPT_PLAN`; copy it from `option-plan.env.example`,
+which holds the current plan and documents every field). Without a plan, no
+option cycle runs. The plan sets:
+
+| Variable | Meaning |
+| --- | --- |
+| `OPT_EXCLUDE` | Boolean options never tested at fixed nodes: output or protocol only, data or network format, speed only (compare with `bench`), no aim at playing strength, no effect alone. The options of `OPT_TC_TESTS` are left out automatically |
+| `NO_DATA_OPTS` | Accepted options (name prefixes) never used to generate data: a search preference, or an evaluation the trainer does not model (the data is made with `EVAL_SCALING` of pipeline.env) |
+| `OPT_INT_TESTS`, `OPT_INT_REMOVABLE` | Numeric options: `Name:value,value`; those that may be removed after H0 |
+| `OPT_GROUP_TESTS` | Options tested together: `id:Opt=V+Opt=V` (a winning group is applied by hand) |
+| `OPT_TC_TESTS` | Tests on the clock, in order (below) |
+
+The boolean options are read from `src/engine.cpp` (`options.add(...)`), so a
+new option is picked up automatically and tested with the opposite of its
+default, unless the plan excludes it. Once a cycle starts, autotune reports
+every name of the plan that is no option of the engine any more (e.g. removed
+after its SPRT), so that the entry can be deleted. A decided entry is not run
+again anyway (`autotune.sh --status`, `autotune/decisions.tsv`).
 
 Each value plays an SPRT `OPT_SPRT` (default `[0, 3]`) with the current net,
 at `OPT_NODES` nodes per move, against the options in use, for at most
 `OPT_MAX_PAIRS` pairs.
 
-**Chance node options on the clock (`OPT_TC_TESTS`).** Maskfish counts nodes
-in `do_move()` only: the outcomes of a reveal (`do_flip`) and their NNUE
-evaluations are not counted, so a fixed-node match misjudges the options that
-change how many outcomes are searched.
-These configurations play with `match.py --tc`: `OPT_TC` (STC, `10+0.1`), then,
-if they win, `OPT_LTC` (`40+0.4`; empty = the STC decides), with
-`OPT_TC_WORKERS` workers (physical cores − 1) and at most `OPT_TC_MAX_PAIRS`
-pairs. Only a win at both makes them the default (verified patch); they are
-never removed from the code. Each word of `OPT_TC_TESTS` is
-`id:Opt=V+Opt=V[:need=Name][:alt=id][:sprt=E0,E1][:both=Opt=V+…][:workers=N]`,
-tested in order, against the options in use:
+**Tests on the clock (`OPT_TC_TESTS`).** Maskfish counts nodes in `do_move()`
+only: the outcomes of a reveal (`do_flip`) and their NNUE evaluations are not
+counted, so a fixed-node match misjudges the options that change how many
+outcomes are searched; options of time management or of several threads have
+no effect at fixed nodes with one thread. These tests play with `match.py
+--tc`: `OPT_TC` (STC, `10+0.1`), then, if they win, `OPT_LTC` (`40+0.4`; empty =
+the STC decides), with `OPT_TC_WORKERS` workers (physical cores − 1) and at
+most `OPT_TC_MAX_PAIRS` pairs. Only a win at both makes them the default
+(verified patch); they are never removed from the code. Each entry is
 
-| Default test | Options | Notes |
-| --- | --- | --- |
-| `cap` | `ChanceMaxLayers=1 ChanceCV=3` | `[0, 5]` |
-| `mix` | `ChanceMix=6 ChanceQsearchRep ChanceMixTT ChanceMixFut` | `[0, 5]`; `alt=cap`: if `cap` won, plays against it with `cap`'s options set back to their defaults |
-| `capcheck`, `caplate`, `capqsrep` | `ChanceRevealCheck=2`, `ChanceLateDark=12`, `ChanceQsearchRep` | `[0, 3]`, only with `ChanceMaxLayers` in use (`need=`) |
-| `mixlow` | `ChanceMixLow=15` | `[0, 3]`, only with `ChanceMix` in use |
-| `qsdark`, `checkext` | `QsearchDarkPly=4`, `CheckExtension` | `[0, 3]` |
-| `childwindow`, `ttprobe` | `ChanceChildWindow`, `ChanceTTProbe` | `[0, 3]` |
-| `smpskip` | `SMPSkip` | `[0, 3]`, `Threads=4` on both sides, 1 worker |
+```
+id:Opt=V+Opt=V[:need=[!]Name,...][:alt=id][:sprt=E0,E1][:both=Opt=V+Opt=V][:workers=N]
+```
 
-A test whose `need=` option is not in use is skipped and looked at again in
-the next cycle. Clock games take much longer than node games: an STC SPRT
-of a few thousand pairs on 3 workers is about a day, an LTC one several days.
+tested in order, with A = the options in use + the entry's options and B = the
+options in use:
+
+| Field | Meaning |
+| --- | --- |
+| `need=Name` / `need=!Name` | Only when `Name` is in use with a non-default value / only when it is not (comma separated, all must hold); otherwise skipped and looked at again in the next cycle |
+| `alt=id` | An alternative to the test `id`: if `id` was accepted, its options are set back to their defaults in A (a head-to-head match; the winner stays in use) |
+| `sprt=E0,E1` | SPRT bounds of this entry (default `OPT_TC_SPRT`, `[0, 5]`; `0,3` for small changes) |
+| `both=Opt=V+...` | Options of A and B, not part of the result (e.g. `Threads=4`); with `Threads=T` the default workers are physical cores / T |
+| `workers=N` | Workers of this entry |
+
+An entry whose options are all in use already is skipped. Clock games take
+much longer than node games: an STC SPRT of a few thousand pairs on 3 workers
+is about a day, an LTC one several days.
 
 | Result | Action |
 | --- | --- |
@@ -398,8 +403,9 @@ settings come from `pipeline.env`.
 | `OPT_START_ELO` / `OPT_START_GEN` / `OPT_EVERY` | `NEAR_REF_ELO` / 1 / 3 | When option cycles run (Elo vs ref-engine or stage self, and net ≥ genN; then every N new nets) |
 | `OPT_NODES` / `OPT_SPRT` / `OPT_MAX_PAIRS` | `MATCH_NODES` / `0 3` / 12000 | Option SPRT |
 | `OPT_RETRY` / `OPT_GROUP` | 2 / 1 | Undecided options: retests, group test |
-| `OPT_EXCLUDE`, `OPT_INT_TESTS`, `OPT_INT_REMOVABLE`, `OPT_GROUP_TESTS`, `OPT_ONLY` | see the example | What is tested |
-| `NO_DATA_OPTS` | `RevealQuiet RevealQsearchEvasions EvalScaling` | Accepted options (name prefixes) never used to generate data |
+| `OPT_PLAN` | `scripts/option-plan.env` | The option plan (4.4): `OPT_EXCLUDE`, `NO_DATA_OPTS`, `OPT_INT_TESTS`, `OPT_INT_REMOVABLE`, `OPT_GROUP_TESTS`, `OPT_TC_TESTS`; none of them has a default |
+| `OPT_ONLY` | empty | Only run these entries of the plan (option names or test ids) |
+| `OPT_TC` / `OPT_LTC` / `OPT_TC_SPRT` / `OPT_TC_MAX_PAIRS` / `OPT_TC_WORKERS` | `10+0.1` / `40+0.4` / `0 5` / 6000 / physical cores − 1 | Tests on the clock |
 | `BENCH_ARGS` | `16 1 13` | `bench` used to verify the patches |
 | `MAX_HOURS` / `RETRY_MAX` | 0 / 5 | Time limit / retries of a failed `pipeline.sh` call |
 
@@ -504,6 +510,7 @@ All in `trainer/`:
 | `autotune/patches/` | `000N-*.patch` (one per decision) and `all-options.patch` (all combined) |
 | `autotune/work/` | Git worktree of the branch `autotune/options` where the patches are made |
 | `autotune/run.env` | Configuration given to `pipeline.sh` for the current round |
+| `scripts/option-plan.env` | The option plan (gitignored; from `option-plan.env.example`) |
 
 ## 6. Applying the patches
 

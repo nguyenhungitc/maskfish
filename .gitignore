@@ -39,4 +39,5 @@ jieqi/
 # pipeline.sh config (holds the Telegram token) and logs
 trainer/scripts/pipeline.env
 trainer/scripts/autotune.env
+trainer/scripts/option-plan.env
 trainer/logs/
