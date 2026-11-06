@@ -149,6 +149,7 @@ esac
 : "${PATIENCE:=3}"                   # stage self: failed attempts in a row before scaling up
 : "${LEVEL_CAP:=4}"                  # scale-up levels: games ×(1+level/2), nodes ×(1+level/4)
 : "${TRAIN_WINDOW:=4}"               # train on the data of the last N generations (0 = all)
+: "${TRAIN_MIN_GEN:=0}"              # never train on the data of generations before this one (e.g. labelled by an earlier reference engine)
 : "${MAX_HOURS:=0}"                  # 0 = no time limit
 : "${RETRY_MAX:=5}"                  # retries of a failed pipeline step before stopping
 
@@ -431,6 +432,7 @@ write_run_env() {   # $1 = source → pipeline config for this call, on top of p
   esac
   local from=0
   (( TRAIN_WINDOW > 0 && g - TRAIN_WINDOW + 1 > 0 )) && from=$(( g - TRAIN_WINDOW + 1 ))
+  (( from < TRAIN_MIN_GEN && TRAIN_MIN_GEN <= g )) && from=$TRAIN_MIN_GEN
   # the safe reveal bonus is a search preference: never in the data
   local o gen_opts="$USER_GEN_OPTS" nd
   for o in $(best_opts); do

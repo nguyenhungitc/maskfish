@@ -264,7 +264,8 @@ before the first fit.
 3. **Generate data** for the current stage: `pipeline.sh -g N --source S --gen-only`.
    Later attempts of the same generation add a new batch (`--tag aK`).
 4. **Train → verify → SPRT → promote**: `pipeline.sh -g N --train-only`, on
-   the data of the last `TRAIN_WINDOW` generations, with the options in use.
+   the data of the last `TRAIN_WINDOW` generations (none before `TRAIN_MIN_GEN`),
+   with the options in use.
    The candidate is the last epoch (`MATCH_EARLIER="4 8"` also tries
    `EPOCHS` − 4 and − 8 when it loses). It is promoted on SPRT H1, or, when
    the SPRT has no decision after `MATCH_MAX_PAIRS` pairs, if its Elo − 95 %
@@ -396,6 +397,7 @@ settings come from `pipeline.env`.
 | `SELF_NODES` | 2 × `NODES` | Maskfish nodes per move in stage self |
 | `PATIENCE` / `LEVEL_CAP` | 3 / 4 | Failures before a scale-up / highest level |
 | `TRAIN_WINDOW` | 4 | Train on the data of the last N generations (0 = all) |
+| `TRAIN_MIN_GEN` | 0 | Never train on the data of generations before this one, e.g. data labelled by an earlier ref-engine |
 | `EXT_MOVETIME` / `EXT_PAIRS` / `EXT_SEED` | 200 / 400 / 20261017 | Measurement against ref-engine |
 | `EXT_REFEREE` | the engine | Maskfish giving the board state and judging the rules in matches against ref-engine (empty: ref-engine itself, which then needs `d` / `go perft` / `rule`) |
 | `EXT_VETO` | 1 | Stage distill: take back a promoted net clearly weaker against ref-engine |
