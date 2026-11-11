@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Diff #{{ run.id }}{% endblock %}
+{% block content %}
+<div class="title-row">
+  <h1>Diff <small class="muted"><a href="{{ url_for('view', rid=run.id) }}">#{{ run.id }}</a> · {{ run.base_ref }} {{ run.base_sha[:8] }} → {{ run.new_ref }} {{ run.new_sha[:8] }}</small></h1>
+  {% if compare_url(run) %}<div class="buttons"><a class="btn" href="{{ compare_url(run) }}" target="_blank" rel="noopener">Compare on GitHub</a></div>{% endif %}
+</div>
+{% if commits %}
+<section class="block">
+  <h2>Commits <small>{{ commits|length }}</small></h2>
+  <ul class="commits">
+  {% for c in commits %}<li><span class="mono">{{ c.sha[:8] }}</span> {{ c.subject }} <span class="muted">{{ c.author }}</span></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section class="block">
+  <h2>Files</h2>
+  <pre class="log">{{ stat or 'No difference.' }}</pre>
+</section>
+{% if diff %}
+<section class="block">
+  <details {{ 'open' if diff_lines < 3000 }}>
+    <summary>Full diff ({{ diff_lines }} lines)</summary>
+    <pre class="diff">{{ diff }}</pre>
+  </details>
+</section>
+{% endif %}
+{% endblock %}

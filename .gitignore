@@ -1,0 +1,25 @@
+# Builds
+build/
+/build*/
+__pycache__/
+*.pyc
+.venv/
+
+# Local output of the engine's tools: match runs, training data, engine snapshots
+/runs/
+/data/
+/bin/
+
+# Networks: a local copy of refs/assets/net (scripts/net.sh), and trained ones
+/nets/
+*.nnue
+*.pt
+
+# Training automation (scripts/README.md): logs, state, the reference engine, local configuration
+/logs/
+/autotune/
+/archive-*/
+/jieqi/
+scripts/pipeline.env
+scripts/autotune.env
+scripts/option-plan.env

@@ -1,0 +1,207 @@
+# Builds the Docker image of fishtest/ and pushes it to Docker Hub whenever
+# fishtest or what it runs (tools/match.py, tools/sprt.py and the referee, tools/jieqi and tools/native) changes on
+# the branch pro (started by hand on another branch, it stops at once).
+#
+# Repository settings (Settings > Secrets and variables > Actions):
+#   secret    DOCKERHUB_TOKEN     Docker Hub access token (Account settings > Personal access tokens, Read Write & Delete)
+#   variable  DOCKERHUB_USERNAME  optional, Docker Hub user name (default: nguyenhungitc)
+#   variable  DOCKERHUB_IMAGE     optional, image name (default: <DOCKERHUB_USERNAME>/maskfish-fishtest)
+#
+# The image is multi-platform, linux/amd64 and linux/arm64: each is built and checked on a runner of its own
+# architecture (no emulation), pushed by digest, and the two are joined into one manifest list, tagged latest.
+# The check: the pages answer, the referee's library loads, and the image compiles the engine (as fishtest does
+# when a test starts) and it gives perft 3 = 83,907.
+#
+# Tags pushed: latest, and only it (the other tags of the image are deleted).
+name: Fishtest docker image
+
+on:
+  push:
+    branches: [pro]
+    paths:
+      - "fishtest/**"
+      - "!fishtest/**/*.md"
+      - "tools/match.py"
+      - "tools/sprt.py"
+      - "tools/jieqi/**"
+      - "tools/native/**"
+      - ".github/workflows/fishtest-docker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: fishtest-docker
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'nguyenhungitc' }}
+  IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/maskfish-fishtest', vars.DOCKERHUB_USERNAME || 'nguyenhungitc') }}
+
+jobs:
+  build:
+    name: Image ${{ matrix.platform }}
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::This workflow runs on the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Check the secret
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Set the DOCKERHUB_TOKEN secret of the repository"
+            exit 1
+          fi
+          echo "Docker Hub user: $DOCKERHUB_USERNAME, image: $IMAGE"
+
+      - name: Check the Python code
+        run: |
+          python3 -m pip install --quiet -r fishtest/requirements.txt
+          python3 -m py_compile fishtest/*.py tools/match.py tools/sprt.py tools/jieqi/*.py
+          python3 fishtest/stats.py > /dev/null
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: fishtest/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: fishtest:test
+          cache-from: type=gha,scope=fishtest-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=fishtest-${{ matrix.arch }}
+
+      - name: Smoke test
+        run: |
+          arch=$(docker run --rm --entrypoint uname fishtest:test -m)
+          echo "image architecture: $arch"
+          case "${{ matrix.arch }}:$arch" in amd64:x86_64|arm64:aarch64) ;; *) exit 1 ;; esac
+          docker run -d --name ft -p 6543:6543 fishtest:test --no-runner
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:6543/tests > /dev/null && break
+            sleep 1
+          done
+          for page in /tests /tests/run /nets /settings; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:6543$page")
+            echo "$page $code"
+            [ "$code" = 200 ] || { docker logs ft; exit 1; }
+          done
+          docker exec ft python -c "import sys; sys.path[:0] = ['/app/tools']; import match; match.NativeRules(); print('referee library ok')"
+          docker rm -f ft
+
+      - name: The image compiles the engine
+        run: |
+          docker run --rm -v "$PWD":/src:ro --entrypoint sh fishtest:test -c '
+            cmake -S /src -B /tmp/b -DCMAKE_BUILD_TYPE=Release -DMASKFISH_EMBED_NET=OFF > /dev/null &&
+            cmake --build /tmp/b -j"$(nproc)" --target maskfish > /dev/null &&
+            printf "compiler\nposition startpos\nperft 3\nquit\n" | /tmp/b/maskfish' | tee perft.log
+          grep -q '^perft 3 83907 ' perft.log
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: fishtest/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=fishtest-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=fishtest-${{ matrix.arch }}
+
+      - name: Digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.push.outputs.digest }}"
+          echo "$IMAGE@$digest"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Tag latest (amd64 + arm64)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Join the platforms as latest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          [ "$(ls | wc -l)" = 2 ] || { echo "::error::expected two digests, got: $(ls)"; exit 1; }
+          docker buildx imagetools create -t "$IMAGE:latest" $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:latest"
+          docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Manifest}}' |
+            jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort | tr '\n' ' ' | tee platforms.txt
+          grep -q 'linux/amd64 linux/arm64' platforms.txt
+
+      - name: Delete old tags on Docker Hub
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          JWT=$(curl -fsS -H 'Content-Type: application/json' \
+            -d "{\"identifier\":\"$DOCKERHUB_USERNAME\",\"secret\":\"$TOKEN\"}" \
+            https://hub.docker.com/v2/auth/token | jq -r .access_token)
+
+          url="https://hub.docker.com/v2/repositories/$IMAGE/tags?page_size=100"
+          tags=""
+          while [ -n "$url" ] && [ "$url" != null ]; do
+            page=$(curl -fsS -H "Authorization: Bearer $JWT" "$url")
+            tags="$tags $(echo "$page" | jq -r '.results[].name')"
+            url=$(echo "$page" | jq -r .next)
+          done
+
+          for t in $tags; do
+            [ "$t" = "latest" ] && continue
+            echo "Delete $IMAGE:$t"
+            curl -fsS -X DELETE -H "Authorization: Bearer $JWT" \
+              "https://hub.docker.com/v2/repositories/$IMAGE/tags/$t/"
+          done

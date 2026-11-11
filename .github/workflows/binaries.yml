@@ -1,0 +1,91 @@
+# Builds the binaries that are published: universal binaries (CMake -DMASKFISH_UNIVERSAL=ON, src/universal.h),
+# which hold a build of the engine per instruction set and run the best one for the CPU (see "Compiling" in
+# README.md):
+#
+#   maskfish-ubuntu-x86-64-universal.tar    Linux x86-64: x86-64, x86-64-v2, x86-64-v3, x86-64-avxvnni,
+#                                           x86-64-v4, x86-64-avx512icl
+#   maskfish-ubuntu-arm64-universal.tar     Linux arm64: armv8, armv8-dotprod
+#
+# The C++ runtime is linked statically. Every build gives the same evaluations (the network's arithmetic is
+# integer), so the same bench signature. The network maskfish.nnue of the hidden ref refs/assets/net
+# (scripts/net.sh) is fetched before the build and embedded in the binary (CMake MASKFISH_EMBED_NET): the engine
+# loads EvalFile first and falls back on it. Each archive holds the binary, that network as maskfish.nnue too,
+# README.md, AUTHORS and Copying.txt (scripts/package_binary.sh). The binaries are checked with
+# tests/universal_smoke.py (every build the runner's CPU runs: perft, the bench signature with the test network,
+# the network evaluator, the embedded network; the network next to the binary is found), tests/evalfile_smoke.py
+# (which network is loaded; the embedded one is the published one) and a bench with the embedded network.
+#
+# Runs for pushes to the branch pro that touch the code or scripts/, by hand (Actions > Binaries > Run
+# workflow), and from the Release workflow (release.yml), which makes the release with the archives built here.
+# It runs on the branch pro only: started by hand on another branch, it stops at once.
+name: Binaries
+
+on:
+  push:
+    branches: [pro]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "tests/testnet.py"
+      - "tests/hnn_smoke.py"
+      - "tests/universal_smoke.py"
+      - "tests/evalfile_smoke.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/binaries.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  branch:
+    name: Branch pro only
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/pro" ]; then
+            echo "::error::This workflow runs on the branch pro only (not $GITHUB_REF)"
+            exit 1
+          fi
+
+  linux:
+    name: Linux ${{ matrix.arch }} universal
+    needs: branch
+    strategy:
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCHIVE: maskfish-ubuntu-${{ matrix.arch }}-universal.tar
+    steps:
+      - uses: actions/checkout@v7
+      - name: Network (embedded in the binary)
+        run: sh scripts/net.sh --require
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMASKFISH_UNIVERSAL=ON \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build build -j"$(nproc)" --target maskfish
+          strip build/maskfish
+          ls -l build/maskfish
+      - name: Check (every build this CPU runs)
+        run: python3 tests/universal_smoke.py build/maskfish
+      - name: Check which network is loaded
+        run: python3 tests/evalfile_smoke.py build/maskfish --net nets/maskfish.nnue
+      - name: Bench with the embedded network
+        run: |
+          out=$(cd "$RUNNER_TEMP" && printf 'compiler\nisready\nbench\nquit\n' | "$GITHUB_WORKSPACE/build/maskfish")
+          echo "$out" | grep -E '^build|^embedded|network|Nodes'
+          echo "$out" | grep -q 'embedded network maskfish.nnue loaded' && echo "$out" | grep -q 'Nodes searched'
+      - name: Package
+        run: scripts/package_binary.sh build/maskfish "$ARCHIVE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}

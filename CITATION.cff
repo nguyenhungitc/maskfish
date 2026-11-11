@@ -1,0 +1,25 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Maskfish
+message: >-
+  Please cite this software using the metadata from this
+  file.
+type: software
+authors:
+  - name: The Maskfish developers (see AUTHORS file)
+repository-code: 'https://github.com/nguyenhungitc/maskfish'
+url: 'https://github.com/nguyenhungitc/maskfish'
+abstract: >-
+  Maskfish is a UCI engine for Jieqi, the variant of xiangqi in which every piece but the
+  general starts face down on a random deal: alpha-beta search with chance nodes for
+  face-down moves and NNUE evaluation, with an independent rules referee.
+keywords:
+  - jieqi
+  - xiangqi
+  - artificial intelligence (AI)
+  - tree search
+  - alpha-beta search
+  - NNUE
+license: GPL-3.0

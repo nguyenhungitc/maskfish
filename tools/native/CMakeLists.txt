@@ -1,0 +1,22 @@
+add_library(jieqi_core STATIC rules.cpp repetition.cpp chase.cpp)
+target_compile_features(jieqi_core PUBLIC cxx_std_20)
+target_include_directories(jieqi_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(jieqi_core PROPERTIES CXX_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON)
+add_library(jieqi_rules SHARED c_api.cpp)
+target_link_libraries(jieqi_rules PRIVATE jieqi_core)
+target_compile_definitions(jieqi_rules PRIVATE JIEQI_BUILD_DLL)
+set_target_properties(jieqi_rules PROPERTIES
+    CXX_EXTENSIONS OFF
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+foreach(target jieqi_core jieqi_rules)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+    endif()
+    if(JIEQI_SANITIZERS AND NOT MSVC)
+        target_compile_options(${target} PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PUBLIC -fsanitize=address,undefined)
+    endif()
+endforeach()

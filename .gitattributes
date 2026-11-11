@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.hnn binary
+*.nnue binary
+*.gz binary

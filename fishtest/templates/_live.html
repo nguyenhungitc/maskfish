@@ -1,0 +1,64 @@
+{% from "_macros.html" import results_box, status_badge %}
+{% set r = results(run) %}
+<section class="block live">
+  <div class="live-top">
+    {{ results_box(run, big=True) }}
+    <div class="figures">
+      <div>{{ status_badge(run) }}{% if run.result %} <span class="badge res-{{ run.result }}">{{ run.result }}</span>{% endif %}</div>
+      {% if r.games %}
+      <table class="kv small">
+        {% if run.test_type != 'spsa' %}
+        <tr><th>Elo</th><td class="mono">{{ '%+.2f'|format(r.elo.elo) }} ± {{ '%.2f'|format(r.elo.elo_ci) }}</td></tr>
+        <tr><th>nElo</th><td class="mono">{{ '%+.2f'|format(r.elo.nelo) }} ± {{ '%.2f'|format(r.elo.nelo_ci) }}</td></tr>
+        <tr><th>LOS</th><td class="mono">{{ '%.1f'|format(r.elo.los * 100) }}%</td></tr>
+        <tr><th>Score</th><td class="mono">{{ '%.2f'|format(r.elo.score * 100) }}%</td></tr>
+        {% endif %}
+        {% if run.play_seconds %}
+        <tr><th>Speed</th><td class="mono">{{ '%.1f'|format(r.games * 60 / run.play_seconds) }} games/min · {{ run.play_seconds|duration }}</td></tr>
+        {% endif %}
+      </table>
+      {% elif run.info %}
+      <p>{{ run.info }}</p>
+      {% endif %}
+    </div>
+  </div>
+  {{ chart }}
+  {% if spsa_rows %}
+  <h3>Parameters <small class="muted">c and R at iteration {{ [run.penta|sum, 1]|max }}</small></h3>
+  <div class="scroll">
+  <table class="list spsa">
+    <thead><tr><th>Name</th><th>Value</th><th>Start</th><th>Min</th><th>Max</th><th>c</th><th>R</th><th>c_end</th><th>r_end</th></tr></thead>
+    <tbody>
+    {% for p in spsa_rows %}
+      <tr>
+        <td class="mono">{{ p.name }}</td>
+        <td class="mono"><b>{{ '%.2f'|format(p.theta) }}</b></td>
+        <td class="mono">{{ '%g'|format(p.start) }}</td>
+        <td class="mono">{{ '%g'|format(p.min) }}</td>
+        <td class="mono">{{ '%g'|format(p.max) }}</td>
+        <td class="mono">{{ '%.3f'|format(p.c_k) }}</td>
+        <td class="mono">{{ '%.5f'|format(p.r_k) }}</td>
+        <td class="mono">{{ '%g'|format(p.c_end) }}</td>
+        <td class="mono">{{ '%g'|format(p.r_end) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="tuned">
+    <div>
+      <div class="muted small">Values (rounded), name,value</div>
+      <pre class="log">{% for p in spsa_rows %}{{ p.name }},{{ p.theta|round|int }}
+{% endfor %}</pre>
+    </div>
+    <div>
+      <div class="muted small">As UCI options</div>
+      <pre class="log">{% for p in spsa_rows %}{{ p.name }}={{ p.theta|round|int }} {% endfor %}</pre>
+      <a class="btn" href="{{ url_for('run_form', clone=run.id, tuned=1) }}">SPRT with these values</a>
+    </div>
+  </div>
+  {% elif run.test_type == 'spsa' %}
+  <p class="muted">The parameters are read from the engine when the test starts.</p>
+  {% endif %}
+  {% if run.error %}<h3>Error</h3><pre class="log error">{{ run.error }}</pre>{% endif %}
+</section>

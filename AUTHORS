@@ -1,0 +1,78 @@
+# Maskfish contains code from other projects, whose authors keep their copyright
+# on the code they wrote:
+#
+# - jqe, from which the engine (src/), the referee (tools/native/, tools/jieqi/),
+#   the tools and the record reading of the trainer (train/records.py) are
+#   derived;
+# - AB-JChess, from which the network evaluator (src/hnn/), the network packer
+#   (tools/hnn/) and the trainer (train/) are derived; it contains code derived
+#   from Pikafish and Stockfish;
+# - Pikafish and Stockfish, through AB-JChess (among them the signed LEB128
+#   container of the network files, src/hnn/jqnz.h).
+#
+#   Copyright (C) 2026 The Maskfish authors
+#   Copyright (C) 2026 Devin O'Keefe (jqe)
+#   Copyright (C) The AB-JChess authors
+#   Copyright (C) 2004-2023 The Pikafish developers
+#   Copyright (C) 2004-2025 The Stockfish developers
+#
+# Maskfish is released under the GNU General Public License, version 3 or later
+# (see Copying.txt), as are AB-JChess, Pikafish and Stockfish. jqe is released
+# under the MIT License, whose notice is reproduced at the end of this file.
+#
+# Maskfish's default network is the network of AB-JChess's release 20261031
+# (abjchess-20261030.nnue) and the nets trained from it.
+#
+# Maskfish also follows other projects, without containing their code:
+#
+# - the rules are those of Jieqi as played on the Tiantian app, with the
+#   conventions of Pikafish's Jieqi branch where the published rules are
+#   silent; the FEN and move notation of its UCI protocol (face-down pieces,
+#   urns, revealed and captured identities in the move tokens, the order
+#   R A C P N B of the urns, the x / X suffix of a lone reveal) is that of
+#   Pikafish's Jieqi branch;
+# - the local test server (fishtest/) is modelled on the fishtest of Stockfish
+#   and Pikafish: the pentanomial generalized SPRT, normalized Elo, the SPSA
+#   gains and parameter format (name,start,min,max,c_end,r_end, defaults of
+#   Stockfish's TUNE()), the presets of the test form and the nn-<sha256>
+#   network names; tools/sprt.py uses the same generalized SPRT;
+# - tests/reprosearch.py follows Stockfish's tests/reprosearch.sh.
+
+# Authors of Maskfish
+the Maskfish authors (https://github.com/nguyenhungitc/maskfish)
+
+# Authors of jqe
+Devin O'Keefe (https://github.com/devinokeefe/jieqi)
+
+# Authors of AB-JChess
+the AB-JChess authors (https://github.com/lxsgx23/AB-JChess)
+
+# Authors of Pikafish
+the Pikafish developers (https://github.com/official-pikafish/Pikafish/blob/master/AUTHORS)
+
+# Authors of Stockfish
+the Stockfish developers (https://github.com/official-stockfish/Stockfish/blob/master/AUTHORS)
+
+# jqe licence notice
+#
+# MIT License
+#
+# Copyright (c) 2026 Devin O'Keefe
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
