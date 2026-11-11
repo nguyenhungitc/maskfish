@@ -428,6 +428,7 @@ def main():
 
     stop = threading.Event()
     bounds = (math.log(0.05 / 0.95), math.log(0.95 / 0.05))
+    decided = {}  # the SPRT decision that stopped the match; games still running then do not undo it
 
     def worker():
         while not stop.is_set():
@@ -464,7 +465,8 @@ def main():
                     llr, npr = sprt_llr(results, *args.sprt, args.sprt_model)
                     if llr <= bounds[0] or llr >= bounds[1]:
                         stop.set()
-                        print(f"SPRT {'H1 accepted' if llr >= bounds[1] else 'H0 accepted'}: LLR {llr:.2f} after {npr} pairs", flush=True)
+                        decided.update(result="H1" if llr >= bounds[1] else "H0", llr=llr, pairs=npr)
+                        print(f"SPRT {decided['result']} accepted: LLR {llr:.2f} after {npr} pairs", flush=True)
                 if n % 10 == 0 or n == 2 * npairs:
                     s = summarize(results, A["name"], B["name"])
                     pe = s["pent"]
@@ -489,6 +491,8 @@ def main():
         llr, npr = sprt_llr(results, *args.sprt, args.sprt_model)
         s["sprt"] = dict(elo0=args.sprt[0], elo1=args.sprt[1], model=args.sprt_model, llr=llr, pairs=npr,
                          result="H1" if llr >= bounds[1] else "H0" if llr <= bounds[0] else "inconclusive")
+        if decided:
+            s["sprt"].update(result=decided["result"], stop_llr=decided["llr"], stop_pairs=decided["pairs"])
     s["args"] = vars(args)
     (out / "summary.json").write_text(json.dumps(s, indent=2) + "\n")
     print(json.dumps(s, indent=2))
