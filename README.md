@@ -164,7 +164,10 @@ the corresponding urn.
 
 If a move is illegal or its letters are invalid, the engine prints
 `info string bad move <move>: ...` and ignores that move and the ones after
-it; the position is the one before the bad move.
+it; the position is the one before the bad move. After a `position` command
+that was refused (a bad fen, a bad move), `go` does not search: the engine
+answers `info string no search: ...` and `bestmove (none)` until a `position`
+command is accepted.
 
 ```
 position startpos moves a3a4P

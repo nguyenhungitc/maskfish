@@ -83,6 +83,11 @@ CASES = [
     ("garbage move", ["position startpos moves zzzz"], "bad move zzzz:", START),
     ("short move", ["position startpos moves a3"], "bad move a3:", START),
     ("moves after a bad move", ["position startpos moves a3a4P zzzz a6a5p"], "bad move zzzz:", AFTER_A3A4),
+    # After a refused position command the engine does not search the position it holds
+    ("go after a bad move", ["position startpos moves a3a4P zzzz", "go depth 1"],
+     "no search: the last position command was refused", AFTER_A3A4),
+    ("go after a bad fen", ["position fen 4k4 w", "go depth 1"],
+     "no search: the last position command was refused", START),
     # Options: a value that is not a number is refused, one out of range is clamped
     ("Hash not a number", ["setoption name Hash value abc"], "bad value abc for option Hash", START),
     ("Hash negative", ["setoption name Hash value -5"], None, START),

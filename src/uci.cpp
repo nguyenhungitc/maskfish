@@ -117,6 +117,9 @@ struct Engine {
     bool firstReady = true;
     int multiPV = 1;
     bool ponderOpt = false;  // UCI option Ponder: bestmove then names a move to ponder on
+    // The last `position` command was refused, whole (a bad fen) or from one of its moves on: the position held
+    // is not the one the GUI means, and `go` does not search it.
+    bool posRefused = false;
 
     Engine() {
         pos.set_fen(START_FEN);
@@ -246,12 +249,15 @@ struct Engine {
         Position p;
         if (!p.set_fen(fen, &err)) {
             out("info string bad fen: " + err);
+            posRefused = true;
             return;
         }
+        posRefused = false;
         if (tok == "moves")
             while (is >> tok)
                 if (!p.apply_token(tok, &err)) {
                     out("info string bad move " + tok + ": " + err);
+                    posRefused = true;
                     break;
                 }
         pos = p;
@@ -260,7 +266,12 @@ struct Engine {
     void cmd_go(std::istringstream& is) {
         Limits lim;
         std::string tok;
-        while (is >> tok) {
+        // A word of `go` that ends the move list of searchmoves.
+        static const char* const WORDS[] = {"depth", "nodes", "movetime", "wtime", "btime", "winc", "binc",
+                                            "movestogo", "infinite", "ponder", "mate", "searchmoves"};
+        bool held = false;  // tok holds the word that ended searchmoves
+        while (held || is >> tok) {
+            held = false;
             if (tok == "depth") is >> lim.depth;
             else if (tok == "nodes") is >> lim.nodes;
             // A clock or move time of 0 or less (a GUI sends it when the clock has run out, an increment still to
@@ -275,10 +286,21 @@ struct Engine {
             else if (tok == "ponder") lim.ponder = true;
             else if (tok == "mate") is >> lim.mate;
             else if (tok == "searchmoves")
-                while (is >> tok) lim.searchMoves.push_back(parse_move_coords(tok));
+                while (is >> tok) {
+                    if (std::find(std::begin(WORDS), std::end(WORDS), tok) != std::end(WORDS)) {
+                        held = true;  // the limits after the moves are read, not taken for moves
+                        break;
+                    }
+                    lim.searchMoves.push_back(parse_move_coords(tok));
+                }
         }
         lim.multiPV = multiPV;
         wait();
+        if (posRefused) {  // the GUI's position is not known: a move found in another one would mislead it
+            out("info string no search: the last position command was refused");
+            out("bestmove (none)");
+            return;
+        }
         Position root = pos;
         searcher.prepare(lim.ponder);  // a stop or ponderhit that arrives before the search thread runs must not be lost
         const bool offerPonder = ponderOpt;
