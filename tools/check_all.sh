@@ -13,6 +13,8 @@
 #   JOBS=4            parallel build jobs
 #   NICE=19           niceness of every build and test; NICE= runs them without nice
 #   BUILD=build/check build directory, relative to the repository or absolute
+#   CMAKE_OPTIONS=... more options of the build, e.g. CMAKE_OPTIONS=-DMASKFISH_BITBOARD=ON to check the bitboard
+#                     build (the same signature: use a BUILD directory of its own)
 #   DIFFTEST_GAMES=1000 DIFFTEST_SEED=1   the differential test of the engine against the referee
 #   PLAY_PORT=8791    the port of the local board's smoke test (tests/play_smoke.py)
 #   UNIVERSAL=1       also build the universal binary (BUILD/universal-bin, -DMASKFISH_UNIVERSAL=ON) and check every
@@ -57,7 +59,7 @@ step() {  # step NAME COMMAND...: run, keep the output in $LOG/NAME.log, record 
 }
 
 build() {  # the engine, the differential test and the referee's shared library (BUILD/lib)
-    run cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release &&
+    run cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release ${CMAKE_OPTIONS:-} &&
     run cmake --build "$BUILD" -j "$JOBS" --target maskfish maskfish_difftest jieqi_rules jqnz_tool
 }
 difftest() { run "$BUILD/maskfish_difftest" "$DIFFTEST_GAMES" "$DIFFTEST_SEED"; }

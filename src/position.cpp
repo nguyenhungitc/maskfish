@@ -119,8 +119,31 @@ uint64_t Position::compute_key() const {
     return k;
 }
 
+#ifdef MASKFISH_BITBOARD
+void Position::compute_bitboards() {
+    occBB = byColorBB[0] = byColorBB[1] = darkBB = 0;
+    for (Bitboard& b : byRoleBB) b = 0;
+    for (int s = 0; s < NUM_SQ; ++s)
+        if (board[s]) bb_put(s, board[s]);
+}
+
+bool Position::bitboards_ok() const {
+    Position q = *this;
+    q.compute_bitboards();
+    if (q.occBB != occBB || q.darkBB != darkBB || q.byColorBB[0] != byColorBB[0] || q.byColorBB[1] != byColorBB[1]) return false;
+    for (int t = 0; t < 9; ++t)
+        if (q.byRoleBB[t] != byRoleBB[t]) return false;
+    return true;
+}
+#endif
+
 bool Position::set_fen(const std::string& fen, std::string* error) {
     init_tables();
+#ifdef MASKFISH_BITBOARD
+    BB::init();
+    occBB = byColorBB[0] = byColorBB[1] = darkBB = 0;  // a refused fen leaves no sets of an earlier position
+    for (Bitboard& b : byRoleBB) b = 0;
+#endif
     std::istringstream in(fen);
     std::string boardText, side, pools = "-", clock = "0", number = "1";
     if (!(in >> boardText >> side)) return fail(error, "fen needs board and side");
@@ -197,6 +220,9 @@ bool Position::set_fen(const std::string& fen, std::string* error) {
         return fail(error, "bad no-capture counter");
     noCapture = int16_t(ec == std::errc::result_out_of_range ? NO_CAPTURE_LIMIT
                                                               : std::min<long long>(plies, NO_CAPTURE_LIMIT));
+#ifdef MASKFISH_BITBOARD
+    compute_bitboards();
+#endif
     key = compute_key();
     skey = compute_skey();
     keyHist.clear();
@@ -253,6 +279,67 @@ std::string Position::pretty() const {
     return out;
 }
 
+#ifdef MASKFISH_BITBOARD
+// ---- attack tests on the sets: the answers of the board scans below ----
+bool Position::ray_attacked_bb(Color, int k, int d, Bitboard occ, Bitboard E, int x, PieceType xt) const {
+    // Only an e rook / cannon / king on this ray can attack along it.
+    const Bitboard rck = (byRoleBB[ROOK] | byRoleBB[CANNON] | byRoleBB[KING]) & E;
+    if (!(BB::Ray[k][d] & rck) && (x < 0 || (xt != ROOK && xt != CANNON && xt != KING) || !test(BB::Ray[k][d], x))) return false;
+    int f1, f2;
+    BB::blockers(k, d, occ, f1, f2);
+    if (f1 < 0) return false;
+    if (test(E, f1)) {
+        if (f1 == x ? xt == ROOK : test(byRoleBB[ROOK], f1)) return true;
+        if (d < 2 && (f1 == x ? xt == KING : test(byRoleBB[KING], f1))) return true;  // facing generals
+    }
+    return f2 >= 0 && test(E, f2) && (f2 == x ? xt == CANNON : test(byRoleBB[CANNON], f2));
+}
+
+bool Position::attacked_bb(Color e, int k, Bitboard occ, Bitboard E, int x, PieceType xt) const {
+    const Bitboard xm = x >= 0 ? ~sq_bb(x) : ~Bitboard(0);
+    const Bitboard xb = x >= 0 ? sq_bb(x) : 0;
+    auto rs = [&](PieceType t) { return (byRoleBB[t] & E & xm) | (xt == t ? xb : 0); };
+    // rook / cannon / facing king along k's file and rank
+    const Bitboard lines = BB::FileBB[file_of(k)] | BB::RankBB[rank_of(k)];
+    // all four rays from one scan; the per-ray logic of ray_attacked_bb
+    if ((rs(ROOK) | rs(CANNON) | (rs(KING) & BB::FileBB[file_of(k)])) & lines) {
+        const Bitboard R = rs(ROOK), C = rs(CANNON), K = rs(KING);
+        int f1[4], f2[4];
+        BB::scan4(k, occ, f1, f2);
+        for (int d = 0; d < 4; ++d) {
+            const int a = f1[d];
+            if (a < 0) continue;
+            if (test(R, a) || (d < 2 && test(K, a))) return true;
+            const int b = f2[d];
+            if (b >= 0 && test(C, b)) return true;
+        }
+    }
+    if (Bitboard h = BB::HorseFrom[k] & rs(HORSE)) {
+        do {
+            const int p = pop_lsb(h);
+            if (!test(occ, BB::Leg[p][k])) return true;
+        } while (h);
+    }
+    if (BB::SoldierFrom[e][k] & rs(SOLDIER)) return true;
+    const Bitboard dk = darkBB & E & xm;
+    if (Bitboard a = BB::AdvTo[k] & rs(ADVISOR)) {
+        if (!in_palace(e, k)) a &= ~dk;  // a face-down advisor stays in its palace
+        if (a) return true;
+    }
+    if (Bitboard el = BB::ElephTo[k] & rs(ELEPHANT)) {
+        if (!own_half(e, k)) el &= ~dk;  // a face-down elephant stays on its own half
+        while (el) {
+            const int p = pop_lsb(el);
+            if (!test(occ, BB::Eye[k][p])) return true;
+        }
+    }
+    return false;
+}
+
+bool Position::ray_attacked(Color c, int k, int d) const { return ray_attacked_bb(~c, k, d, occBB, byColorBB[~c]); }
+
+bool Position::king_attacked(Color c, int k) const { return attacked_bb(~c, k, occBB, byColorBB[~c]); }
+#else
 bool Position::ray_attacked(Color c, int k, int d) const {
     const Color e = ~c;
     const int n = T.rayLen[k][d];
@@ -308,11 +395,99 @@ bool Position::king_attacked(Color c, int k) const {
     }
     return false;
 }
+#endif  // MASKFISH_BITBOARD
 
 namespace {
 inline void add(Move*& out, int from, int to) { *out++ = make_move(from, to); }
 }  // namespace
 
+#ifdef MASKFISH_BITBOARD
+// The moves in the order of the board scan below (piece-list order; per piece the rays N, S, E, W outwards, or
+// the table order): the search's move ordering breaks ties by the order of generation.
+template <bool CAP>
+int Position::gen(Move* list) const {
+    Move* out = list;
+    const Color us = stm, them = ~us;
+    const Bitboard occ = occBB;
+    const Bitboard capt = byColorBB[them] & ~byRoleBB[KING];  // capturable squares
+    const Bitboard tgt = CAP ? capt : capt | (BB_ALL & ~occ);   // legal destinations
+    for (int i = 0; i < pcount[us]; ++i) {
+        const int s = plist[us][i];
+        const Piece pc = board[s];
+        const bool dark = type_of(pc) == DARK;
+        const PieceType t = role(s);
+        switch (t) {
+        case KING:
+            if (CAP && !(BB::KingTo[s] & tgt)) break;
+            for (int j = 0; j < T.kingN[s]; ++j)
+                if (test(tgt, T.kingTo[s][j])) add(out, s, T.kingTo[s][j]);
+            break;
+        case ROOK:
+            if (CAP && !(capt & (BB::FileBB[file_of(s)] | BB::RankBB[rank_of(s)]))) break;
+            {   // the four first blockers from one scan
+                int f1[4], f2[4];
+                BB::scan4(s, occ, f1, f2);
+                for (int d = 0; d < 4; ++d) {
+                    const int b = f1[d];
+                    if (!CAP) {
+                        const uint8_t* r = T.ray[s][d];
+                        for (int j = 0, n = T.rayLen[s][d]; j < n && r[j] != b; ++j) add(out, s, r[j]);
+                    }
+                    if (b >= 0 && test(capt, b)) add(out, s, b);
+                }
+                break;
+            }
+        case CANNON:
+            if (CAP && !(capt & (BB::FileBB[file_of(s)] | BB::RankBB[rank_of(s)]))) break;
+            {   // first / second blockers of the four rays from one scan
+                int f1[4], f2[4];
+                BB::scan4(s, occ, f1, f2);
+                for (int d = 0; d < 4; ++d) {
+                    const int b1 = f1[d], b2 = f2[d];
+                    if (!CAP) {
+                        const uint8_t* r = T.ray[s][d];
+                        for (int j = 0, n = T.rayLen[s][d]; j < n && r[j] != b1; ++j) add(out, s, r[j]);
+                    }
+                    if (b2 >= 0 && test(capt, b2)) add(out, s, b2);
+                }
+                break;
+            }
+        case HORSE:
+            if (!(BB::HorseTo[s] & tgt)) break;
+            for (int j = 0; j < T.horseN[s]; ++j)
+                if (!board[T.horseLeg[s][j]] && test(tgt, T.horseTo[s][j])) add(out, s, T.horseTo[s][j]);
+            break;
+        case ELEPHANT: {
+            Bitboard m = BB::ElephTo[s] & tgt;
+            if (dark) m &= BB::Half[us];
+            if (!m) break;
+            for (int j = 0; j < T.elephN[s]; ++j)
+                if (test(m, T.elephTo[s][j]) && !board[T.elephEye[s][j]]) add(out, s, T.elephTo[s][j]);
+            break;
+        }
+        case ADVISOR: {
+            Bitboard m = BB::AdvTo[s] & tgt;
+            if (dark) m &= BB::Palace[us];
+            if (!m) break;
+            for (int j = 0; j < T.advN[s]; ++j)
+                if (test(m, T.advTo[s][j])) add(out, s, T.advTo[s][j]);
+            break;
+        }
+        case SOLDIER: {
+            const Bitboard m = BB::SoldierTo[us][s] & tgt;
+            if (!m) break;
+            const int to = s + (us == RED ? 9 : -9);  // order: forward, west, east (as the mailbox loop)
+            if (to >= 0 && to < NUM_SQ && test(m, to)) add(out, s, to);
+            if (s > 0 && test(m, s - 1)) add(out, s, s - 1);
+            if (test(m, s + 1)) add(out, s, s + 1);  // s + 1 <= 90 < 128
+            break;
+        }
+        default: break;
+        }
+    }
+    return int(out - list);
+}
+#else
 template <bool CAP>
 int Position::gen(Move* list) const {
     Move* out = list;
@@ -391,6 +566,7 @@ int Position::gen(Move* list) const {
     }
     return int(out - list);
 }
+#endif  // MASKFISH_BITBOARD
 
 int Position::gen_moves(Move* list) const { return gen<false>(list); }
 
@@ -398,11 +574,18 @@ int Position::gen_moves(Move* list) const { return gen<false>(list); }
 int Position::gen_captures(Move* list) const { return gen<true>(list); }
 
 namespace {
+#ifdef MASKFISH_BITBOARD  // one 8 KB table of relations instead of the divisions by 9
+inline bool same_line(int a, int b) { return BB::REL[a][b] & 1; }
+inline bool diag_adjacent(int a, int b) { return BB::REL[a][b] & 2; }
+inline bool cheb_le2(int a, int b) { return BB::REL[a][b] & 4; }
+#else
 inline bool same_line(int a, int b) { return file_of(a) == file_of(b) || rank_of(a) == rank_of(b); }
 inline bool diag_adjacent(int a, int b) {
     return std::abs(file_of(a) - file_of(b)) == 1 && std::abs(rank_of(a) - rank_of(b)) == 1;
 }
 inline int cheb(int a, int b) { return std::max(std::abs(file_of(a) - file_of(b)), std::abs(rank_of(a) - rank_of(b))); }
+inline bool cheb_le2(int a, int b) { return cheb(a, b) <= 2; }
+#endif
 // A non-king move can change attacks on king k only through k's file/rank (sliders, cannon screens,
 // facing generals) or k's diagonal neighbours (horse legs and elephant eyes).
 inline bool touches_king_lines(int from, int to, int k) {
@@ -410,6 +593,28 @@ inline bool touches_king_lines(int from, int to, int k) {
 }
 }  // namespace
 
+#ifdef MASKFISH_BITBOARD
+bool Position::legal(Move m) const {
+    const int from = from_sq(m), to = to_sq(m);
+    const bool kingMove = type_of(board[from]) == KING;
+    if (!kingMove && !checkHist.back() && !touches_king_lines(from, to, kingSq[stm])) return true;
+    // Board after the move: the mover (identity irrelevant for own safety) on to, a captured enemy removed.
+    const Color e = ~stm;
+    const Bitboard occ = (occBB & ~sq_bb(from)) | sq_bb(to);
+    const Bitboard E = byColorBB[e] & ~sq_bb(to);
+    bool ok;
+    const int k0 = kingSq[stm];
+    if (kingMove || checkHist.back() || diag_adjacent(from, k0))
+        ok = !attacked_bb(e, kingMove ? to : k0, occ, E);
+    else {
+        // Not in check and the king stays: only rays through from (discovery) or to (new cannon
+        // screen) can carry a new attack.
+        const int df = T.dirTo[k0][from], dt = T.dirTo[k0][to];
+        ok = !((df >= 0 && ray_attacked_bb(e, k0, df, occ, E)) || (dt >= 0 && dt != df && ray_attacked_bb(e, k0, dt, occ, E)));
+    }
+    return ok;
+}
+#else
 bool Position::legal(Move m) const {
     const int from = from_sq(m), to = to_sq(m);
     if (type_of(board[from]) != KING && !checkHist.back() && !touches_king_lines(from, to, kingSq[stm])) return true;
@@ -434,12 +639,20 @@ bool Position::legal(Move m) const {
     b[to] = captured;
     return ok;
 }
+#endif  // MASKFISH_BITBOARD
 
 bool Position::reveal_may_check(int to) const {
     const int k = kingSq[~stm];
-    return file_of(to) == file_of(k) || rank_of(to) == rank_of(k) || cheb(to, k) <= 2;
+    return same_line(to, k) || cheb_le2(to, k);
 }
 
+#ifdef MASKFISH_BITBOARD
+bool Position::reveal_gives_check(int from, int to, PieceType t) const {
+    const Bitboard occ = (occBB & ~sq_bb(from)) | sq_bb(to);
+    const Bitboard U = (byColorBB[stm] & ~sq_bb(from)) | sq_bb(to);
+    return attacked_bb(stm, kingSq[~stm], occ, U, to, t);
+}
+#else
 bool Position::reveal_gives_check(int from, int to, PieceType t) const {
     auto& b = const_cast<Piece(&)[NUM_SQ]>(board);
     const Piece moving = b[from], captured = b[to];
@@ -450,7 +663,26 @@ bool Position::reveal_gives_check(int from, int to, PieceType t) const {
     b[to] = captured;
     return check;
 }
+#endif  // MASKFISH_BITBOARD
 
+#ifdef MASKFISH_BITBOARD
+bool Position::gives_check(Move m) const {
+    const int from = from_sq(m), to = to_sq(m);
+    const Piece moving = board[from];
+    if (type_of(moving) == DARK) return false;
+    const int k = kingSq[~stm];
+    const PieceType t = type_of(moving);
+    // Off the enemy king's lines a rook/cannon/king cannot attack it, and the others need to be close.
+    if (!touches_king_lines(from, to, k) && (t == ROOK || t == CANNON || t == KING || !cheb_le2(to, k))) return false;
+    const Bitboard occ = (occBB & ~sq_bb(from)) | sq_bb(to);
+    const Bitboard U = (byColorBB[stm] & ~sq_bb(from)) | sq_bb(to);
+    if (diag_adjacent(from, k) || (t != ROOK && t != CANNON && t != KING && cheb_le2(to, k)))
+        return attacked_bb(stm, k, occ, U, to, t);
+    // The mover can only check along a ray through to; discoveries come through from's ray.
+    const int df = T.dirTo[k][from], dt = T.dirTo[k][to];
+    return (df >= 0 && ray_attacked_bb(stm, k, df, occ, U, to, t)) || (dt >= 0 && dt != df && ray_attacked_bb(stm, k, dt, occ, U, to, t));
+}
+#else
 bool Position::gives_check(Move m) const {
     const int from = from_sq(m), to = to_sq(m);
     const Piece moving = board[from];
@@ -459,7 +691,7 @@ bool Position::gives_check(Move m) const {
         const int k = kingSq[~stm];
         const PieceType t = type_of(moving);
         // Off the enemy king's lines a rook/cannon/king cannot attack it, and the others need to be close.
-        if (!touches_king_lines(from, to, k) && (t == ROOK || t == CANNON || t == KING || cheb(to, k) > 2)) return false;
+        if (!touches_king_lines(from, to, k) && (t == ROOK || t == CANNON || t == KING || !cheb_le2(to, k))) return false;
     }
     auto& b = const_cast<Piece(&)[NUM_SQ]>(board);
     const Piece captured = b[to];
@@ -468,7 +700,7 @@ bool Position::gives_check(Move m) const {
     const int k = kingSq[~stm];
     const PieceType t = type_of(moving);
     bool check;
-    if (diag_adjacent(from, k) || (t != ROOK && t != CANNON && t != KING && cheb(to, k) <= 2))
+    if (diag_adjacent(from, k) || (t != ROOK && t != CANNON && t != KING && cheb_le2(to, k)))
         check = king_attacked(~stm, k);
     else {
         // The mover can only check along a ray through to; discoveries come through from's ray.
@@ -482,6 +714,7 @@ bool Position::gives_check(Move m) const {
     b[to] = captured;
     return check;
 }
+#endif  // MASKFISH_BITBOARD
 
 int Position::gen_legal(Move* list) const {
     Move tmp[MAX_MOVES];
@@ -512,6 +745,9 @@ void Position::do_move(Move m, StateInfo& st) {
     st.lastIrrev = int16_t(lastIrrev);
     st.skey = skey;
     const bool hinted = hintMove == m && hintKey == key && hintLen == keyHist.size();
+#ifdef MASKFISH_BITBOARD
+    bb_move(us, from, to, pc, reveal_of(m), cap);
+#endif
     skey ^= skey_of(pc, from);
     if (cap) {
         skey ^= skey_of(cap, to);
@@ -550,8 +786,8 @@ void Position::do_move(Move m, StateInfo& st) {
         const int k = kingSq[stm];
         const PieceType t = type_of(np);
         const bool shortRange = t != ROOK && t != CANNON && t != KING;
-        if (!touches_king_lines(from, to, k) && (!shortRange || cheb(to, k) > 2)) chk = false;
-        else if (diag_adjacent(from, k) || (shortRange && cheb(to, k) <= 2)) chk = in_check();
+        if (!touches_king_lines(from, to, k) && (!shortRange || !cheb_le2(to, k))) chk = false;
+        else if (diag_adjacent(from, k) || (shortRange && cheb_le2(to, k))) chk = in_check();
         else {
             const int df = T.dirTo[k][from], dt = T.dirTo[k][to];
             chk = (df >= 0 && ray_attacked(stm, k, df)) || (dt >= 0 && dt != df && ray_attacked(stm, k, dt));
@@ -559,6 +795,9 @@ void Position::do_move(Move m, StateInfo& st) {
     }
 #ifdef JQ_VERIFY_LEGAL
     if (chk != in_check()) { std::fprintf(stderr, "do_move check mismatch %s\n", fen().c_str()); std::abort(); }
+#ifdef MASKFISH_BITBOARD
+    if (!bitboards_ok()) { std::fprintf(stderr, "do_move bitboards mismatch %s\n", fen().c_str()); std::abort(); }
+#endif
     if (king_attacked(us, kingSq[us])) { std::fprintf(stderr, "do_move of an illegal move %s\n", fen().c_str()); std::abort(); }
 #endif
     keyHist.push_back(key);
@@ -588,6 +827,10 @@ void Position::undo_move(Move m, const StateInfo& st) {
     keyHist.pop_back();
     checkHist.pop_back();
     moveHist.pop_back();
+#ifdef MASKFISH_BITBOARD  // the same delta again (xor): before board[] goes back
+    if (st.urnSlot >= 0) bb_move(us, from, to, make_piece(us, DARK), type_of(board[to]), st.captured);
+    else bb_move(us, from, to, board[to], NO_TYPE, st.captured);
+#endif
     if (st.urnSlot >= 0) {
         ++urn[us][st.urnSlot];
         ++urnTotal[us];
@@ -605,6 +848,9 @@ void Position::undo_move(Move m, const StateInfo& st) {
     skey = st.skey;
     noCapture = st.noCapture;
     lastIrrev = st.lastIrrev;
+#if defined(MASKFISH_BITBOARD) && defined(JQ_VERIFY_LEGAL)
+    if (!bitboards_ok()) { std::fprintf(stderr, "undo_move bitboards mismatch %s\n", fen().c_str()); std::abort(); }
+#endif
 }
 
 void Position::do_null(StateInfo& st) {

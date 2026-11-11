@@ -79,6 +79,9 @@ std::string build_info() {
     b += " (universal binary; MASKFISH_UNIVERSAL_ARCH=list lists its builds)";
 #endif
     const EmbeddedNet e = embedded_net();
+#ifdef MASKFISH_BITBOARD
+    b += ", bitboard move generation";
+#endif
     return "compiler " + c + "\nbuild " + b + "\nembedded network " +
            (e.size ? std::string(DEFAULT_NET) + ", " + std::to_string(e.size) + " bytes" : std::string("none"));
 }

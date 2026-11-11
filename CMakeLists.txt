@@ -16,6 +16,17 @@ set(MASKFISH_NET_FILE "${CMAKE_SOURCE_DIR}/nets/maskfish.nnue" CACHE FILEPATH
     "The network embedded with MASKFISH_EMBED_NET (scripts/net.sh fetches the published one there)")
 
 option(MASKFISH_LTO "Link-time optimisation (measured no faster)" OFF)
+# The board as sets of squares beside the array (src/bitboard.h, from AB-JChess): the same moves in the same order
+# and the same search node for node, found faster. A build option, so that the two builds can be tested against
+# each other; every target is built with it (the layout of Position depends on it).
+option(MASKFISH_BITBOARD "Move generation, legality, checks and the exchange evaluation on bitboards" OFF)
+option(MASKFISH_PEXT "With MASKFISH_BITBOARD: gather a file's occupancy with PEXT (CPUs with a fast one)" OFF)
+if(MASKFISH_BITBOARD)
+    add_compile_definitions(MASKFISH_BITBOARD)
+    if(MASKFISH_PEXT)
+        add_compile_definitions(MASKFISH_PEXT)
+    endif()
+endif()
 if(MASKFISH_LTO)  # before the targets: the variable sets their property as they are created
     include(CheckIPOSupported)
     check_ipo_supported(RESULT MASKFISH_HAS_IPO OUTPUT MASKFISH_IPO_MSG)
@@ -25,6 +36,9 @@ if(MASKFISH_LTO)  # before the targets: the variable sets their property as they
 endif()
 
 set(MASKFISH_CORE_SOURCES src/tables.cpp src/position.cpp src/eval.cpp src/nnue.cpp src/hnn/hnnue.cpp src/search.cpp)
+if(MASKFISH_BITBOARD)
+    list(APPEND MASKFISH_CORE_SOURCES src/bitboard.cpp)
+endif()
 set(MASKFISH_MAIN_SOURCES src/main.cpp src/uci.cpp src/selfplay.cpp)
 
 # The embedded network (src/embedded.h): MASKFISH_NET_FILE, included in embedded_net.cpp with .incbin, when it
