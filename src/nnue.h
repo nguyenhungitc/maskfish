@@ -44,12 +44,16 @@ void set_flush_denormals();  // call once per thread that evaluates
 bool loaded();
 std::string net_desc();  // one line about the loaded net, for the UCI info string
 
-// The value carries the 80-ply damping and a material scale already (hnn::runtime_value), so the search does
-// not shrink it again (Rule40Div applies to the classical evaluation only).
+// evaluate() carries the 80-ply damping and a material scale already (hnn::runtime_value), so Rule40Div applies
+// to the classical evaluation only. The damping goes by the no-capture count, which the transposition table's
+// key does not hold: the search therefore keeps evaluate_base(), the value before the damping, and gets the
+// value at the node's own count with value_at().
 void refresh(const Position& pos, Accumulator& acc);
 void make_dirty(const Position& pos, Move m, Dirty& d);  // m carries the reveal for a dark mover
 void update(const Accumulator& prev, Accumulator& next, const Dirty& d);
 Value evaluate(const Accumulator& acc, Color stm);
+int evaluate_base(const Accumulator& acc, Color stm);
+Value value_at(int base, int noCapture);
 Value evaluate(const Position& pos);  // full refresh; for tools and the root
 
 }  // namespace jq::nnue

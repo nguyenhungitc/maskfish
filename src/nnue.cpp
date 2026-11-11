@@ -72,6 +72,8 @@ void refresh(const Position& pos, Accumulator& acc) { hnn::refresh(pos, acc.hnn)
 void make_dirty(const Position& pos, Move m, Dirty& d) { hnn::make_delta(pos, m, d.hd); }
 void update(const Accumulator& prev, Accumulator& next, const Dirty& d) { hnn::update(prev.hnn, next.hnn, d.hd); }
 Value evaluate(const Accumulator& acc, Color stm) { return hnn::evaluate(acc.hnn, stm); }
+int evaluate_base(const Accumulator& acc, Color stm) { return hnn::evaluate_base(acc.hnn, stm); }
+Value value_at(int base, int noCapture) { return hnn::value_at(base, noCapture); }
 
 Value evaluate(const Position& pos) {
     static thread_local Accumulator acc;

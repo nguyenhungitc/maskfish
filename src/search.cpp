@@ -354,6 +354,8 @@ struct Worker {
     nnue::Accumulator acc[MAX_PLY + 10];
     nnue::Dirty dirty[MAX_PLY + 10];
     bool accOk[MAX_PLY + 10];
+    // The raw static eval, as the transposition table keeps it: it does not depend on the no-capture count (the
+    // table's key does not hold it). rule40() / corrected() give the value at the node's count.
     Value eval_at(int ply) {
         if (!useNN) return classical_eval(pos);
         if (!accOk[ply]) {
@@ -374,7 +376,10 @@ struct Worker {
             if (a != b) { std::fprintf(stderr, "NNUE mismatch %d vs %d\n", int(a), int(b)); std::abort(); }
         }
 #endif
-        return nnue::evaluate(acc[ply], pos.stm);
+#ifdef JQ_VERIFY_NNUE
+        if (acc[ply].hnn.m.noCapture != pos.noCapture) { std::fprintf(stderr, "no-capture count mismatch\n"); std::abort(); }
+#endif
+        return nnue::evaluate_base(acc[ply], pos.stm);
     }
 
     void clear() {
@@ -419,10 +424,12 @@ struct Worker {
     // 80-ply rule: a static eval shrinks towards the draw as the no-capture count grows, so that the search prefers
     // the line that makes progress (a capture) over one that runs the clock out. Applied here, not in eval_at, so the
     // TT keeps the raw eval: the key does not hold the count, and one entry serves positions of any count.
-    // The network's value carries this damping already (hnn::runtime_value, by the count in its accumulator), so
-    // this only shrinks the classical evaluation (no net loaded).
+    // The network has its own damping (hnn::damped_value, the one it was trained with): its raw eval is the value
+    // before that damping, and Rule40Div only shrinks the classical evaluation (no net loaded).
     Value rule40(Value raw) const {
-        if (!P_Rule40Div || raw == VALUE_NONE || useNN) return raw;
+        if (raw == VALUE_NONE) return raw;
+        if (useNN) return nnue::value_at(raw, pos.noCapture);
+        if (!P_Rule40Div) return raw;
         return Value(raw - raw * std::min<int>(pos.noCapture, NO_CAPTURE_LIMIT) / P_Rule40Div);
     }
     Value corrected(Value raw) const {
@@ -900,7 +907,7 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
     pvLen[ply] = 0;
     Position& p = pos;
     if (ply > selDepth) selDepth = ply;
-    if (ply >= MAX_PLY) return eval_at(ply);
+    if (ply >= MAX_PLY) return rule40(eval_at(ply));
     const bool inCheck = p.checkHist.back() != 0;
     // The only quiet moves of quiescence are check evasions, so a cycle inside it is one of mutual checks (a cannon
     // and its screen trading discovered checks with a cannon on the next file, say). Without this test such a cycle
@@ -927,6 +934,12 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
     const Value oldAlpha = alpha;
     Value bestValue = -VALUE_INFINITE, standPat = VALUE_NONE, rawStand = VALUE_NONE;
     if (!inCheck) {
+#ifdef JQ_VERIFY_TTEVAL
+        if (ttHit && ttd.eval != VALUE_NONE && Value(ttd.eval) != eval_at(ply)) {
+            std::fprintf(stderr, "TT eval mismatch %d vs %d\n", int(ttd.eval), int(eval_at(ply)));
+            std::abort();
+        }
+#endif
         rawStand = ttHit && ttd.eval != VALUE_NONE ? Value(ttd.eval) : eval_at(ply);
         standPat = corrected(rawStand);
         if (standPat >= beta) {
@@ -998,7 +1011,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
     const bool root = ply == 0;
     if (ply > selDepth) selDepth = ply;
     if (!root) {
-        if (ply >= MAX_PLY) return inCheck ? VALUE_DRAW : eval_at(ply);
+        if (ply >= MAX_PLY) return inCheck ? VALUE_DRAW : rule40(eval_at(ply));
         const int rs = p.repetition_status();
         if (rs == 1) return VALUE_DRAW;
         if (rs == 2) return VALUE_KNOWN_WIN;
@@ -1035,6 +1048,12 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
     Value eval = VALUE_NONE, rawEval = VALUE_NONE;
     staticEv[ply] = VALUE_NONE;
     if (!inCheck) {
+#ifdef JQ_VERIFY_TTEVAL
+        if (ttHit && ttd.eval != VALUE_NONE && Value(ttd.eval) != eval_at(ply)) {
+            std::fprintf(stderr, "TT eval mismatch %d vs %d\n", int(ttd.eval), int(eval_at(ply)));
+            std::abort();
+        }
+#endif
         rawEval = ttHit && ttd.eval != VALUE_NONE ? Value(ttd.eval) : eval_at(ply);
         eval = corrected(rawEval);
         staticEv[ply] = eval;

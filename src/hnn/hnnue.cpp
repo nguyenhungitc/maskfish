@@ -418,7 +418,7 @@ void update(const Acc& prev, Acc& next, const Delta& d) {
     next.m.material = int16_t(prev.m.material + d.m.material);
 }
 
-int runtime_value(const Acc& acc, Color stm, int* psqtRaw, int* positionalRaw) {
+int base_value(const Acc& acc, Color stm, int* psqtRaw, int* positionalRaw) {
     const Meta& m = acc.m;
     const int b = std::min((m.pieces - 1) / 4, 7) + (m.dark > 0 ? 8 : 0);
     alignas(64) uint8_t x[MAX_W];
@@ -459,15 +459,26 @@ int runtime_value(const Acc& acc, Color stm, int* psqtRaw, int* positionalRaw) {
     if (positionalRaw) *positionalRaw = positional;
     const int nn = (psqt + positional) / 16;
     const int materialScale = 935 + m.material * 93 / 5116;
-    int value = (nn * materialScale) / 1024;
-    value = value * (218 - std::min<int>(m.noCapture, 120)) / 176;
+    return (nn * materialScale) / 1024;
+}
+
+int damped_value(int base, int noCapture) {
+    const int value = base * (218 - std::min(noCapture, 120)) / 176;
     return std::clamp(value, -29507, 29507);
 }
 
-Value evaluate(const Acc& acc, Color stm) {
-    const int64_t v = int64_t(runtime_value(acc, stm)) * g_scale;
+int runtime_value(const Acc& acc, Color stm, int* psqtRaw, int* positionalRaw) {
+    return damped_value(base_value(acc, stm, psqtRaw, positionalRaw), acc.m.noCapture);
+}
+
+Value value_at(int base, int noCapture) {
+    const int64_t v = int64_t(damped_value(base, noCapture)) * g_scale;
     const int64_t s = v >= 0 ? (v + 500) / 1000 : -((-v + 500) / 1000);
     return Value(std::clamp<int64_t>(s, -(VALUE_KNOWN_WIN - 1), VALUE_KNOWN_WIN - 1));
 }
+
+int evaluate_base(const Acc& acc, Color stm) { return std::clamp(base_value(acc, stm), -BASE_MAX, BASE_MAX); }
+
+Value evaluate(const Acc& acc, Color stm) { return value_at(base_value(acc, stm), acc.m.noCapture); }
 
 }  // namespace jq::hnn

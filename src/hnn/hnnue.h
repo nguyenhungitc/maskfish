@@ -103,7 +103,20 @@ extern int g_scale;  // permille
 void refresh(const Position& pos, Acc& acc);
 void make_delta(const Position& pos, Move m, Delta& d);
 void update(const Acc& prev, Acc& next, const Delta& d);
+// The value in three steps:
+//   base_value     the net's output scaled by material; it depends on the position only
+//   damped_value   the base shrunk by the no-capture count (the 80-ply damping), clamped
+//   value_at       the damped value in the engine's units (HNNScale), clamped below a known win
+// runtime_value = damped_value(base_value, the accumulator's count); evaluate = value_at of the same.
+int base_value(const Acc& acc, Color stm, int* psqtRaw = nullptr, int* positionalRaw = nullptr);
+int damped_value(int base, int noCapture);
 int runtime_value(const Acc& acc, Color stm, int* psqtRaw = nullptr, int* positionalRaw = nullptr);
+Value value_at(int base, int noCapture);
 Value evaluate(const Acc& acc, Color stm);
+// The base value as the search keeps it in the transposition table (16 bits), whose key does not hold the
+// no-capture count: value_at(evaluate_base(acc, stm), count) is the value at any count. Clamped to BASE_MAX, so
+// it differs from evaluate() only beyond that, where the damped value is at least 17,818 at every count.
+constexpr int BASE_MAX = 32000;
+int evaluate_base(const Acc& acc, Color stm);
 
 }  // namespace jq::hnn
