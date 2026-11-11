@@ -126,6 +126,19 @@ most of them changed later on the Settings page. The page listens on all
 addresses in the container: set a password on the Settings page (or
 `-e FISHTEST_PASSWORD=...`) if the port is reachable by others.
 
+The container does not run as root but as the user `fishtest` (uid 1000), the
+owner of `/data`. A new volume gets that owner by itself. A volume made by an
+older image (which ran as root) holds files of root, so give them to the new
+user once, with the container stopped:
+
+```
+docker run --rm -u 0 --entrypoint chown -v fishtest-data:/data nguyenhungitc/maskfish-fishtest -R fishtest:fishtest /data
+```
+
+A directory of the host mounted on `/data` must be writable by uid 1000
+(`sudo chown -R 1000:1000 <directory>`), or run the container as the owner of
+the directory (`docker run --user "$(id -u):$(id -g)" ...`).
+
 To build it yourself, from the root of the repository:
 
 ```

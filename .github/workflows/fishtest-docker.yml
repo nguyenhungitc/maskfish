@@ -9,8 +9,8 @@
 #
 # The image is multi-platform, linux/amd64 and linux/arm64: each is built and checked on a runner of its own
 # architecture (no emulation), pushed by digest, and the two are joined into one manifest list, tagged latest.
-# The check: the pages answer, the referee's library loads, and the image compiles the engine (as fishtest does
-# when a test starts) and it gives perft 3 = 83,907.
+# The check: the image does not run as root and can write to /data, the pages answer, the referee's library
+# loads, and the image compiles the engine (as fishtest does when a test starts) and it gives perft 3 = 83,907.
 #
 # Tags pushed: latest, and only it (the other tags of the image are deleted).
 name: Fishtest docker image
@@ -102,6 +102,9 @@ jobs:
           arch=$(docker run --rm --entrypoint uname fishtest:test -m)
           echo "image architecture: $arch"
           case "${{ matrix.arch }}:$arch" in amd64:x86_64|arm64:aarch64) ;; *) exit 1 ;; esac
+          user=$(docker run --rm --entrypoint id fishtest:test -u)
+          echo "image user id: $user"
+          [ "$user" != 0 ] || { echo "::error::the image runs as root"; exit 1; }
           docker run -d --name ft -p 6543:6543 fishtest:test --no-runner
           for i in $(seq 1 30); do
             curl -fs http://127.0.0.1:6543/tests > /dev/null && break
@@ -112,6 +115,7 @@ jobs:
             echo "$page $code"
             [ "$code" = 200 ] || { docker logs ft; exit 1; }
           done
+          docker exec ft sh -c 'touch /data/.writable && rm /data/.writable' || { echo "::error::/data is not writable"; exit 1; }
           docker exec ft python -c "import sys; sys.path[:0] = ['/app/tools']; import match; match.NativeRules(); print('referee library ok')"
           docker rm -f ft
 

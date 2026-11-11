@@ -13,12 +13,22 @@
 # cache, builds, networks, games). Options of fishtest.py can be appended, e.g.
 # `docker run ... maskfish-fishtest --concurrency 15 --spsa`; most of them can also
 # be changed later on the Settings page.
+#
+# The container does not run as root but as the user fishtest (uid 1000), the
+# owner of /data: a new volume gets that owner by itself, a directory of the host
+# mounted on /data must be writable by uid 1000 (see the README for a volume
+# made by an older image, whose files belong to root).
 
 FROM python:3.12-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git cmake make g++ curl ca-certificates \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends git cmake make g++ ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 1000 fishtest \
+    && mkdir /data \
+    && chown fishtest:fishtest /data
 
 WORKDIR /app
 COPY fishtest/requirements.txt fishtest/requirements.txt
@@ -35,6 +45,7 @@ COPY fishtest/ fishtest/
 
 ENV PYTHONUNBUFFERED=1
 ENV JIEQI_NATIVE_LIBRARY=/app/build/lib/libjieqi_rules.so
+USER fishtest
 VOLUME /data
 EXPOSE 6543
 
