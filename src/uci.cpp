@@ -51,7 +51,7 @@ const char* BENCH_FENS[] = {
     "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w R2A2C2P5N2B2r2a2c2p5n2b2 0 1",
     "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/4P4/X1X3X1X/1X5X1/9/XXXXKXXXX b R2A2C2P4N2B2r2a2c2p5n2b2 1 1",
     "r1xxkxxxx/9/1x5c1/x1x1x1x1x/9/9/X1X1X1X1X/1C5X1/9/XXXXKXXXX w R2A2C1P5N2B2r1a2c1p5n2b2 2 2",
-    "2xakxxxx/4r4/1x5c1/x1x1x1x1p/9/2P6/X1X1X1X1X/1C5X1/9/XXXXKXXXX w R2A2C1P4N2B2r1a1c1p4n2b2 0 4",
+    "2xakxxxx/4r4/1x5c1/x1x1x1x1p/9/2P6/X3X1X1X/1C5X1/9/XXXXKXXXX w R2A2C1P4N2B2r1a1c1p4n2b2 0 4",  // was X1X1X1X1X: 17 red pieces
     "4k4/9/9/9/9/9/9/9/4A4/3RK4 w - 0 1",
     "3ak4/4a4/9/9/9/9/9/9/9/3RK4 w - 0 1",
 };
@@ -202,7 +202,14 @@ struct Engine {
             v = int(std::clamp<long long>(n, lo, hi));
             return true;
         };
-        if (name == "Hash") { if (spin(1, 16384)) searcher.resize_hash(std::size_t(v)); }
+        if (name == "Hash") {
+            if (spin(1, 16384)) {
+                const std::size_t got = searcher.resize_hash(std::size_t(v)) >> 20;
+                if (got * 2 <= std::size_t(v))  // below the power of two the request rounds down to: memory was short
+                    out("info string Hash " + std::to_string(v) + " MB cannot be allocated; the table has " +
+                        std::to_string(got) + " MB");
+            }
+        }
         else if (name == "Threads") { if (spin(1, 256)) searcher.set_threads(v); }
         else if (name == "Clear Hash") searcher.clear();
         else if (name == "MultiPV") { if (spin(1, int(MAX_MOVES))) multiPV = v; }
@@ -256,9 +263,11 @@ struct Engine {
         while (is >> tok) {
             if (tok == "depth") is >> lim.depth;
             else if (tok == "nodes") is >> lim.nodes;
-            else if (tok == "movetime") is >> lim.movetime;
-            else if (tok == "wtime") is >> lim.time[RED];
-            else if (tok == "btime") is >> lim.time[BLACK];
+            // A clock or move time of 0 or less (a GUI sends it when the clock has run out, an increment still to
+            // come) is the smallest budget: the engine answers at once. Left at 0 it would mean no limit.
+            else if (tok == "movetime") { is >> lim.movetime; lim.movetime = std::max(lim.movetime, 1); }
+            else if (tok == "wtime") { is >> lim.time[RED]; lim.time[RED] = std::max(lim.time[RED], 1); }
+            else if (tok == "btime") { is >> lim.time[BLACK]; lim.time[BLACK] = std::max(lim.time[BLACK], 1); }
             else if (tok == "winc") is >> lim.inc[RED];
             else if (tok == "binc") is >> lim.inc[BLACK];
             else if (tok == "movestogo") is >> lim.movestogo;
@@ -295,7 +304,11 @@ struct Engine {
         searcher.clear();
         for (const char* f : BENCH_FENS) {
             Position p;
-            p.set_fen(f);
+            std::string err;
+            if (!p.set_fen(f, &err)) {  // a half-parsed position would be searched with undefined behaviour
+                out("info string bench: bad fen " + std::string(f) + ": " + err);
+                continue;
+            }
             Limits lim;
             lim.depth = depth;
             const SearchResult r = searcher.go(p, lim, [](const std::string&) {});

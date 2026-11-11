@@ -35,7 +35,7 @@ DIFFTEST_GAMES=${DIFFTEST_GAMES:-1000}
 DIFFTEST_SEED=${DIFFTEST_SEED:-1}
 NET="$ROOT/nets/maskfish.nnue"
 TESTNET="$BUILD/testnet.hnn"
-BENCH_NODES=60484  # bench at its default depth with the test network (tests/testnet.py), on any CPU
+BENCH_NODES=61977  # bench at its default depth with the test network (tests/testnet.py), on any CPU
 LOG="$BUILD/logs"
 if [ -z "${PYTHON:-}" ]; then
     if [ -x "$ROOT/.venv/bin/python" ]; then PYTHON="$ROOT/.venv/bin/python"; else PYTHON=python3; fi

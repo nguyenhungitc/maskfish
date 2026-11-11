@@ -49,15 +49,21 @@ public:
     TranspositionTable& operator=(const TranspositionTable&) = delete;
     ~TranspositionTable() { std::free(table_); }
 
-    void resize(std::size_t mb) {
+    // Sizes the table to the largest power of two of entries within mb megabytes. When that much memory cannot be
+    // had, the table halves until it can (down to one cache line); returns the size it got, in bytes.
+    std::size_t resize(std::size_t mb) {
         std::size_t n = 1;  // entries (a power of two, at least one cache line)
         while (n * 2 * sizeof(TTEntry) <= mb * 1024 * 1024) n *= 2;
         n = std::max<std::size_t>(n, 4);
-        std::free(table_);
-        table_ = static_cast<Line*>(alloc_large(n / 4 * sizeof(Line)));  // zeroed; huge pages where the kernel gives them
+        std::free(table_);  // first, so that the memory of the old table can serve the new one
+        table_ = nullptr;
+        for (; n >= 4; n /= 2)
+            if ((table_ = static_cast<Line*>(alloc_large(n / 4 * sizeof(Line)))))  // zeroed; huge pages where given
+                break;
         if (!table_) throw std::bad_alloc();
         lines_ = n / 4;
         mask_ = n - 1;  // entry index mask
+        return lines_ * sizeof(Line);
     }
     void clear() { std::memset(static_cast<void*>(table_), 0, lines_ * sizeof(Line)); }
     void new_search() { gen_ = uint8_t((gen_ + 1) & 63); }

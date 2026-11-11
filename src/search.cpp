@@ -909,14 +909,17 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
     if (ply > selDepth) selDepth = ply;
     if (ply >= MAX_PLY) return rule40(eval_at(ply));
     const bool inCheck = p.checkHist.back() != 0;
-    // The only quiet moves of quiescence are check evasions, so a cycle inside it is one of mutual checks (a cannon
-    // and its screen trading discovered checks with a cannon on the next file, say). Without this test such a cycle
-    // ran on to MAX_PLY.
-    if (inCheck && qply > 0) {
+    // The draw rules, as search() applies them. The first quiescence node (qply 0) is the position after the
+    // parent's move, which search() did not test before it dropped into quiescence at depth 0: a quiet move that
+    // repeats the position or reaches the 80th ply without a capture ends the game there. Deeper, the only quiet
+    // moves are check evasions, so a cycle is one of mutual checks (a cannon and its screen trading discovered checks
+    // with a cannon on the next file, say); without this test such a cycle ran on to MAX_PLY.
+    if (ply > 0 && (qply == 0 || inCheck)) {
         const int rs = p.repetition_status();
         if (rs == 1) return VALUE_DRAW;
         if (rs == 2) return VALUE_KNOWN_WIN;
         if (rs == 3) return -VALUE_KNOWN_WIN;
+        if (p.noCapture >= NO_CAPTURE_LIMIT) return p.has_legal_move() ? VALUE_DRAW : mated_in(ply);  // mate precedes the clock
     }
     const Color us = p.stm;
     bool ttHit = false;
@@ -1633,7 +1636,7 @@ void Searcher::set_threads(int n) {
 }
 
 int Searcher::threads() const { return int(impl_->workers.size()); }
-void Searcher::resize_hash(std::size_t mb) { impl_->TT.resize(mb); }
+std::size_t Searcher::resize_hash(std::size_t mb) { return impl_->TT.resize(mb); }
 
 void Searcher::clear() {
     for (auto& w : impl_->workers) w->clear();

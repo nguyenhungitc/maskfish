@@ -223,7 +223,7 @@ string bad value <value> for option <name>`.
   the start for N = 1 to 3); `perftc N` expands the chance outcomes and prints
   the leaves and the expected mass.
 * `bench [DEPTH]` (default 7) searches a fixed set of positions and prints the
-  node count, the signature of the build (60,484 with the test network, see
+  node count, the signature of the build (61,977 with the test network, see
   [Contributing](#contributing)); `nnbench` times the network's evaluate,
   update and refresh.
 * `compiler` prints the compiler and the instruction set of the build (see
@@ -464,7 +464,7 @@ Maskfish, e.g. with the local [fishtest](fishtest/README.md) or
 command and its records.
 
 `bash tools/check_all.sh` checks a clean clone: the engine's rules against the
-referee (`maskfish_difftest`), perft, the `bench` signature (60,484 nodes with
+referee (`maskfish_difftest`), perft, the `bench` signature (61,977 nodes with
 the test network of `tests/testnet.py`), the network evaluator, pondering, the
 referee's library, the local board and the trainer. A change that is meant to
 keep the search as it is must keep the bench signature.

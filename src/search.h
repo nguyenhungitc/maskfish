@@ -68,7 +68,7 @@ public:
     Searcher& operator=(const Searcher&) = delete;
     void set_threads(int n);
     int threads() const;
-    void resize_hash(std::size_t mb);
+    std::size_t resize_hash(std::size_t mb);  // returns the size the table got, in bytes (smaller when memory is short)
     void clear();  // histories and transposition table
     void stop();   // may be called from another thread
     // Clears the stop flag before go() is started on another thread (so an early stop() holds). pondering: the
