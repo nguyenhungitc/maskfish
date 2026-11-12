@@ -22,14 +22,7 @@
 
 namespace jq {
 
-int PieceValue[9] = {0, 0, 900, 400, 230, 230, 450, 100, 0};
-
-int urn_mean_value(const Position& pos, Color c) {
-    if (pos.urnTotal[c] <= 0) return 0;
-    int sum = 0;
-    for (int sl = 0; sl < NUM_SLOTS; ++sl) sum += pos.urn[c][sl] * PieceValue[slot_type(sl)];
-    return sum / pos.urnTotal[c];
-}
+const int PieceValue[9] = {0, 0, 900, 400, 230, 230, 450, 100, 0};
 
 namespace {
 int mobility_ray(const Position& pos, int s) {

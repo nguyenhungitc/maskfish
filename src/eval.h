@@ -21,8 +21,9 @@
 
 namespace jq {
 
-extern int PieceValue[9];          // indexed by PieceType (DARK unused)
-int urn_mean_value(const Position& pos, Color c);
+// Indexed by PieceType (DARK unused). Constant: Position keeps the mean value of each urn (urnMean) from it.
+extern const int PieceValue[9];
+inline int urn_mean_value(const Position& pos, Color c) { return pos.urnMean[c]; }
 Value classical_eval(const Position& pos);   // side-to-move perspective
 Value evaluate(const Position& pos);         // the network if one is loaded, otherwise classical
 

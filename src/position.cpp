@@ -17,6 +17,7 @@
 */
 
 #include "position.h"
+#include "eval.h"
 
 #include <cctype>
 #include <charconv>
@@ -119,6 +120,13 @@ uint64_t Position::compute_key() const {
     return k;
 }
 
+int Position::compute_urn_mean(Color c) const {
+    if (urnTotal[c] <= 0) return 0;
+    int sum = 0;
+    for (int sl = 0; sl < NUM_SLOTS; ++sl) sum += urn[c][sl] * PieceValue[slot_type(sl)];
+    return sum / urnTotal[c];
+}
+
 #ifdef MASKFISH_BITBOARD
 void Position::compute_bitboards() {
     occBB = byColorBB[0] = byColorBB[1] = darkBB = 0;
@@ -202,6 +210,7 @@ bool Position::set_fen(const std::string& fen, std::string* error) {
         urnTotal[c] = 0;
         for (int sl = 0; sl < NUM_SLOTS; ++sl) urnTotal[c] = int8_t(urnTotal[c] + urn[c][sl]);
         if (urnTotal[c] < darkCount[c]) return fail(error, "pool smaller than face-down count");
+        urnMean[c] = int16_t(compute_urn_mean(Color(c)));
     }
     // A kind's revealed pieces and its count in the urn cannot exceed its initial number (as the referee's
     // inventory); more pieces would also overflow the move lists (MAX_MOVES).
@@ -768,6 +777,8 @@ void Position::do_move(Move m, StateInfo& st) {
         --urnTotal[us];
         --darkCount[us];
         st.urnSlot = int8_t(sl);
+        st.urnMean = urnMean[us];
+        urnMean[us] = int16_t(compute_urn_mean(us));
     } else if (type_of(pc) == KING) {
         kingSq[us] = int8_t(to);
     }
@@ -835,6 +846,7 @@ void Position::undo_move(Move m, const StateInfo& st) {
         ++urn[us][st.urnSlot];
         ++urnTotal[us];
         ++darkCount[us];
+        urnMean[us] = st.urnMean;
         board[to] = make_piece(us, DARK);
     } else if (type_of(board[to]) == KING) {
         kingSq[us] = int8_t(from);
@@ -1158,6 +1170,7 @@ bool Position::apply_observed(Move base, PieceType reveal, PieceType capturedId,
         --urn[vc][sl];
         key ^= T.zUrn[vc][sl][urn[vc][sl]];
         --urnTotal[vc];
+        urnMean[vc] = int16_t(compute_urn_mean(vc));
         keyHist.back() = key;
     }
     return true;
@@ -1181,6 +1194,7 @@ bool Position::valid(std::string* error) const {
         int tot = 0;
         for (int sl = 0; sl < NUM_SLOTS; ++sl) { if (urn[c][sl] < 0) return fail(error, "negative urn"); tot += urn[c][sl]; }
         if (tot != urnTotal[c] || tot < dark[c]) return fail(error, "urn total mismatch");
+        if (urnMean[c] != compute_urn_mean(Color(c))) return fail(error, "urn mean mismatch");
     }
     return true;
 }

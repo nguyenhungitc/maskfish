@@ -44,6 +44,7 @@ struct StateInfo {
     int8_t urnSlot;      // slot drawn by the mover's reveal, -1 if none
     int16_t noCapture;   // counter before the move
     int16_t lastIrrev;   // irreversible boundary before the move
+    int16_t urnMean;     // the mover's urnMean before the move (a reveal changes it)
     uint64_t skey;       // structure key before the move
 };
 
@@ -68,6 +69,9 @@ public:
     Color stm = RED;
     int8_t urn[2][NUM_SLOTS];
     int8_t urnTotal[2];
+    // The mean value (PieceValue) of the identities in c's urn, 0 when it is empty: urn_mean_value, which the
+    // search asks for at every node. Kept with the urn by set_fen, do / undo_move and apply_observed.
+    int16_t urnMean[2] = {0, 0};
     int8_t darkCount[2];
     int8_t kingSq[2];
     int16_t noCapture = 0;
@@ -156,6 +160,7 @@ public:
     bool has_major(Color c) const;
     uint64_t compute_key() const;
     uint64_t compute_skey() const;
+    int compute_urn_mean(Color c) const;  // urnMean[c] from urn[c]
     bool valid(std::string* error = nullptr) const;
 
 private:
