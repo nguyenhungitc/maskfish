@@ -1159,13 +1159,15 @@ bool Position::apply_observed(Move base, PieceType reveal, PieceType capturedId,
         if (reveal == NO_TYPE) return fail(error, "face-down mover without reveal");
         if (urn[stm][type_slot(reveal)] <= 0) return fail(error, "reveal not in pool");
     }
+    // The observer saw the identity of a captured face-down piece: it must be in that side's urn. Tested before
+    // the move is made, so that a refused move leaves the position as it was.
+    const bool seen = victim && type_of(victim) == DARK && capturedId != NO_TYPE;
+    if (seen && urn[color_of(victim)][type_slot(capturedId)] <= 0) return fail(error, "captured identity not in pool");
     StateInfo st;
     do_move(type_of(mover) == DARK ? make_move(from, to, reveal) : base, st);
-    if (victim && type_of(victim) == DARK && capturedId != NO_TYPE) {
-        // The observer saw the captured identity: remove it from that side's urn.
+    if (seen) {  // remove the captured identity from the victim's urn
         const Color vc = color_of(victim);
         const int sl = type_slot(capturedId);
-        if (urn[vc][sl] <= 0) return fail(error, "captured identity not in pool");
         key ^= T.zUrn[vc][sl][urn[vc][sl]];
         --urn[vc][sl];
         key ^= T.zUrn[vc][sl][urn[vc][sl]];

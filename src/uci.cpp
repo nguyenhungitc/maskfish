@@ -22,10 +22,12 @@
 #include "search.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits.h>
 #include <unistd.h>
@@ -208,7 +210,16 @@ struct Engine {
             v = int(std::clamp<long long>(n, lo, hi));
             return true;
         };
-        if (name == "Hash") {
+        // Option names are matched without regard to case (UCI): the canonical name replaces the one sent.
+        auto named = [&](const char* canonical) {
+            if (name.size() != std::strlen(canonical)) return false;
+            for (std::size_t i = 0; i < name.size(); ++i)
+                if (std::tolower(static_cast<unsigned char>(name[i])) != std::tolower(static_cast<unsigned char>(canonical[i])))
+                    return false;
+            name = canonical;
+            return true;
+        };
+        if (named("Hash")) {
             if (spin(1, 16384)) {
                 const std::size_t got = searcher.resize_hash(std::size_t(v)) >> 20;
                 if (got * 2 <= std::size_t(v))  // below the power of two the request rounds down to: memory was short
@@ -216,18 +227,18 @@ struct Engine {
                         std::to_string(got) + " MB");
             }
         }
-        else if (name == "Threads") { if (spin(1, 256)) searcher.set_threads(v); }
-        else if (name == "Clear Hash") searcher.clear();
-        else if (name == "MultiPV") { if (spin(1, int(MAX_MOVES))) multiPV = v; }
-        else if (name == "Ponder") ponderOpt = value == "true";  // the engine ponders when it is sent go ponder
-        else if (name == "HNNScale") { if (spin(100, 4000)) { hnn::g_scale = v; searcher.clear(); } }  // permille of the net's value
-        else if (name == "EvalFile") {
+        else if (named("Threads")) { if (spin(1, 256)) searcher.set_threads(v); }
+        else if (named("Clear Hash")) searcher.clear();
+        else if (named("MultiPV")) { if (spin(1, int(MAX_MOVES))) multiPV = v; }
+        else if (named("Ponder")) ponderOpt = value == "true";  // the engine ponders when it is sent go ponder
+        else if (named("HNNScale")) { if (spin(100, 4000)) { hnn::g_scale = v; searcher.clear(); } }  // permille of the net's value
+        else if (named("EvalFile")) {
             firstReady = false;  // the answer below says what is loaded
             for (const std::string& l : load_net(value)) out("info string " + l);
             searcher.clear();
         } else {
             for (Param& p : params())
-                if (name == p.name) {
+                if (named(p.name)) {
                     if (spin(p.lo, p.hi)) {
                         *p.value = v;
                         search::init();
@@ -273,6 +284,7 @@ struct Engine {
         static const char* const WORDS[] = {"depth", "nodes", "movetime", "wtime", "btime", "winc", "binc",
                                             "movestogo", "infinite", "ponder", "mate", "searchmoves"};
         bool held = false;  // tok holds the word that ended searchmoves
+        std::vector<std::string> searchTokens;  // the words after searchmoves, checked once the position is known
         while (held || is >> tok) {
             held = false;
             if (tok == "depth") is >> lim.depth;
@@ -294,7 +306,7 @@ struct Engine {
                         held = true;  // the limits after the moves are read, not taken for moves
                         break;
                     }
-                    lim.searchMoves.push_back(parse_move_coords(tok));
+                    searchTokens.push_back(tok);
                 }
         }
         lim.multiPV = multiPV;
@@ -303,6 +315,25 @@ struct Engine {
             out("info string no search: the last position command was refused");
             out("bestmove (none)");
             return;
+        }
+        // searchmoves: the legal moves among those named. A word that is not one is said and left out; when none
+        // is left the engine does not search (the whole list would be a move the GUI did not allow).
+        if (!searchTokens.empty()) {
+            Move legal[MAX_MOVES];
+            const int n = pos.gen_legal(legal);
+            for (const std::string& t : searchTokens) {
+                const Move m = parse_move_coords(t);
+                if (m != MOVE_NONE && std::find(legal, legal + n, m) != legal + n) {
+                    if (std::find(lim.searchMoves.begin(), lim.searchMoves.end(), m) == lim.searchMoves.end())
+                        lim.searchMoves.push_back(m);
+                } else
+                    out("info string searchmoves: " + t + " is not a legal move, left out");
+            }
+            if (lim.searchMoves.empty() && n > 0) {
+                out("info string no search: no legal move in searchmoves");
+                out("bestmove (none)");
+                return;
+            }
         }
         Position root = pos;
         searcher.prepare(lim.ponder);  // a stop or ponderhit that arrives before the search thread runs must not be lost

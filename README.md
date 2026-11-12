@@ -191,7 +191,10 @@ position startpos moves b2b9Pr a9b9r
 `infinite`, `ponder`, `mate N` and `searchmoves`. A `go ponder` search has no
 time limit until `ponderhit`, from which its clock runs; a pondering or
 infinite search answers only after `ponderhit` or `stop`. `go mate N` stops at
-a mate in N moves or fewer.
+a mate in N moves or fewer. A word after `searchmoves` that is not a legal
+move is left out (`info string searchmoves: <word> is not a legal move, left
+out`); when none of them is legal the engine does not search and answers
+`info string no search: no legal move in searchmoves` and `bestmove (none)`.
 
 ### UCI options
 
@@ -211,7 +214,8 @@ Every search parameter is also a spin option (`ChanceK`, `ChanceMix`,
 table in [`src/search.cpp`](src/search.cpp), with the measured configuration as
 their defaults; `uci` lists them all with their ranges. SPSA
 (`tools/spsa.py`, fishtest) tunes through them. An option the engine does not
-have is answered with `info string unknown option <name>`. A spin value out of
+have is answered with `info string unknown option <name>`. Option names are
+matched without regard to case (`setoption name hash value 32`). A spin value out of
 its range is clamped to it; one that is not a number is refused with `info
 string bad value <value> for option <name>`.
 

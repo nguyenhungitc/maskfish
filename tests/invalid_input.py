@@ -25,6 +25,8 @@ import sys
 START = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w R2A2C2P5N2B2r2a2c2p5n2b2 0 1"
 AFTER_A3A4 = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/P8/2X1X1X1X/1X5X1/9/XXXXKXXXX b R2A2C2P4N2B2r2a2c2p5n2b2 1 1"
 ENDGAME = "3ak4/4a4/9/9/9/9/9/9/9/3RK4 w - 0 1"
+# After b2b9Pr a9b9r: both black rooks are accounted for, one captured face down, one revealed
+AFTER_CAPTURES = "1rxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/7X1/9/XXXXKXXXX w R2A2C2P4N2B2a2c2p5n2b2 0 1"
 CRASH = ("runtime error", "AddressSanitizer", "LeakSanitizer", "terminate called", "Assertion", "Segmentation")
 
 # (name, commands, expected text, FEN the engine must hold afterwards)
@@ -83,11 +85,18 @@ CASES = [
     ("garbage move", ["position startpos moves zzzz"], "bad move zzzz:", START),
     ("short move", ["position startpos moves a3"], "bad move a3:", START),
     ("moves after a bad move", ["position startpos moves a3a4P zzzz a6a5p"], "bad move zzzz:", AFTER_A3A4),
+    ("captured identity not in the urn", ["position startpos moves b2b9Pr a9b9r h2h9Cr"],
+     "bad move h2h9Cr: captured identity not in pool", AFTER_CAPTURES),
     # After a refused position command the engine does not search the position it holds
     ("go after a bad move", ["position startpos moves a3a4P zzzz", "go depth 1"],
      "no search: the last position command was refused", AFTER_A3A4),
     ("go after a bad fen", ["position fen 4k4 w", "go depth 1"],
      "no search: the last position command was refused", START),
+    # searchmoves: words that are not legal moves are left out; with none left, no search
+    ("searchmoves with no legal move", ["go depth 1 searchmoves zzzz a9a8"],
+     "no search: no legal move in searchmoves", START),
+    ("searchmoves with a word that is not a move", ["go searchmoves h2e2 xyz depth 1"],
+     "searchmoves: xyz is not a legal move", START),
     # Options: a value that is not a number is refused, one out of range is clamped
     ("Hash not a number", ["setoption name Hash value abc"], "bad value abc for option Hash", START),
     ("Hash negative", ["setoption name Hash value -5"], None, START),
@@ -99,6 +108,9 @@ CASES = [
      START),
     ("search parameter out of range", ["setoption name ChanceK value -99999999999999999999"], None, START),
     ("unknown option", ["setoption name NoSuchOption value 3"], "unknown option NoSuchOption", START),
+    # Option names in any case (UCI): the option is found, and named as the engine names it
+    ("option names in any case", ["setoption name HASH value 8", "setoption name multipv value 2",
+                                  "setoption name chancek value abc"], "bad value abc for option ChanceK", START),
     ("setoption without a name", ["setoption", "setoption name", "setoption value 3"], None, START),
     # Other commands with odd arguments
     ("go with odd limits", ["go depth -5", "go depth abc", "go nodes -1 depth 1", "go movetime -1",
