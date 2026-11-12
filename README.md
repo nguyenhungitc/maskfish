@@ -381,7 +381,7 @@ up to six outcomes.
 * The value is scaled by material and damped by the no-capture count inside
   the evaluator (the search's own `Rule40Div` shrink applies to the
   hand-written evaluation only). Kernels for AVX-512, AVX2, SSE and NEON;
-  integer arithmetic (`hnnue.cpp` is compiled with `-ffp-contract=off`), so
+  integer arithmetic (and the engine is compiled with `-ffp-contract=off`), so
   every build and CPU gives the same values.
 
 ## Training

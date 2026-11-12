@@ -8,6 +8,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+# No floating-point contraction anywhere: GCC and Clang otherwise fuse a * b + c into one FMA instruction where the
+# instruction set has one (x86-64-v3 and later, every arm64), and the search's arithmetic in doubles (the chance
+# nodes, the time management) would then round differently from one build to another. With it off every build
+# rounds the same, so the bench signature is the same on every instruction set (as in AB-JChess).
+add_compile_options(-ffp-contract=off)
 option(MASKFISH_NATIVE "Tune for the build machine" ON)
 option(MASKFISH_SANITIZE "Address/UB sanitizers" OFF)
 option(MASKFISH_UNIVERSAL "One binary with a build per instruction set, the best one chosen at startup (Linux x86-64 and arm64)" OFF)
@@ -84,8 +89,6 @@ if(NOT MASKFISH_EMBEDDED STREQUAL "none")
 endif()
 add_library(maskfish_core STATIC ${MASKFISH_CORE_SOURCES})
 target_include_directories(maskfish_core PUBLIC src)
-# The integer kernels and the net decoder of the network evaluator are compiled without floating-point contraction.
-set_source_files_properties(src/hnn/hnnue.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # jqnz_tool: packs a raw .hnn net into the compressed .nnue form and back (tools/hnn/jqnz_tool.cpp).
 add_executable(jqnz_tool EXCLUDE_FROM_ALL tools/hnn/jqnz_tool.cpp)
 target_include_directories(jqnz_tool PRIVATE src/hnn)
