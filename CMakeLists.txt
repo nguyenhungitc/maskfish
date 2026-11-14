@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 # No floating-point contraction anywhere: GCC and Clang otherwise fuse a * b + c into one FMA instruction where the
 # instruction set has one (x86-64-v3 and later, every arm64), and the search's arithmetic in doubles (the chance
 # nodes, the time management) would then round differently from one build to another. With it off every build
-# rounds the same, so the bench signature is the same on every instruction set (as in AB-JChess).
+# rounds the same, so the bench signature is the same on every instruction set.
 add_compile_options(-ffp-contract=off)
 option(MASKFISH_NATIVE "Tune for the build machine" ON)
 option(MASKFISH_SANITIZE "Address/UB sanitizers" OFF)
@@ -21,7 +21,7 @@ set(MASKFISH_NET_FILE "${CMAKE_SOURCE_DIR}/nets/maskfish.nnue" CACHE FILEPATH
     "The network embedded with MASKFISH_EMBED_NET (scripts/net.sh fetches the published one there)")
 
 option(MASKFISH_LTO "Link-time optimisation (measured no faster)" OFF)
-# The board as sets of squares beside the array (src/bitboard.h, from AB-JChess): the same moves in the same order
+# The board as sets of squares beside the array (src/bitboard.h): the same moves in the same order
 # and the same search node for node, found faster. A build option, so that the two builds can be tested against
 # each other; every target is built with it (the layout of Position depends on it).
 option(MASKFISH_BITBOARD "Move generation, legality, checks and the exchange evaluation on bitboards" OFF)

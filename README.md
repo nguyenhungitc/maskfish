@@ -262,7 +262,7 @@ load from there (or from `$JIEQI_NATIVE_LIBRARY`); the target `jqnz_tool`
 | `MASKFISH_NATIVE` | `ON` | `-march=native`; `OFF` gives a portable build (the same evaluations, slower) |
 | `MASKFISH_SANITIZE` | `OFF` | AddressSanitizer and UndefinedBehaviorSanitizer |
 | `MASKFISH_LTO` | `OFF` | link-time optimisation (it measured no faster here) |
-| `MASKFISH_BITBOARD` | `OFF` | move generation, legality, checks and the exchange evaluation on bitboards (`src/bitboard.h`, from AB-JChess): the same moves in the same order and the same `bench` signature, found faster; off until a test at a time control shows the gain |
+| `MASKFISH_BITBOARD` | `OFF` | move generation, legality, checks and the exchange evaluation on bitboards (`src/bitboard.h`): the same moves in the same order and the same `bench` signature, found faster; off until a test at a time control shows the gain |
 | `MASKFISH_PEXT` | `OFF` | with `MASKFISH_BITBOARD`, gathers a file's occupancy with PEXT (for CPUs where it is fast) |
 | `MASKFISH_UNIVERSAL` | `OFF` | a universal binary (below; Linux x86-64 and arm64) |
 | `MASKFISH_EMBED_NET` | `ON` | embed the network `MASKFISH_NET_FILE` in the binary, if that file exists |

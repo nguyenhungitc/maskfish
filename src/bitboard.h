@@ -16,12 +16,12 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// The bitboard layer of AB-JChess (bitboard.h / bitboard.cpp of its release 20261031, GPL v3 or later; see
-// AUTHORS), built with MASKFISH_BITBOARD. Position then keeps the sets of pieces beside its board and answers
-// move generation, legality, checks and the exchange evaluation from them; the answers, and the order of the
-// moves, are those of the board scans, so the search is the same node for node (the bench signature holds).
+// The bitboard layer (derived code, see AUTHORS), built with MASKFISH_BITBOARD. Position then keeps the sets of
+// pieces beside its board and answers move generation, legality, checks and the exchange evaluation from them;
+// the answers, and the order of the moves, are those of the board scans, so the search is the same node for node
+// (the bench signature holds).
 
-// 128-bit bitboards for the 9x10 Jieqi board (Pikafish-style layout: square s = rank * 9 + file is bit s,
+// 128-bit bitboards for the 9x10 Jieqi board (layout: square s = rank * 9 + file is bit s,
 // rank 0 = Red's home rank, file 0 = file 'a'). Shared, engine-independent layer: geometry masks and ray /
 // leaper attack helpers only; Position keeps byColor / byRole / dark sets on top of it.
 //
@@ -188,7 +188,7 @@ inline void scan4(int s, Bitboard occ, int (&f1)[4], int (&f2)[4]) {
     }
 }
 
-// Pikafish-style attack sets (computed from the rays; used by attackers_to-style queries and by the att
+// Attack sets (computed from the rays; used by attackers_to-style queries and by the att
 // threat prototype). rook_attacks: empty squares up to and including the first blocker on each ray;
 // cannon_attacks: the second blocker on each ray (capture targets); cannon quiet moves = rook_attacks & ~occ.
 inline Bitboard rook_attacks(int s, Bitboard occ) {
