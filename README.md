@@ -350,13 +350,12 @@ up to six outcomes.
     it on the line. Elsewhere (in quiescence, and at depth 0 once the line has
     used its expanded chance layers, `MaxChanceLayers`) the move plays one
     representative identity, the one whose value is closest to the urn's mean.
-* Options that are off by default: `ThreatRevRoot`, `ThreatRevScale`,
-  `ThreatRevLmr` and `ThreatRevOrder` treat a face-down piece the opponent can
-  win material on (by `ThreatRevMode`, `ThreatRevSee`, `ThreatRevProb`)
-  differently at the root, in LMR and in move ordering; `ChanceMixLow` and
-  `ChanceMixLowR` probe unlikely identities of a ChanceMix node less deeply; a
-  negative `RootDarkPen` is a bonus for face-down moves at the root. None has
-  been tested for strength here.
+* Options that are off by default and still being tested at a time control:
+  `SeeQuietOrder` (quiet moves that lose material by SEE are ordered last),
+  `ChanceMixSkip`, `ChanceMixPvR` (shallower probes at open-window ChanceMix
+  nodes), `QsTTMove` and `ChanceLateDark` (one more expanded chance layer when
+  few face-down pieces are left). The options that failed their tests have
+  been removed together with their code.
 * The rules in search are those of the referee: no legal move loses; at a
   repetition the side responsible for a perpetual check or, with
   `ChaseRule 1` (the default), a perpetual chase loses (a port of the

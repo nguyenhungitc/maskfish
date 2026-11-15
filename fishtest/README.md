@@ -191,12 +191,12 @@ Parameters, one per line:
 
 ```
 ChanceK
-RootDarkPen,0,-300,300,15,0.002
+DarkLmr,100,0,200,10,0.002
 ```
 
 * `name,start,min,max,c_end,r_end`;
-* or just the name of a UCI spin option of Maskfish, such as `ChanceK`, `DarkLmr`
-  or `RootDarkPen` (`uci` lists them all): its default, min and max are read
+* or just the name of a UCI spin option of Maskfish, such as `ChanceK` or
+  `DarkLmr` (`uci` lists them all): its default, min and max are read
   from the engine, with `c_end = (max - min) / 20` and `r_end = 0.002`.
 
 The number of games sets the length of the tuning (one iteration per pair);

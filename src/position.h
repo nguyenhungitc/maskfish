@@ -43,7 +43,6 @@ struct StateInfo {
     int16_t noCapture;   // counter before the move
     int16_t lastIrrev;   // irreversible boundary before the move
     int16_t urnMean;     // the mover's urnMean before the move (a reveal changes it)
-    uint64_t skey;       // structure key before the move
 };
 
 constexpr int NO_CAPTURE_LIMIT = 80;
@@ -75,9 +74,6 @@ public:
     int8_t pcount[2];
     int8_t pidx[NUM_SQ];
     uint64_t key = 0;
-    // Structure key: the xor of the piece keys of the soldiers and the face-down pieces, kept by do_move. The
-    // search indexes its correction history by it; it is not part of key.
-    uint64_t skey = 0;
     // The side not to move is not in check: true of every position reached by legal moves, tested by set_fen for
     // the position it is given. do_move relies on it to find the new check flag from the move alone.
     bool checkFree = false;
@@ -123,10 +119,6 @@ public:
     bool legal(Move m) const;
     // Whether a legal move by a face-up piece checks the opponent (false for face-down movers).
     bool gives_check(Move m) const;
-    // A face-down mover from -> to revealed as t: does the revealed piece itself attack the enemy king?
-    // reveal_may_check is a cheap necessary condition for any identity to differ.
-    bool reveal_gives_check(int from, int to, PieceType t) const;
-    bool reveal_may_check(int to) const;
     // Square attacked by `by` (king-centric test; adequate for capture safety heuristics).
     bool attacked(Color by, int s) const { return king_attacked(~by, s); }
     int gen_legal(Move* list) const;
@@ -153,7 +145,6 @@ public:
     std::bitset<NUM_SQ> chase_threats(Color actor) const;  // enemy squares actor threatens under the chase rule
     bool has_major(Color c) const;
     uint64_t compute_key() const;
-    uint64_t compute_skey() const;
     int compute_urn_mean(Color c) const;  // urnMean[c] from urn[c]
     bool valid(std::string* error = nullptr) const;
 
@@ -162,9 +153,6 @@ private:
     uint64_t hintKey = 0;
     uint32_t hintLen = 0;
     bool hintVal = false;
-    static uint64_t skey_of(Piece p, int s) {
-        return type_of(p) == SOLDIER || type_of(p) == DARK ? T.zPiece[p][s] : 0;
-    }
     int chase_verdict(int first) const;
     void bb_put(int s, Piece p) {
         const Color c = color_of(p);

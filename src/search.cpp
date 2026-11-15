@@ -58,13 +58,8 @@ int P_ChanceTail = 1;         // beyond the cap: 0 = cap layer resolved by qsear
                              // 1 = representative reveal at full depth from the cap layer on,
                              // 2 = cap layer expanded at half depth, then representative at full depth
 int P_ChanceRed = 0;          // depth reduction for the non-representative outcomes of an expansion
-int P_SeDepth = 0;            // singular extension of the TT move from this depth (0 = off)
-int P_SeMargin = 16;          // singular beta = ttValue - SeMargin * depth / 8
-int P_HistPrune = 0;          // prune late quiets at depth <= 3 with history < -HistPrune * depth (0 = off)
 int P_NullDepthDiv = 4;       // null-move reduction grows by depth / NullDepthDiv
 int P_PruneDepth = 6;         // move-count / futility pruning of quiets up to this depth
-int P_RazorDepth = 0;         // razoring: drop to quiescence when eval + RazorMargin * depth < alpha (0 = off)
-int P_RazorMargin = 250;
 int P_SmpSkip = 1;            // helper depth skipping: 0 = none, 1 = skip (d + id) % 3 == 0, 2 = skip blocks by thread
 int P_SmpDefer = 0;           // ABDADA-style deferral of moves other threads are searching, at depth >= SmpDefer (0 = off)
 int P_SmpVote = 0;            // Lazy SMP: pick the move by depth/score-weighted votes over threads (0 = main thread)
@@ -72,8 +67,6 @@ int P_ContHist = 1;          // continuation history (1- and 2-ply) for quiet or
 int P_CapHist = 1;           // capture history for capture ordering
 int P_Improving = 1;         // "improving" adjustments to LMP / LMR / RFP
 int P_QsTT = 1;              // transposition table in quiescence
-int P_ProbCut = 0;            // ProbCut margin above beta (0 = off)
-int P_ProbCutDepth = 5;       // ProbCut from this depth; verification at depth - 4
 int P_QsTTMove = 0;          // quiescence stores its best move and tries the TT move first
 int P_CheckExt = 1;          // check extension: 0 = off, 1 = while ply < 2*rootDepth+4, 2 = while ply < rootDepth
 int P_QsSee = 1;             // quiescence skips captures with SEE < -QsSeeMargin (0 = attacker-value test)
@@ -82,74 +75,42 @@ int P_SeeOrder = 1;          // main search orders captures with SEE < -BadCapMa
 int P_SeeCap = 100;            // prune captures with SEE < -SeeCap * depth at depth <= SeePruneDepth (0 = off)
 int P_SeeQuiet = 30;          // prune quiet and face-down moves with SEE < -SeeQuiet * depth^2 (0 = off)
 int P_SeePruneDepth = 6;
-int P_CapLmr = 0;             // reduce SEE-losing captures by this many plies at depth >= 3 (0 = off)
-int P_CorrHist = 0;           // weight (%) of the structure correction history added to static evals (0 = off)
 int P_Rule40Div = 217;        // 80-ply rule: static evals shrink by eval * min(noCapture, 80) / Rule40Div (0 = off)
 int P_Rule40TTCut = 70;       // 80-ply rule: no TT cutoffs from this no-capture count on (80 = cut at any count)
 int P_ChanceMate = 1;         // a reveal whose every identity mates (is mated) gets a mate value, not the saturated one
 int P_Rule40Mate = 1;         // 80-ply rule: a TT mate beyond the plies left before the draw reads as a non-mate value
-int P_RevealCheck = 0;        // beyond the chance cap: split off identities whose reveal checks differently
-                             // from the representative, at most this many times along one line (0 = off)
-int P_RevealCheckQs = 0;      // RevealCheck also in quiescence
 int P_ChanceCVProbe = 0;      // ChanceCV probe depth min(k, depth-1) when ChanceCVGap is 0 (0 = depth 0)
-int P_RootDarkPen = 0;        // root: face-down moves are compared at value - RootDarkPen (cp); negative = a bonus
-int P_RootDarkHid = 0;        // RootDarkPen only when the mover has at most this many face-down pieces (0 = always)
 int P_ChanceCVLow = 0;        // ChanceCV correction from static evals at depth >= ChanceCVLow below ChanceCV (0 = off)
 int P_ChanceCVStatic = 0;     // ChanceCV probes: 0 = depth-0 searches (or ChanceCVGap/Probe depth), 1 = static evals
 int P_TmMtg = 20;             // clock: moves-to-go estimate when none is given
 int P_TmInc = 75;             // clock: percent of the increment in the per-move optimum
 int P_TmSoft = 100;           // clock: start a new iteration only before TmSoft% of the optimum
 int P_TmStab = 100;           // clock: soft-limit scaling by decayed best-move instability (0 = off)
-int P_TmFall = 0;             // clock: soft-limit scaling by the score drop between iterations (0 = off)
-int P_TmMtgMin = 0;           // clock: moves-to-go falls by TmMtgDec/10 per own move played, down to TmMtgMin (0 = off)
-int P_TmMtgDec = 0;
 int P_NodesTime = 0;          // testing: the clock runs on nodes, NodesTime nodes per millisecond (0 = wall clock)
 int P_ChanceLateDark = 0;     // root with at most this many face-down pieces (both sides): chance layer cap is
 int P_ChanceLateAdd = 1;      // MaxChanceLayers + ChanceLateAdd for that search (ChanceLateDark 0 = off)
 int P_ChancePvW = 0;          // probe mode, PV chance nodes: outcomes are searched with the window widened by this
                               // much on both sides, so that outcome values outside the parent's window enter the
                               // average as values rather than as bounds (0 = parent's window)
-int P_ChanceTailFix = 0;      // probe mode: an outcome that fails outside the window is also searched with an open
-                              // window at depth - ChanceTailR, and that value replaces the bound when it lies further
-                              // out (1 = PV chance nodes, 2 = all expanded chance nodes; 0 = off)
-int P_ChanceTailR = 6;
 int P_ChanceCVRho = 100;      // ChanceCV: E ~ mean of probes + c (deep(rep) - probe(rep)), c = p_rep + (1 - p_rep) Rho/100
 int P_ChanceMix = 6;          // expanded chance nodes: every outcome gets an open-window search at depth - ChanceMix,
-                              // the most numerous identity a full-depth search; combined as in ChanceCV with
-                              // ChanceMixRho (0 = probe mode)
-int P_ChanceMixRho = 0;
+                              // the most numerous identity a full-depth search, whose value takes the place of its
+                              // probe (ChanceCV with rho 0; ChanceMix 0 = probe mode)
 int P_ChanceMixMin = 1;       // ChanceMix only at depth >= ChanceMixMin
-int P_ChanceMixPv = 0;        // 1 = ChanceMix only at PV chance nodes (others keep probe mode)
-int P_ChanceMixRho0 = -1;     // ChanceMix: weight (percent) when the probes are quiescence searches; -1 = ChanceMixRho
+int P_ChanceMixRho0 = 0;      // ChanceMix with quiescence probes: rho (percent) of the ChanceCV combination instead of 0
 int P_ChanceFut = 1;          // ChanceMix with quiescence probes at a null-window node: 1 = fail low from static values when the
                               // full-depth identity's child would be cut by reverse futility anyway (saves the probes)
 int P_ChanceFutPre = 20;      // ChanceFut is tried only when the node's static value + ChanceFutPre * depth <= alpha
 int P_ChanceNW = 1;           // CV / mix at a null-window node: 1 = full-depth identity searched with a null window at the decision threshold
 int P_ChanceMixTT = 1;        // ChanceMix probes: 1 = an exact TT entry of sufficient depth replaces the probe search
-// Threatened reveals (search::threat_reveal): a face-down piece of the side to move that the opponent can win
-// material on. An undefended one always counts; a defended one by ThreatRevMode: 0 = the opponent's expected gain
-// from the exchange, over the piece's possible identities, exceeds ThreatRevSee cp; 1 = the opponent gains with
-// probability at least ThreatRevProb %. Worked out only when one of the four uses below is switched on.
-int P_ThreatRevRoot = 0;      // root: moves of threatened face-down pieces are compared at value + ThreatRevRoot (cp)
-int P_ThreatRevScale = 0;     // root: if > 0 the bonus is min(300, expected loss * ThreatRevScale / 100) instead
-int P_ThreatRevLmr = 100;     // LMR of threatened face-down quiet moves in percent (instead of DarkLmr when != 100)
-int P_ThreatRevOrder = 0;     // quiet-ordering bonus of threatened face-down moves
-int P_ThreatRevSee = 0;
-int P_ThreatRevMode = 0;
-int P_ThreatRevProb = 50;
-int P_ChanceMixLow = 0;       // ChanceMix probes: identities below this probability (%) are probed ChanceMixLowR plies
-                              // shallower (0 = off; never the identities searched at full depth)
-int P_ChanceMixLowR = 1;      // (the probe depth stops at 0, quiescence; 99 = always quiescence)
 int P_ChanceMixTop = 1;       // ChanceMix: number of identities (most numerous first) searched at full depth
-int P_ChanceMixSkip = 0;      // ChanceMix with ChanceMixRho 0: 1 = no probe for the full-depth identity (its probe value cancels)
+int P_ChanceMixSkip = 0;      // ChanceMix with rho 0: 1 = no probe for the full-depth identity (its probe value cancels)
 int P_ChanceMixProbe = 1;     // ChanceMix probes: 1 = searched as PV nodes, 0 = with the node's own PV flag
-int P_ChanceMixDiv = 0;       // probes at depth - ChanceMix - depth / ChanceMixDiv (0 = no depth term)
 int P_ChanceMixPvR = 0;       // open-window (PV) mix nodes: probes at depth - ChanceMixPvR instead (0 = ChanceMix)
-int P_ChanceMixPvPly = 0;     // ChanceMixPvR only for moves made at a ply below this (1 = root moves; 0 = any ply)
 int P_ChanceXDepth = 1;      // chance nodes with depth >= ChanceXDepth are fully expanded at any layer (0 = off)
 int P_ChanceRedLow = 0;       // expanded layers: non-representative identities below this probability (%) one ply shallower
-int P_RepMode = 0;            // representative reveal: 0 = identity closest to the urn mean value, 1 = most numerous,
-                              // 2 = as 0, but at ChanceCV nodes the identity whose depth-0 value is closest to their mean
+int P_RepByProbe = 0;         // representative reveal: the identity closest to the urn mean value; 1 = at ChanceCV
+                              // nodes instead the identity whose depth-0 value is closest to their mean
 int P_ChanceCVGap = 0;        // ChanceCV probes at depth - gap (0 = depth-0 probes)
 int P_DarkLmr = 100;          // LMR of face-down moves in percent of the quiet reduction
 int P_ChanceCV = 3;           // beyond the chance cap at depth >= ChanceCV: representative value + probability-
@@ -309,10 +270,6 @@ struct Worker {
     int16_t history[2][NUM_SQ][NUM_SQ];
     int16_t contHist[16][NUM_SQ][16][NUM_SQ];  // [prev piece][prev to][piece][to]
     int16_t capHist[16][NUM_SQ][9];            // [piece][to][captured type]
-    // Correction history: running mean of (search value - static eval) in 1/16 cp, indexed by side to move
-    // and a hash of the soldier and face-down piece placement (the slow-changing structure).
-    static constexpr int CORR_BITS = 14;
-    int16_t corrHist[2][1 << CORR_BITS];
     int8_t movedPc[MAX_PLY + 8];               // pidx16 of the piece moved at ply (-1 = null move)
     Value staticEv[MAX_PLY + 8];
     Move killers[MAX_PLY + 8][2];
@@ -320,7 +277,6 @@ struct Worker {
     Move pv[MAX_PLY + 8][MAX_PLY + 8];
     int pvLen[MAX_PLY + 8];
     Move curMove[MAX_PLY + 8];
-    Move excluded[MAX_PLY + 8];                // singular-extension verification: move skipped at this ply
     std::atomic<uint64_t> nodes{0};
     int selDepth = 0;
     int rootDepth = 0;
@@ -331,7 +287,6 @@ struct Worker {
         const bool xDeep = P_ChanceXDepth && qply < 0 && depth >= P_ChanceXDepth;
         return qply >= 1 || (!xDeep && (chanceLayers > maxLayers || (P_ChanceTail == 1 && chanceLayers >= maxLayers)));
     }
-    int revealSplits = 0;
     uint32_t calls = 0;
     // Root bookkeeping.
     Move bestMove = MOVE_NONE, iterBest = MOVE_NONE;
@@ -360,7 +315,7 @@ struct Worker {
     nnue::Dirty dirty[MAX_PLY + 10];
     bool accOk[MAX_PLY + 10];
     // The raw static eval, as the transposition table keeps it: it does not depend on the no-capture count (the
-    // table's key does not hold it). rule40() / corrected() give the value at the node's count.
+    // table's key does not hold it). rule40() gives the value at the node's count.
     Value eval_at(int ply) {
         if (!useNN) return classical_eval(pos);
         if (!accOk[ply]) {
@@ -391,7 +346,6 @@ struct Worker {
         std::memset(history, 0, sizeof history);
         std::memset(contHist, 0, sizeof contHist);
         std::memset(capHist, 0, sizeof capHist);
-        std::memset(corrHist, 0, sizeof corrHist);
         std::memset(killers, 0, sizeof killers);
         std::memset(counters, 0, sizeof counters);
     }
@@ -425,7 +379,6 @@ struct Worker {
         return type_of(p) == DARK ? urn_mean_value(pos, color_of(p)) : PieceValue[type_of(p)];
     }
     bool see_ge(Move m, int threshold) const { return search::see_ge(pos, m, threshold); }
-    int structure_index() const { return int(pos.skey >> (64 - CORR_BITS)); }
     // 80-ply rule: a static eval shrinks towards the draw as the no-capture count grows, so that the search prefers
     // the line that makes progress (a capture) over one that runs the clock out. Applied here, not in eval_at, so the
     // TT keeps the raw eval: the key does not hold the count, and one entry serves positions of any count.
@@ -436,18 +389,6 @@ struct Worker {
         if (useNN) return nnue::value_at(raw, pos.noCapture);
         if (!P_Rule40Div) return raw;
         return Value(raw - raw * std::min<int>(pos.noCapture, NO_CAPTURE_LIMIT) / P_Rule40Div);
-    }
-    Value corrected(Value raw) const {
-        raw = rule40(raw);
-        if (!P_CorrHist || raw == VALUE_NONE) return raw;
-        const int e = corrHist[pos.stm][structure_index()];
-        return std::clamp(raw + e * P_CorrHist / 1600, -VALUE_KNOWN_WIN + 1, VALUE_KNOWN_WIN - 1);
-    }
-    void update_corr(Value raw, Value best, int depth) {
-        int16_t& e = corrHist[pos.stm][structure_index()];
-        const int target = std::clamp((best - rule40(raw)) * 16, -8192, 8192);
-        const int w = std::min(depth + 1, 16);
-        e = int16_t((e * (256 - w) + target * w) / 256);
     }
     static void gravity(int16_t& h, int bonus) { h = int16_t(h + bonus - h * std::abs(bonus) / 16384); }
     void update_history(Color c, Move m, int bonus) { gravity(history[c][from_sq(m)][to_sq(m)], bonus); }
@@ -600,7 +541,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
             accOk[ply + 1] = false;
         }
         p.do_move(mm, st);
-        const Value v = -corrected(eval_at(ply + 1));
+        const Value v = -rule40(eval_at(ply + 1));
         p.undo_move(mm, st);
         return v;
     };
@@ -618,7 +559,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
     // Bounded chance expansion: deep in quiescence or beyond MaxChanceLayers+1 chance layers on this
     // line, play one representative reveal (the identity whose value is closest to the urn mean).
     int repI = 0;  // slots are sorted by count, so slot 0 is the most numerous identity
-    if (n > 1 && P_RepMode != 1) {
+    if (n > 1) {
         const int mean = urn_mean_value(p, us);
         int bestDiff = 1 << 30;
         for (int i = 0; i < n; ++i) {
@@ -652,8 +593,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
     // Control variate: E[v] ~ sum_i p_i v_s(i) + c (v_deep(rep) - v_s(rep)) in expected-score space, with probe values
     // v_s (static, depth 0 or depth pd) and c = p_rep + (1 - p_rep) rho; rho = 1 gives v_deep(rep) + sum_i p_i
     // (v_s(i) - v_s(rep)). The representative is searched with the window mapped through the correction.
-    auto cvValue = [&](int pd, bool pvProbe, bool staticProbe, int cvI, bool repByProbe, int rhoPct, int top,
-                       bool mix) -> Value {  // mix: called for a ChanceMix node
+    auto cvValue = [&](int pd, bool pvProbe, bool staticProbe, int cvI, bool repByProbe, int rhoPct, int top) -> Value {
         double dl = 0.0, e0[NUM_SLOTS] = {};
 #ifdef JQ_STATS
         const uint64_t sn0 = nodes.load(std::memory_order_relaxed);
@@ -662,10 +602,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         for (int i = 0; i < n; ++i) {
             if (skipRep && i == cvI) continue;  // e0[cvI] = 0 cancels below
             const Move pm = make_move(from, to, slot_type(slots[i]));
-            // ChanceMixLow: an unlikely identity, not one of those searched at full depth, gets a shallower probe.
-            const int pdi = mix && P_ChanceMixLow && i != cvI && i >= top && cnt[i] * 100 < P_ChanceMixLow * p.urnTotal[us]
-                                ? std::max(0, pd - P_ChanceMixLowR) : pd;
-            e0[i] = v2e(staticProbe ? stat(pm) : pvProbe && pdi > 0 ? subPv(pm, pdi) : sub(pm, -VALUE_INFINITE, VALUE_INFINITE, pdi));
+            e0[i] = v2e(staticProbe ? stat(pm) : pvProbe && pd > 0 ? subPv(pm, pd) : sub(pm, -VALUE_INFINITE, VALUE_INFINITE, pd));
             if (G.stop) return VALUE_ZERO;
         }
         if (repByProbe) {
@@ -748,108 +685,81 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         explicit LayerGuard(int& x) : c(x) { ++c; }
         ~LayerGuard() { --c; }
     };
-    // Outcomes to search: identity slot, urn count (probability mass) and depth.
-    int oSlot[NUM_SLOTS], oCnt[NUM_SLOTS], oDepth[NUM_SLOTS], k = 0;
-    int* counter = &chanceLayers;
+    // Outcomes to search: every identity (slots[i], probability cnt[i] / urnTotal) at depth oDepth[i].
+    int oDepth[NUM_SLOTS];
     const bool xDeep = P_ChanceXDepth && qply < 0 && depth >= P_ChanceXDepth;
     if (n == 1 || chance_capped(depth, qply)) {
-        const Move rm = make_move(from, to, slot_type(slots[repI]));
-        // RevealCheck: identities whose reveal checks differently from the representative's are their own
-        // outcomes; all the others share the representative's search and probability mass.
         const bool cvDeep = P_ChanceCV && depth >= P_ChanceCV;
         const bool cvLow = !cvDeep && P_ChanceCVLow && depth >= P_ChanceCVLow;
         if ((cvDeep || cvLow) && n > 1 && qply < 0 && alpha < SAT && beta > -SAT) {
             STAT(chance);
             const int pd = P_ChanceCVGap ? std::max(0, depth - P_ChanceCVGap) : std::min(P_ChanceCVProbe, depth - 1);
-            return sat(cvValue(pd, false, !(cvDeep && !P_ChanceCVStatic), repI, P_RepMode == 2, P_ChanceCVRho, 1, false));
+            return sat(cvValue(pd, false, !(cvDeep && !P_ChanceCVStatic), repI, P_RepByProbe != 0, P_ChanceCVRho, 1));
         }
-        if (n == 1 || (qply >= 0 && !P_RevealCheckQs) || revealSplits >= P_RevealCheck || !p.reveal_may_check(to))
-            return sub(rm, alpha, beta, depth);
-        const bool repCheck = p.reveal_gives_check(from, to, slot_type(slots[repI]));
-        oSlot[0] = slots[repI];
-        oCnt[0] = cnt[repI];
-        oDepth[0] = depth;
-        k = 1;
-        for (int i = 0; i < n; ++i) {
-            if (i == repI) continue;
-            if (p.reveal_gives_check(from, to, slot_type(slots[i])) != repCheck) {
-                oSlot[k] = slots[i];
-                oCnt[k] = cnt[i];
-                oDepth[k++] = depth;
-            } else
-                oCnt[0] += cnt[i];
-        }
-        if (k == 1) return sub(rm, alpha, beta, depth);
-        counter = &revealSplits;
-    } else {
-        if (P_ChanceMix && qply < 0 && depth >= P_ChanceMixMin && alpha < SAT && beta > -SAT &&
-            (!P_ChanceMixPv || (pvNode && beta - alpha > 1))) {
-            STAT(chance);
-            LayerGuard guard(chanceLayers);
-            const int mixR = P_ChanceMixPvR && pvNode && beta - alpha > 1 && (!P_ChanceMixPvPly || ply < P_ChanceMixPvPly)
-                                 ? P_ChanceMixPvR : P_ChanceMix;
-            const int pd = depth - mixR - (P_ChanceMixDiv ? depth / P_ChanceMixDiv : 0);
-            if (P_ChanceFut && !pvNode && beta - alpha == 1 && pd <= 0 && depth <= P_RfpDepth &&
-                (P_ChanceMixRho0 >= 0 ? P_ChanceMixRho0 : P_ChanceMixRho) == 0 && P_ChanceMixTop == 1 &&
-                std::abs(alpha) < VALUE_KNOWN_WIN &&
-                staticEv[ply] != VALUE_NONE && staticEv[ply] + P_ChanceFutPre * depth <= alpha) {
-                // After a reveal that gives no check the opponent can stand pat, so a quiescence probe is at most the
-                // static value. If the static values of the other identities already leave the full-depth identity
-                // more than the reverse-futility margin short, its search would be cut at once and the node fails low.
-                const double pr = double(cnt[0]) / p.urnTotal[us];
-                double offS = 0.0;
-                Value sRep = VALUE_NONE;
-                bool ok = true;
-                for (int i = 0; i < n && ok; ++i) {
-                    const Move pm = make_move(from, to, slot_type(slots[i]));
-                    StateInfo st;
-                    if (useNN) {
-                        nnue::make_dirty(p, pm, dirty[ply + 1]);
-                        accOk[ply + 1] = false;
-                    }
-                    p.do_move(pm, st);
-                    bump();
-                    if (p.checkHist.back() != 0) ok = false;
-                    const Value sv = ok ? Value(-corrected(eval_at(ply + 1))) : VALUE_ZERO;
-                    p.undo_move(pm, st);
-                    if (i == 0) sRep = sv; else offS += double(cnt[i]) / p.urnTotal[us] * v2e(sv);
-                    // The remaining identities at their best cannot rescue the node either: stop early.
-                    if (ok && i == 0 && sRep >= VALUE_KNOWN_WIN) ok = false;
+        return sub(make_move(from, to, slot_type(slots[repI])), alpha, beta, depth);
+    }
+    if (P_ChanceMix && qply < 0 && depth >= P_ChanceMixMin && alpha < SAT && beta > -SAT) {
+        STAT(chance);
+        LayerGuard guard(chanceLayers);
+        const int pd = depth - (P_ChanceMixPvR && pvNode && beta - alpha > 1 ? P_ChanceMixPvR : P_ChanceMix);
+        if (P_ChanceFut && !pvNode && beta - alpha == 1 && pd <= 0 && depth <= P_RfpDepth &&
+            P_ChanceMixRho0 == 0 && P_ChanceMixTop == 1 &&
+            std::abs(alpha) < VALUE_KNOWN_WIN &&
+            staticEv[ply] != VALUE_NONE && staticEv[ply] + P_ChanceFutPre * depth <= alpha) {
+            // After a reveal that gives no check the opponent can stand pat, so a quiescence probe is at most the
+            // static value. If the static values of the other identities already leave the full-depth identity
+            // more than the reverse-futility margin short, its search would be cut at once and the node fails low.
+            const double pr = double(cnt[0]) / p.urnTotal[us];
+            double offS = 0.0;
+            Value sRep = VALUE_NONE;
+            bool ok = true;
+            for (int i = 0; i < n && ok; ++i) {
+                const Move pm = make_move(from, to, slot_type(slots[i]));
+                StateInfo st;
+                if (useNN) {
+                    nnue::make_dirty(p, pm, dirty[ply + 1]);
+                    accOk[ply + 1] = false;
                 }
-                if (ok && pr * v2e(sRep + P_RfpMargin * depth) + offS <= v2e(alpha)) {
-                    STAT(rfp);
-                    const Value r = Value(std::lround(e2v(std::clamp(pr * v2e(sRep) + offS, eMin, eMax))));
-                    return sat(std::min(alpha, r));
-                }
+                p.do_move(pm, st);
+                bump();
+                if (p.checkHist.back() != 0) ok = false;
+                const Value sv = ok ? Value(-rule40(eval_at(ply + 1))) : VALUE_ZERO;
+                p.undo_move(pm, st);
+                if (i == 0) sRep = sv; else offS += double(cnt[i]) / p.urnTotal[us] * v2e(sv);
+                // The remaining identities at their best cannot rescue the node either: stop early.
+                if (ok && i == 0 && sRep >= VALUE_KNOWN_WIN) ok = false;
             }
-            return sat(cvValue(std::max(0, pd), P_ChanceMixProbe != 0, false, 0, false,
-                               pd <= 0 && P_ChanceMixRho0 >= 0 ? P_ChanceMixRho0 : P_ChanceMixRho, P_ChanceMixTop, true));
+            if (ok && pr * v2e(sRep + P_RfpMargin * depth) + offS <= v2e(alpha)) {
+                STAT(rfp);
+                const Value r = Value(std::lround(e2v(std::clamp(pr * v2e(sRep) + offS, eMin, eMax))));
+                return sat(std::min(alpha, r));
+            }
         }
-        // At the outermost permitted layer, outcomes are resolved by quiescence only.
-        const int d = chanceLayers < maxLayers || xDeep ? depth : P_ChanceTail == 2 ? depth / 2 : 0;
-        const int dRed = std::max(0, d - P_ChanceRed);  // non-representative outcomes
-        for (int i = 0; i < n; ++i) {
-            oSlot[k] = slots[i];
-            oCnt[k] = cnt[i];
-            int di = i == repI ? d : dRed;
-            if (i != repI && P_ChanceRedLow && cnt[i] * 100 < P_ChanceRedLow * p.urnTotal[us]) di = std::max(0, di - 1);
-            oDepth[k++] = di;
-        }
+        return sat(cvValue(std::max(0, pd), P_ChanceMixProbe != 0, false, 0, false,
+                           pd <= 0 ? P_ChanceMixRho0 : 0, P_ChanceMixTop));
+    }
+    // At the outermost permitted layer, outcomes are resolved by quiescence only.
+    const int d = chanceLayers < maxLayers || xDeep ? depth : P_ChanceTail == 2 ? depth / 2 : 0;
+    const int dRed = std::max(0, d - P_ChanceRed);  // non-representative outcomes
+    for (int i = 0; i < n; ++i) {
+        int di = i == repI ? d : dRed;
+        if (i != repI && P_ChanceRedLow && cnt[i] * 100 < P_ChanceRedLow * p.urnTotal[us]) di = std::max(0, di - 1);
+        oDepth[i] = di;
     }
     STAT(chance);
-    STATN(outcomes, k);
+    STATN(outcomes, n);
     if (alpha >= SAT) return alpha;
     if (beta <= -SAT) return beta;
-    LayerGuard guard(*counter);
+    LayerGuard guard(chanceLayers);
 
     const double total = p.urnTotal[us];
     const double a = v2e(alpha), b = v2e(beta);
     if (P_ChanceMode == 0) {
         // Exact Star1: child windows guarantee that any child failure makes this node fail.
         double S = 0.0, R = 1.0;
-        for (int i = 0; i < k; ++i) {
-            const double pi = oCnt[i] / total;
-            R = i == k - 1 ? 0.0 : R - pi;
+        for (int i = 0; i < n; ++i) {
+            const double pi = cnt[i] / total;
+            R = i == n - 1 ? 0.0 : R - pi;
             const double lo = (a - S - R * eMax) / pi;
             const double hi = (b - S - R * eMin) / pi;
             if (lo >= eMax) return sat(alpha);
@@ -857,7 +767,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
             const Value ca = lo <= eMin ? -VALUE_INFINITE : std::max(Value(std::floor(e2v(lo))), -SAT);
             Value cb = hi >= eMax ? VALUE_INFINITE : std::min(Value(std::ceil(e2v(hi))), SAT);
             if (cb <= ca) cb = ca + 1;
-            const Value v = sub(make_move(from, to, slot_type(oSlot[i])), ca, cb, oDepth[i]);
+            const Value v = sub(make_move(from, to, slot_type(slots[i])), ca, cb, oDepth[i]);
             if (G.stop) return VALUE_ZERO;
             if (v <= ca) return sat(alpha);
             if (v >= cb) return sat(beta);
@@ -874,7 +784,6 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         wa = std::max(alpha - P_ChancePvW, -VALUE_INFINITE);
         wb = std::min(beta + P_ChancePvW, VALUE_INFINITE);
     }
-    const bool tailFix = qply < 0 && k > 1 && (P_ChanceTailFix == 2 || (P_ChanceTailFix == 1 && pvNode && beta - alpha > 1));
     double S = 0.0, sLo = 0.0, sHi = 0.0, R = 1.0;
 #ifdef JQ_STATS
     struct ProbeStat {
@@ -883,19 +792,12 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         ~ProbeStat() { ++g_st.probeCalls; g_st.probeN += w.nodes.load(std::memory_order_relaxed) - n0; }
     } probeStat(*this);
 #endif
-    for (int i = 0; i < k; ++i) {
-        const double pi = oCnt[i] / total;
-        R = i == k - 1 ? 0.0 : R - pi;
-        const Move om = make_move(from, to, slot_type(oSlot[i]));
-        const Value v = sub(om, wa, wb, oDepth[i]);
+    for (int i = 0; i < n; ++i) {
+        const double pi = cnt[i] / total;
+        R = i == n - 1 ? 0.0 : R - pi;
+        const Value v = sub(make_move(from, to, slot_type(slots[i])), wa, wb, oDepth[i]);
         if (G.stop) return VALUE_ZERO;
-        double e = v2e(v);
-        if (tailFix && (v <= wa || v >= wb) && std::abs(v) < SAT) {
-            // The probe gives the side; the open-window search at reduced depth gives the size.
-            const Value t = subPv(om, std::max(0, oDepth[i] - P_ChanceTailR));
-            if (G.stop) return VALUE_ZERO;
-            e = v2e(v <= wa ? std::min(v, t) : std::max(v, t));
-        }
+        const double e = v2e(v);
         S += pi * e;
         sLo += pi * (v <= wa ? eMin : e);
         sHi += pi * (v >= wb ? eMax : e);
@@ -949,7 +851,7 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
         }
 #endif
         rawStand = ttHit && ttd.eval != VALUE_NONE ? Value(ttd.eval) : eval_at(ply);
-        standPat = corrected(rawStand);
+        standPat = rule40(rawStand);
         if (standPat >= beta) {
             if (P_QsTT && !ttHit) TT.store(tte, p.key, value_to_tt(standPat, ply), BOUND_LOWER, 0, MOVE_NONE, rawStand);
             return standPat;
@@ -1043,10 +945,9 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
     }
     // A MultiPV line after the first searches a restricted root: its value is not the position's.
     const bool partialRoot = root && pvIdx > 0;
-    const Move excl = excluded[ply];
     // Near the 80-ply draw a stored value may come from a line whose clock ran differently (graph history
     // interaction): from Rule40TTCut on, the entry only orders moves and refines the static eval.
-    if (!pvNode && !excl && ttHit && ttd.depth >= depth && ttValue != VALUE_NONE && p.noCapture < P_Rule40TTCut &&
+    if (!pvNode && ttHit && ttd.depth >= depth && ttValue != VALUE_NONE && p.noCapture < P_Rule40TTCut &&
         (ttBound == BOUND_EXACT || (ttBound == BOUND_LOWER && ttValue >= beta) ||
          (ttBound == BOUND_UPPER && ttValue <= alpha))) {
         STAT(ttcut);
@@ -1063,7 +964,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
         }
 #endif
         rawEval = ttHit && ttd.eval != VALUE_NONE ? Value(ttd.eval) : eval_at(ply);
-        eval = corrected(rawEval);
+        eval = rule40(rawEval);
         staticEv[ply] = eval;
         if (ttValue != VALUE_NONE && std::abs(ttValue) < VALUE_KNOWN_WIN &&
             (ttBound & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
@@ -1073,16 +974,11 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
     const bool improving = P_Improving && !inCheck && ply >= 2 && staticEv[ply - 2] != VALUE_NONE &&
                            staticEv[ply] > staticEv[ply - 2];
     if (!pvNode && !inCheck) {
-        if (depth <= P_RazorDepth && !excl && eval + P_RazorMargin * depth < alpha && alpha > -VALUE_KNOWN_WIN) {
-            const Value v = qsearch(alpha, alpha + 1, ply, 0);
-            if (G.stop) return VALUE_ZERO;
-            if (v <= alpha) return v;
-        }
         if (depth <= P_RfpDepth && eval - P_RfpMargin * (depth - (improving ? 1 : 0)) >= beta && eval < VALUE_KNOWN_WIN) {
             STAT(rfp);
             return eval;
         }
-        if (!excl && depth >= 2 && eval >= beta && ply > 0 && curMove[ply - 1] != MOVE_NULL && p.has_major(us) &&
+        if (depth >= 2 && eval >= beta && ply > 0 && curMove[ply - 1] != MOVE_NULL && p.has_major(us) &&
             beta > -VALUE_KNOWN_WIN) {
             const int R = P_NullBase + depth / P_NullDepthDiv + std::min((eval - beta) / P_NullDiv, 3);
             STAT(nullTry);
@@ -1101,67 +997,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
             if (v >= beta) { STAT(nullCut); return v >= VALUE_KNOWN_WIN ? beta : v; }
         }
     }
-    // ProbCut: a face-up capture that beats beta + margin in quiescence and at depth - 4 cuts the node.
-    if (P_ProbCut && !pvNode && !inCheck && !excl && depth >= P_ProbCutDepth && std::abs(beta) < VALUE_KNOWN_WIN / 2 &&
-        !(ttHit && ttd.depth >= depth - 3 && ttValue != VALUE_NONE && ttValue < beta + P_ProbCut)) {
-        const Value pcBeta = beta + P_ProbCut;
-        Move pcm[MAX_MOVES];
-        int pcs[MAX_MOVES];
-        const int npc = p.gen_captures(pcm);
-        for (int i = 0; i < npc; ++i) pcs[i] = piece_value(to_sq(pcm[i])) * 16 - piece_value(from_sq(pcm[i])) / 16;
-        for (int i = 0; i < npc; ++i) {
-            int bi = i;
-            for (int j = i + 1; j < npc; ++j)
-                if (pcs[j] > pcs[bi]) bi = j;
-            std::swap(pcm[i], pcm[bi]);
-            std::swap(pcs[i], pcs[bi]);
-            const Move m = pcm[i];
-            if (p.is_dark_move(m) || !p.legal(m)) continue;
-            const int to = to_sq(m), vv = piece_value(to), av = piece_value(from_sq(m));
-            const int gain = p.attacked(~us, to) ? vv - av : vv;
-            if (eval == VALUE_NONE || eval + gain < pcBeta) continue;
-            Value v = child(m, pcBeta - 1, pcBeta, 0, ply, false, false, 0);
-            if (v >= pcBeta && !G.stop) v = child(m, pcBeta - 1, pcBeta, depth - 4, ply, false, !cutNode, -1);
-            if (G.stop) return VALUE_ZERO;
-            if (v >= pcBeta) {
-                TT.store(tte, p.key, value_to_tt(v, ply), BOUND_LOWER, depth - 3, m, rawEval);
-                return v;
-            }
-        }
-    }
     if (!root && ttMove == MOVE_NONE && depth >= 4) --depth;  // internal iterative reduction
-
-    // Singular extension: if every alternative fails well below the TT value, extend the TT move.
-    int singularExt = 0;
-    if (P_SeDepth && !root && !excl && depth >= P_SeDepth && ttMove != MOVE_NONE && (ttBound & BOUND_LOWER) &&
-        ttd.depth >= depth - 3 && ttValue != VALUE_NONE && std::abs(ttValue) < VALUE_KNOWN_WIN && !p.is_dark_move(ttMove)) {
-        const Value sBeta = ttValue - P_SeMargin * depth / 8;
-        excluded[ply] = ttMove;
-        const Value sv = search(sBeta - 1, sBeta, (depth - 1) / 2, ply, false, cutNode);
-        excluded[ply] = MOVE_NONE;
-        if (G.stop) return VALUE_ZERO;
-        if (sv < sBeta) singularExt = 1;
-        else if (sBeta >= beta) return sBeta;  // multi-cut: another move also beats beta
-    }
-
-    // Threatened face-down pieces of the side to move (ThreatRev options): worked out per from-square the first
-    // time a face-down mover from it is asked about, so nothing is computed while the options are off.
-    struct Trv { int8_t sq, state; int16_t loss; };
-    Trv trvCache[16];
-    int trvN = 0, trvDarkV[2] = {-1, -1};
-    auto trv = [&](int s) -> const Trv& {
-        for (int j = 0; j < trvN; ++j)
-            if (trvCache[j].sq == s) return trvCache[j];
-        if (trvDarkV[0] < 0) trvDarkV[RED] = urn_mean_value(p, RED), trvDarkV[BLACK] = urn_mean_value(p, BLACK);
-        int loss;
-        const int state = search::threat_reveal(p, s, &loss, trvDarkV);
-        Trv& e = trvCache[std::min(trvN, 15)];
-        e = {int8_t(s), int8_t(state), int16_t(std::min(loss, 30000))};
-        if (trvN < 15) ++trvN;
-        return e;
-    };
-    auto trv_hit = [&](Move mm) { return trv(from_sq(mm)).state == 2; };
-    const bool trvRoot = root && (P_ThreatRevRoot || P_ThreatRevScale);
 
     Move moves[MAX_MOVES];
     int scores[MAX_MOVES];
@@ -1182,7 +1018,6 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
         else if (m == counter) scores[i] = 1 << 26;
         else {
             scores[i] = quiet_stat(us, m, pidx16(p.board[from_sq(m)]), ply);
-            if (P_ThreatRevOrder && p.is_dark_move(m) && trv_hit(m)) scores[i] += P_ThreatRevOrder;
             if (P_SeeQuietOrder && !see_ge(m, -P_SeeQuietOrder)) scores[i] -= 1 << 18;
         }
     }
@@ -1200,7 +1035,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
         std::swap(moves[i], moves[bi]);
         std::swap(scores[i], scores[bi]);
         const Move m = moves[i];
-        if (m == excl || !p.legal(m)) continue;
+        if (!p.legal(m)) continue;
         if (root && !G.rootMoves.empty() && std::find(G.rootMoves.begin(), G.rootMoves.end(), m) == G.rootMoves.end())
             continue;
         if (partialRoot && std::find(rootExcl.begin(), rootExcl.end(), m) != rootExcl.end()) continue;
@@ -1225,24 +1060,11 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
             const int lmp = P_LmpBase + depth * depth;
             if (nq >= (P_Improving && !improving ? lmp / 2 + 1 : lmp)) { STAT(lmp); continue; }
             if (eval + P_FutBase + P_FutMul * depth <= alpha && hist < 4000) { STAT(fut); continue; }
-            if (P_HistPrune && depth <= 3 && hist < -P_HistPrune * depth) continue;
         }
         if (!root && bestValue > VALUE_MATED_IN_MAX_PLY && !inCheck && !givesCheck && depth <= P_SeePruneDepth &&
             (capture ? P_SeeCap && !see_ge(m, -P_SeeCap * depth) : P_SeeQuiet && !see_ge(m, -P_SeeQuiet * depth * depth)))
             continue;
-        const int newDepth = depth - 1 + (m == ttMove ? singularExt : 0);
-        Value pen = root && dark && (!P_RootDarkHid || p.darkCount[us] <= P_RootDarkHid) ? Value(P_RootDarkPen) : Value(0);
-        if (trvRoot && dark && trv_hit(m))  // a threatened face-down piece: its moves get a bonus at the root
-            pen -= P_ThreatRevScale ? Value(std::min(300, trv(from_sq(m)).loss * P_ThreatRevScale / 100)) : Value(P_ThreatRevRoot);
-        auto child = [&](Move mm, Value a, Value b, int d, int pl, bool pvn, bool cut, int qp) {
-            if (!pen) return this->child(mm, a, b, d, pl, pvn, cut, qp);
-            const Value sa = std::abs(a) < VALUE_KNOWN_WIN ? Value(a + pen) : a;
-            const Value sb = std::abs(b) < VALUE_KNOWN_WIN ? Value(b + pen) : b;
-            // One bound shifted and the other not (the window reaches a known win) can leave no window: search unshifted.
-            if (sa >= sb) return this->child(mm, a, b, d, pl, pvn, cut, qp);
-            const Value r = this->child(mm, sa, sb, d, pl, pvn, cut, qp);
-            return std::abs(r) < VALUE_KNOWN_WIN ? Value(r - pen) : r;
-        };
+        const int newDepth = depth - 1;
         Value v;
         if (legalCount == 1) {
             v = child(m, alpha, beta, newDepth, ply, pvNode, false, -1);
@@ -1255,11 +1077,8 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
                 if (P_Improving && !improving) r += 1;
                 if (m == killers[ply][0] || m == killers[ply][1] || m == counter) r -= 1;
                 r -= hist / P_HistDiv;
-                if (dark && P_ThreatRevLmr != 100 && trv_hit(m)) r = r * P_ThreatRevLmr / 100;
-                else if (dark && P_DarkLmr != 100) r = r * P_DarkLmr / 100;
+                if (dark && P_DarkLmr != 100) r = r * P_DarkLmr / 100;
                 r = std::clamp(r, 0, newDepth - 1);
-            } else if (P_CapLmr && depth >= 3 && capture && !pvNode && !inCheck && !givesCheck && !see_ge(m, 0)) {
-                r = std::clamp(P_CapLmr + (cutNode ? 1 : 0), 0, newDepth - 1);
             }
             if (r > 0) STAT(lmr);
             v = child(m, alpha, alpha + 1, newDepth - r, ply, false, true, -1);
@@ -1304,7 +1123,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
             }
         }
     }
-    if (legalCount == 0) return excl ? alpha : mated_in(ply);  // no legal move loses, including stalemate
+    if (legalCount == 0) return mated_in(ply);  // no legal move loses, including stalemate
 #ifdef JQ_STATS
     if (best == MOVE_NONE) { STAT(failLow); STATN(failLowMoves, legalCount); }
 #endif
@@ -1325,12 +1144,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
                 if (caps[k] != best) gravity(capHist[pidx16(p.board[from_sq(caps[k])])][to_sq(caps[k])][type_of(p.board[to_sq(caps[k])])], -bonus);
     }
     const Bound b = bestValue >= beta ? BOUND_LOWER : (pvNode && best != MOVE_NONE ? BOUND_EXACT : BOUND_UPPER);
-    // Correction history learns from non-capture results whose bound points the right way.
-    if (P_CorrHist && !inCheck && !excl && !partialRoot && rawEval != VALUE_NONE && std::abs(bestValue) < VALUE_KNOWN_WIN &&
-        !(best != MOVE_NONE && p.board[to_sq(best)] != NO_PIECE) &&
-        ((bestValue < staticEv[ply] && bestValue < beta) || (bestValue > staticEv[ply] && best != MOVE_NONE)))
-        update_corr(rawEval, bestValue, depth);
-    if (!excl && !partialRoot) TT.store(tte, p.key, value_to_tt(bestValue, ply), b, depth, best, rawEval);
+    if (!partialRoot) TT.store(tte, p.key, value_to_tt(bestValue, ply), b, depth, best, rawEval);
     return bestValue;
 }
 
@@ -1360,7 +1174,6 @@ void Worker::iterate() {
     Value prevScore = 0;
     Move lastBest = MOVE_NONE;  // time management (main thread)
     double instab = 0;
-    std::fill(std::begin(excluded), std::end(excluded), MOVE_NONE);
     bestMove = MOVE_NONE;
     bestScore = -VALUE_INFINITE;
     completedDepth = 0;
@@ -1384,7 +1197,6 @@ void Worker::iterate() {
         rootExcl.clear();
         std::vector<RootLine> cur;
         Value v = 0;
-        Value lastIterScore = prevScore;
         Move line0Move = MOVE_NONE;  // best move of line 1 before the lines are sorted (time management)
         bool stopped = false;
         // After a stop: the line being searched, when one of its root moves completed above alpha.
@@ -1455,7 +1267,6 @@ void Worker::iterate() {
             }
             if (pvIdx == 0) {
                 v = lineV;
-                lastIterScore = prevScore;
                 prevScore = v;
                 completedDepth = d;
                 bestScore = v;
@@ -1527,8 +1338,6 @@ void Worker::iterate() {
                 double soft = double(G.optimumMs) * (G.clockMode ? P_TmSoft : 55) / 100;
                 if (G.clockMode && P_TmStab)
                     soft *= std::clamp(1.0 + P_TmStab / 100.0 * (instab - 0.5), 0.5, 2.5);
-                if (G.clockMode && P_TmFall && d >= 5)
-                    soft *= 1.0 + P_TmFall / 100.0 * std::clamp((lastIterScore - v) / 100.0, -0.5, 1.0);
                 if (elapsed() >= int64_t(soft)) break;
             }
             if (std::abs(v) >= VALUE_MATE_IN_MAX_PLY && d >= 2 * (VALUE_MATE - std::abs(v)) + 4) {
@@ -1593,25 +1402,35 @@ double perft_chance_rec(Position& pos, int depth, uint64_t& leaves) {
 
 std::vector<Param>& params() {
     static std::vector<Param> p = {
-        {"ChanceK", &P_ChanceK, 100, 1000},  {"RfpMargin", &P_RfpMargin, 30, 300},
-        {"RfpDepth", &P_RfpDepth, 1, 12},    {"NullBase", &P_NullBase, 1, 6},
-        {"NullDiv", &P_NullDiv, 50, 800},    {"FutBase", &P_FutBase, 0, 400},
-        {"FutMul", &P_FutMul, 30, 400},      {"LmpBase", &P_LmpBase, 1, 12},
-        {"LmrBase", &P_LmrBase, 0, 200},     {"LmrDiv", &P_LmrDiv, 100, 500},
-        {"AspDelta", &P_AspDelta, 5, 200},   {"QsDarkPly", &P_QsDarkPly, 0, 16},
+        {"ChanceK", &P_ChanceK, 100, 1000}, {"RfpMargin", &P_RfpMargin, 30, 300}, {"RfpDepth", &P_RfpDepth, 1, 12},
+        {"NullBase", &P_NullBase, 1, 6}, {"NullDiv", &P_NullDiv, 50, 800}, {"FutBase", &P_FutBase, 0, 400},
+        {"FutMul", &P_FutMul, 30, 400}, {"LmpBase", &P_LmpBase, 1, 12}, {"LmrBase", &P_LmrBase, 0, 200},
+        {"LmrDiv", &P_LmrDiv, 100, 500}, {"AspDelta", &P_AspDelta, 5, 200}, {"QsDarkPly", &P_QsDarkPly, 0, 16},
         {"HistDiv", &P_HistDiv, 1000, 32000}, {"DeltaMargin", &P_DeltaMargin, 0, 1000},
         {"BadCapMargin", &P_BadCapMargin, -200, 400}, {"ChanceMode", &P_ChanceMode, 0, 1},
-        {"MaxChanceLayers", &P_MaxChanceLayers, 0, 12}, {"ContHist", &P_ContHist, 0, 1}, {"ChanceTail", &P_ChanceTail, 0, 2},
-        {"ChanceRed", &P_ChanceRed, 0, 8}, {"RevealCheck", &P_RevealCheck, 0, 8}, {"ChanceCV", &P_ChanceCV, 0, 30}, {"DarkLmr", &P_DarkLmr, 0, 200}, {"ChanceCVGap", &P_ChanceCVGap, 0, 30}, {"RepMode", &P_RepMode, 0, 2}, {"ChanceRedLow", &P_ChanceRedLow, 0, 100}, {"ChanceXDepth", &P_ChanceXDepth, 0, 40}, {"TmMtg", &P_TmMtg, 5, 80}, {"TmInc", &P_TmInc, 0, 100}, {"TmSoft", &P_TmSoft, 10, 300}, {"TmStab", &P_TmStab, 0, 300}, {"TmFall", &P_TmFall, 0, 300}, {"TmMtgMin", &P_TmMtgMin, 0, 80}, {"TmMtgDec", &P_TmMtgDec, 0, 100}, {"NodesTime", &P_NodesTime, 0, 100000}, {"ChancePvW", &P_ChancePvW, 0, 30000}, {"ChanceTailFix", &P_ChanceTailFix, 0, 2}, {"ChanceTailR", &P_ChanceTailR, 0, 30}, {"ChanceCVRho", &P_ChanceCVRho, 0, 100}, {"ChanceMix", &P_ChanceMix, 0, 30}, {"ChanceMixRho", &P_ChanceMixRho, 0, 100}, {"ChanceMixMin", &P_ChanceMixMin, 1, 30}, {"ChanceMixPv", &P_ChanceMixPv, 0, 1}, {"ChanceMixProbe", &P_ChanceMixProbe, 0, 1}, {"ChanceMixSkip", &P_ChanceMixSkip, 0, 1}, {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1}, {"ChanceFutPre", &P_ChanceFutPre, -1000, 300}, {"ChanceMixRho0", &P_ChanceMixRho0, -1, 100}, {"ChanceMixTT", &P_ChanceMixTT, 0, 1}, {"ChanceMixTop", &P_ChanceMixTop, 1, 6}, {"ChanceMixDiv", &P_ChanceMixDiv, 0, 30}, {"ChanceMixPvR", &P_ChanceMixPvR, 0, 30}, {"ChanceMixPvPly", &P_ChanceMixPvPly, 0, 100},{"ChanceLateDark", &P_ChanceLateDark, 0, 30}, {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"ChanceCVStatic", &P_ChanceCVStatic, 0, 1}, {"ChanceCVLow", &P_ChanceCVLow, 0, 30}, {"RootDarkPen", &P_RootDarkPen, -300, 300}, {"ThreatRevRoot", &P_ThreatRevRoot, 0, 300}, {"ThreatRevScale", &P_ThreatRevScale, 0, 100}, {"ThreatRevLmr", &P_ThreatRevLmr, 0, 200}, {"ThreatRevOrder", &P_ThreatRevOrder, 0, 30000}, {"ThreatRevSee", &P_ThreatRevSee, -200, 400}, {"ThreatRevMode", &P_ThreatRevMode, 0, 1}, {"ThreatRevProb", &P_ThreatRevProb, 0, 100}, {"ChanceMixLow", &P_ChanceMixLow, 0, 100}, {"ChanceMixLowR", &P_ChanceMixLowR, 0, 99}, {"RootDarkHid", &P_RootDarkHid, 0, 15}, {"ChanceCVProbe", &P_ChanceCVProbe, 0, 10}, {"RevealCheckQs", &P_RevealCheckQs, 0, 1},
-        {"SeDepth", &P_SeDepth, 0, 20}, {"SeMargin", &P_SeMargin, 0, 200}, {"HistPrune", &P_HistPrune, 0, 20000},
-        {"NullDepthDiv", &P_NullDepthDiv, 2, 8}, {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30}, {"SmpSkip", &P_SmpSkip, 0, 2},
-        {"PruneDepth", &P_PruneDepth, 0, 12}, {"RazorDepth", &P_RazorDepth, 0, 6}, {"RazorMargin", &P_RazorMargin, 50, 1000},
-        {"CapHist", &P_CapHist, 0, 1}, {"Improving", &P_Improving, 0, 1}, {"QsTT", &P_QsTT, 0, 1},
-        {"CheckExt", &P_CheckExt, 0, 2}, {"QsTTMove", &P_QsTTMove, 0, 1},
-        {"ProbCut", &P_ProbCut, 0, 1000}, {"ProbCutDepth", &P_ProbCutDepth, 3, 12},
-        {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500}, {"SeeOrder", &P_SeeOrder, 0, 1},
-        {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500}, {"SeePruneDepth", &P_SeePruneDepth, 1, 12},
-        {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000}, {"CorrHist", &P_CorrHist, 0, 400}, {"Rule40Div", &P_Rule40Div, 0, 2000}, {"Rule40TTCut", &P_Rule40TTCut, 0, 80}, {"Rule40Mate", &P_Rule40Mate, 0, 1}, {"ChanceMate", &P_ChanceMate, 0, 1}, {"ChaseRule", &g_chaseRule, 0, 1}, {"TTWays", &g_ttWays, 1, 4}, {"CapLmr", &P_CapLmr, 0, 3},
+        {"MaxChanceLayers", &P_MaxChanceLayers, 0, 12}, {"ContHist", &P_ContHist, 0, 1},
+        {"ChanceTail", &P_ChanceTail, 0, 2}, {"ChanceRed", &P_ChanceRed, 0, 8}, {"RepByProbe", &P_RepByProbe, 0, 1},
+        {"ChanceCV", &P_ChanceCV, 0, 30}, {"DarkLmr", &P_DarkLmr, 0, 200}, {"ChanceCVGap", &P_ChanceCVGap, 0, 30},
+        {"ChanceRedLow", &P_ChanceRedLow, 0, 100}, {"ChanceXDepth", &P_ChanceXDepth, 0, 40},
+        {"TmMtg", &P_TmMtg, 5, 80}, {"TmInc", &P_TmInc, 0, 100}, {"TmSoft", &P_TmSoft, 10, 300},
+        {"TmStab", &P_TmStab, 0, 300}, {"NodesTime", &P_NodesTime, 0, 100000}, {"ChancePvW", &P_ChancePvW, 0, 30000},
+        {"ChanceCVRho", &P_ChanceCVRho, 0, 100}, {"ChanceMix", &P_ChanceMix, 0, 30},
+        {"ChanceMixMin", &P_ChanceMixMin, 1, 30}, {"ChanceMixProbe", &P_ChanceMixProbe, 0, 1},
+        {"ChanceMixSkip", &P_ChanceMixSkip, 0, 1}, {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1},
+        {"ChanceFutPre", &P_ChanceFutPre, -1000, 300}, {"ChanceMixRho0", &P_ChanceMixRho0, 0, 100},
+        {"ChanceMixTT", &P_ChanceMixTT, 0, 1}, {"ChanceMixTop", &P_ChanceMixTop, 1, 6},
+        {"ChanceMixPvR", &P_ChanceMixPvR, 0, 30}, {"ChanceLateDark", &P_ChanceLateDark, 0, 30},
+        {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"ChanceCVStatic", &P_ChanceCVStatic, 0, 1},
+        {"ChanceCVLow", &P_ChanceCVLow, 0, 30}, {"ChanceCVProbe", &P_ChanceCVProbe, 0, 10},
+        {"NullDepthDiv", &P_NullDepthDiv, 2, 8}, {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30},
+        {"SmpSkip", &P_SmpSkip, 0, 2}, {"PruneDepth", &P_PruneDepth, 0, 12}, {"CapHist", &P_CapHist, 0, 1},
+        {"Improving", &P_Improving, 0, 1}, {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2},
+        {"QsTTMove", &P_QsTTMove, 0, 1}, {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500},
+        {"SeeOrder", &P_SeeOrder, 0, 1}, {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500},
+        {"SeePruneDepth", &P_SeePruneDepth, 1, 12}, {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000},
+        {"Rule40Div", &P_Rule40Div, 0, 2000}, {"Rule40TTCut", &P_Rule40TTCut, 0, 80},
+        {"Rule40Mate", &P_Rule40Mate, 0, 1}, {"ChanceMate", &P_ChanceMate, 0, 1}, {"ChaseRule", &g_chaseRule, 0, 1},
+        {"TTWays", &g_ttWays, 1, 4},
     };
     return p;
 }
@@ -1696,9 +1515,7 @@ SearchResult Searcher::go(const Position& root, const Limits& limits, const std:
         G.timed = true;
         G.clockMode = true;
         const int64_t t = limits.time[us], inc = limits.inc[us];
-        int mtg = limits.movestogo > 0 ? std::min(limits.movestogo, 40) : P_TmMtg;
-        if (limits.movestogo <= 0 && P_TmMtgMin)
-            mtg = std::max(P_TmMtgMin, P_TmMtg - int(root.keyHist.size() - 1) / 2 * P_TmMtgDec / 10);
+        const int mtg = limits.movestogo > 0 ? std::min(limits.movestogo, 40) : P_TmMtg;
         G.optimumMs = t / mtg + inc * P_TmInc / 100;
         G.maximumMs = std::min<int64_t>(t * 2 / 5, G.optimumMs * 4);
         G.optimumMs = std::min(G.optimumMs, t - overhead);
@@ -1714,7 +1531,6 @@ SearchResult Searcher::go(const Position& root, const Limits& limits, const std:
         w->chanceLayers = 0;
         w->maxLayers = P_MaxChanceLayers +
                        (P_ChanceLateDark && root.darkCount[RED] + root.darkCount[BLACK] <= P_ChanceLateDark ? P_ChanceLateAdd : 0);
-        w->revealSplits = 0;
         w->info = nullptr;
         const double k = P_ChanceK;
         w->set_eK(k);
@@ -1857,54 +1673,6 @@ bool see_ge(const Position& p, Move m, int threshold) {
         occ &= ~sq_bb(a);
     }
     return res;
-}
-
-int threat_reveal(const Position& p, int s, int* loss, const int* dv) {
-    *loss = 0;
-    const Color us = p.stm;
-    if (p.urnTotal[us] <= 0) return 0;
-    const int darkV[2] = {dv ? dv[RED] : urn_mean_value(p, RED), dv ? dv[BLACK] : urn_mean_value(p, BLACK)};
-    // The captures on s, the opponent's first, each side with its least valuable attacker: the values of the
-    // capturing pieces in order. The sequence does not depend on what the piece on s turns out to be. A king
-    // captures only a piece that is then undefended, so it can only end the sequence. Pins are ignored, as in SEE.
-    int taker[32], n = 0;
-    Bitboard occ = p.occBB;
-    for (Color side = ~us; n < 32; side = ~side) {
-        int av;
-        const int a = least_attacker(p, occ, side, s, darkV[side], &av);
-        if (a < 0) {
-            if (n == 0) return 0;  // nothing attacks s
-            break;
-        }
-        const bool king = type_of(p.board[a]) == KING;
-        occ &= ~sq_bb(a);  // the capturer moves onto s
-        if (king) {
-            int v;
-            if (least_attacker(p, occ, ~side, s, darkV[~side], &v) < 0) taker[n++] = av;
-            break;
-        }
-        taker[n++] = av;
-    }
-    if (n == 0) return 1;  // only the king attacks s, and s is defended
-    // The exchange valued for each identity the piece may have: g[k] is what the side making capture k nets from
-    // there on, and either side may stop. The opponent's gain is floored at 0: it need not capture at all.
-    int sum = 0, winning = 0;
-    for (int sl = 0; sl < NUM_SLOTS; ++sl) {
-        const int c = p.urn[us][sl];
-        if (!c) continue;
-        int g[32];
-        g[0] = PieceValue[slot_type(sl)];
-        for (int k = 1; k < n; ++k) g[k] = taker[k - 1] - g[k - 1];
-        for (int k = n - 1; k > 0; --k) g[k - 1] = std::min(g[k - 1], -g[k]);
-        const int gain = std::max(0, g[0]);
-        sum += c * gain;
-        if (gain > 0) winning += c;
-    }
-    *loss = sum / p.urnTotal[us];
-    if (n == 1) return 2;  // undefended: the opponent takes it for nothing
-    const bool hit = P_ThreatRevMode == 0 ? sum > P_ThreatRevSee * p.urnTotal[us]
-                                          : 100 * winning >= P_ThreatRevProb * p.urnTotal[us];
-    return hit ? 2 : 1;
 }
 
 int see_value(const Position& p, Move m) {

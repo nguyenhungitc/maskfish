@@ -103,13 +103,6 @@ void Position::move_piece(int from, int to) {
     board[from] = NO_PIECE;
 }
 
-uint64_t Position::compute_skey() const {
-    uint64_t k = 0;
-    for (int s = 0; s < NUM_SQ; ++s)
-        if (board[s]) k ^= skey_of(board[s], s);
-    return k;
-}
-
 uint64_t Position::compute_key() const {
     uint64_t k = 0;
     for (int s = 0; s < NUM_SQ; ++s)
@@ -227,7 +220,6 @@ bool Position::set_fen(const std::string& fen, std::string* error) {
                                                               : std::min<long long>(plies, NO_CAPTURE_LIMIT));
     compute_bitboards();
     key = compute_key();
-    skey = compute_skey();
     keyHist.clear();
     checkHist.clear();
     moveHist.clear();
@@ -469,17 +461,6 @@ bool Position::legal(Move m) const {
     return ok;
 }
 
-bool Position::reveal_may_check(int to) const {
-    const int k = kingSq[~stm];
-    return same_line(to, k) || cheb_le2(to, k);
-}
-
-bool Position::reveal_gives_check(int from, int to, PieceType t) const {
-    const Bitboard occ = (occBB & ~sq_bb(from)) | sq_bb(to);
-    const Bitboard U = (byColorBB[stm] & ~sq_bb(from)) | sq_bb(to);
-    return attacked_bb(stm, kingSq[~stm], occ, U, to, t);
-}
-
 bool Position::gives_check(Move m) const {
     const int from = from_sq(m), to = to_sq(m);
     const Piece moving = board[from];
@@ -524,12 +505,9 @@ void Position::do_move(Move m, StateInfo& st) {
     st.urnSlot = -1;
     st.noCapture = noCapture;
     st.lastIrrev = int16_t(lastIrrev);
-    st.skey = skey;
     const bool hinted = hintMove == m && hintKey == key && hintLen == keyHist.size();
     bb_move(us, from, to, pc, reveal_of(m), cap);
-    skey ^= skey_of(pc, from);
     if (cap) {
-        skey ^= skey_of(cap, to);
         key ^= T.zPiece[cap][to];
         if (type_of(cap) == DARK) --darkCount[~us];
         remove_piece(to);
@@ -553,7 +531,6 @@ void Position::do_move(Move m, StateInfo& st) {
         kingSq[us] = int8_t(to);
     }
     key ^= T.zPiece[np][to];
-    skey ^= skey_of(np, to);
     key ^= T.zSide;
     noCapture = cap ? 0 : int16_t(noCapture + 1);
     stm = ~us;
@@ -623,7 +600,6 @@ void Position::undo_move(Move m, const StateInfo& st) {
         if (type_of(st.captured) == DARK) ++darkCount[~us];
     }
     key = st.key;
-    skey = st.skey;
     noCapture = st.noCapture;
     lastIrrev = st.lastIrrev;
 #ifdef JQ_VERIFY_LEGAL
@@ -946,7 +922,6 @@ bool Position::apply_observed(Move base, PieceType reveal, PieceType capturedId,
 
 bool Position::valid(std::string* error) const {
     if (key != compute_key()) return fail(error, "key mismatch");
-    if (skey != compute_skey()) return fail(error, "structure key mismatch");
     int dark[2] = {0, 0}, cnt[2] = {0, 0};
     for (int s = 0; s < NUM_SQ; ++s) {
         const Piece p = board[s];

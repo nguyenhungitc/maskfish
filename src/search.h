@@ -95,10 +95,6 @@ double perft_chance(Position& pos, int depth, uint64_t& leaves);  // expands rev
 // target square? Face-down movers and victims count at their side's expected identity value.
 bool see_ge(const Position& pos, Move m, int threshold);
 int see_value(const Position& pos, Move m);  // exact SEE value (search over thresholds)
-// A face-down piece of the side to move on s that the opponent attacks. Returns 0 if s is not attacked, 1 if it is
-// attacked and 2 if the ThreatRev options count it as threatened; *loss is the opponent's expected gain from the
-// exchange on s, over the identities the piece may have. darkV: both sides' urn means, if the caller has them.
-int threat_reveal(const Position& pos, int s, int* loss, const int* darkV = nullptr);
 
 }  // namespace search
 }  // namespace jq
