@@ -97,7 +97,7 @@ one so that we don't duplicate work.
    (the `params()` table of `src/search.cpp`), and many were set by hand. SPSA
    runs with `tools/spsa.py` or the local fishtest.
 2. **Validate the experimental options** (`SeeQuietOrder`, `ChanceMixSkip`,
-   `ChanceMixPvR`, `QsTTMove`, `ChanceLateDark`, `ChanceRed`, `ChancePvW`, ...).
+   `ChanceMixPvR`, `QsTTMove`, `ChanceLateDark`, `ChancePvW`, `ChanceMixRho0`, ...).
    Each one should be proven by an SPRT test or removed. Options that fail
    should be deleted, not kept as dead code.
 3. **Check `ChanceK`**, the scale at which chance outcomes are averaged,

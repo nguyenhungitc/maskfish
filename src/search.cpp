@@ -57,7 +57,6 @@ int P_MaxChanceLayers = 1;   // full chance expansions allowed along one line (t
 int P_ChanceTail = 1;         // beyond the cap: 0 = cap layer resolved by qsearch (lines end),
                              // 1 = representative reveal at full depth from the cap layer on,
                              // 2 = cap layer expanded at half depth, then representative at full depth
-int P_ChanceRed = 0;          // depth reduction for the non-representative outcomes of an expansion
 int P_NullDepthDiv = 4;       // null-move reduction grows by depth / NullDepthDiv
 int P_PruneDepth = 6;         // move-count / futility pruning of quiets up to this depth
 int P_SmpSkip = 1;            // helper depth skipping: 0 = none, 1 = skip (d + id) % 3 == 0, 2 = skip blocks by thread
@@ -79,9 +78,6 @@ int P_Rule40Div = 217;        // 80-ply rule: static evals shrink by eval * min(
 int P_Rule40TTCut = 70;       // 80-ply rule: no TT cutoffs from this no-capture count on (80 = cut at any count)
 int P_ChanceMate = 1;         // a reveal whose every identity mates (is mated) gets a mate value, not the saturated one
 int P_Rule40Mate = 1;         // 80-ply rule: a TT mate beyond the plies left before the draw reads as a non-mate value
-int P_ChanceCVProbe = 0;      // ChanceCV probe depth min(k, depth-1) when ChanceCVGap is 0 (0 = depth 0)
-int P_ChanceCVLow = 0;        // ChanceCV correction from static evals at depth >= ChanceCVLow below ChanceCV (0 = off)
-int P_ChanceCVStatic = 0;     // ChanceCV probes: 0 = depth-0 searches (or ChanceCVGap/Probe depth), 1 = static evals
 int P_TmMtg = 20;             // clock: moves-to-go estimate when none is given
 int P_TmInc = 75;             // clock: percent of the increment in the per-move optimum
 int P_TmSoft = 100;           // clock: start a new iteration only before TmSoft% of the optimum
@@ -92,29 +88,22 @@ int P_ChanceLateAdd = 1;      // MaxChanceLayers + ChanceLateAdd for that search
 int P_ChancePvW = 0;          // probe mode, PV chance nodes: outcomes are searched with the window widened by this
                               // much on both sides, so that outcome values outside the parent's window enter the
                               // average as values rather than as bounds (0 = parent's window)
-int P_ChanceCVRho = 100;      // ChanceCV: E ~ mean of probes + c (deep(rep) - probe(rep)), c = p_rep + (1 - p_rep) Rho/100
 int P_ChanceMix = 6;          // expanded chance nodes: every outcome gets an open-window search at depth - ChanceMix,
                               // the most numerous identity a full-depth search, whose value takes the place of its
-                              // probe (ChanceCV with rho 0; ChanceMix 0 = probe mode)
+                              // probe (ChanceMix 0 = probe mode)
 int P_ChanceMixMin = 1;       // ChanceMix only at depth >= ChanceMixMin
-int P_ChanceMixRho0 = 0;      // ChanceMix with quiescence probes: rho (percent) of the ChanceCV combination instead of 0
+int P_ChanceMixRho0 = 0;      // ChanceMix with quiescence probes: weight rho (percent, see mixValue) instead of 0
 int P_ChanceFut = 1;          // ChanceMix with quiescence probes at a null-window node: 1 = fail low from static values when the
                               // full-depth identity's child would be cut by reverse futility anyway (saves the probes)
 int P_ChanceFutPre = 20;      // ChanceFut is tried only when the node's static value + ChanceFutPre * depth <= alpha
-int P_ChanceNW = 1;           // CV / mix at a null-window node: 1 = full-depth identity searched with a null window at the decision threshold
+int P_ChanceNW = 1;           // ChanceMix at a null-window node: 1 = full-depth identity searched with a null window at the decision threshold
 int P_ChanceMixTT = 1;        // ChanceMix probes: 1 = an exact TT entry of sufficient depth replaces the probe search
 int P_ChanceMixTop = 1;       // ChanceMix: number of identities (most numerous first) searched at full depth
 int P_ChanceMixSkip = 0;      // ChanceMix with rho 0: 1 = no probe for the full-depth identity (its probe value cancels)
 int P_ChanceMixProbe = 1;     // ChanceMix probes: 1 = searched as PV nodes, 0 = with the node's own PV flag
 int P_ChanceMixPvR = 0;       // open-window (PV) mix nodes: probes at depth - ChanceMixPvR instead (0 = ChanceMix)
 int P_ChanceXDepth = 1;      // chance nodes with depth >= ChanceXDepth are fully expanded at any layer (0 = off)
-int P_ChanceRedLow = 0;       // expanded layers: non-representative identities below this probability (%) one ply shallower
-int P_RepByProbe = 0;         // representative reveal: the identity closest to the urn mean value; 1 = at ChanceCV
-                              // nodes instead the identity whose depth-0 value is closest to their mean
-int P_ChanceCVGap = 0;        // ChanceCV probes at depth - gap (0 = depth-0 probes)
 int P_DarkLmr = 100;          // LMR of face-down moves in percent of the quiet reduction
-int P_ChanceCV = 3;           // beyond the chance cap at depth >= ChanceCV: representative value + probability-
-                             // weighted depth-0 differences between identities (control variate; 0 = off)
 int P_SeeQuietOrder = 0;     // quiet / face-down moves with SEE < -SeeQuietOrder are ordered after all other quiets (0 = off)
 
 constexpr Value SAT = 10000;  // chance aggregation saturates here (mates collapse to +/-SAT)
@@ -191,7 +180,7 @@ struct Stats {
     uint64_t search, pv, qs, ttcut, rfp, nullTry, nullCut, cext, chance, outcomes, lmr, lmrRe, pvsRe, fh, fh1,
         fhMoves, failLow, failLowMoves, lmp, fut, quietSearched, capSearched, darkSearched;
     uint64_t fhCat[6], fhTT, fh1TT, loopNodes, loopTT;  // cutoff move: tt, good cap, killer/counter, bad cap, quiet, dark
-    uint64_t cvCalls, cvProbeN, cvDeepN, mixCalls, mixProbeN, mixDeepN, probeCalls, probeN;  // chance node kinds: calls, nodes
+    uint64_t mixCalls, mixProbeN, mixDeepN, probeCalls, probeN;  // chance node kinds: calls, nodes
     uint64_t mixK[6][3];  // mix at non-PV nodes by (quiescence probes / searched probes) x (fail low, inside, fail high): calls, probe nodes, deep nodes
 };
 inline Stats g_st;
@@ -534,17 +523,6 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
     // An aggregated chance value lies in [-SAT, SAT]. A fail-hard bound outside that range (a window wider than the
     // saturated scale, e.g. the infinite root window) is the saturated value itself, not a bound.
     auto sat = [](Value v) { return std::clamp(v, Value(-SAT), SAT); };
-    auto stat = [&](Move mm) {  // static eval after mm, from the mover's side
-        StateInfo st;
-        if (useNN) {
-            nnue::make_dirty(p, mm, dirty[ply + 1]);
-            accOk[ply + 1] = false;
-        }
-        p.do_move(mm, st);
-        const Value v = -rule40(eval_at(ply + 1));
-        p.undo_move(mm, st);
-        return v;
-    };
 
     const Color us = p.stm;
     const int from = from_sq(m), to = to_sq(m);
@@ -590,26 +568,22 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         p.undo_move(mm, st);
         return v;
     };
-    // Control variate: E[v] ~ sum_i p_i v_s(i) + c (v_deep(rep) - v_s(rep)) in expected-score space, with probe values
-    // v_s (static, depth 0 or depth pd) and c = p_rep + (1 - p_rep) rho; rho = 1 gives v_deep(rep) + sum_i p_i
-    // (v_s(i) - v_s(rep)). The representative is searched with the window mapped through the correction.
-    auto cvValue = [&](int pd, bool pvProbe, bool staticProbe, int cvI, bool repByProbe, int rhoPct, int top) -> Value {
+    // ChanceMix value: E[v] ~ sum_i p_i v_s(i) + c (v_deep(rep) - v_s(rep)) in expected-score space, with probe values
+    // v_s (open-window searches at depth pd) of every identity, rep the most numerous one (slot 0) and
+    // c = p_rep + (1 - p_rep) rho; rho = 0 puts v_deep(rep) in the place of v_s(rep). The representative is searched
+    // with the window mapped through the combination.
+    auto mixValue = [&](int pd, bool pvProbe, int rhoPct, int top) -> Value {
+        constexpr int cvI = 0;
         double dl = 0.0, e0[NUM_SLOTS] = {};
 #ifdef JQ_STATS
         const uint64_t sn0 = nodes.load(std::memory_order_relaxed);
 #endif
-        const bool skipRep = P_ChanceMixSkip && pvProbe && rhoPct == 0 && !repByProbe && top <= 1;
+        const bool skipRep = P_ChanceMixSkip && pvProbe && rhoPct == 0 && top <= 1;
         for (int i = 0; i < n; ++i) {
             if (skipRep && i == cvI) continue;  // e0[cvI] = 0 cancels below
             const Move pm = make_move(from, to, slot_type(slots[i]));
-            e0[i] = v2e(staticProbe ? stat(pm) : pvProbe && pd > 0 ? subPv(pm, pd) : sub(pm, -VALUE_INFINITE, VALUE_INFINITE, pd));
+            e0[i] = v2e(pvProbe && pd > 0 ? subPv(pm, pd) : sub(pm, -VALUE_INFINITE, VALUE_INFINITE, pd));
             if (G.stop) return VALUE_ZERO;
-        }
-        if (repByProbe) {
-            double mean0 = 0.0, best = 1e9;
-            for (int i = 0; i < n; ++i) mean0 += double(cnt[i]) / p.urnTotal[us] * e0[i];
-            for (int i = 0; i < n; ++i)
-                if (std::abs(e0[i] - mean0) < best) { best = std::abs(e0[i] - mean0); cvI = i; }
         }
         // Further full-depth identities (least numerous of them first): each is searched with the window that the
         // current values of the others leave for it, and its value (or bound) replaces its probe value.
@@ -672,7 +646,6 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
                 const int k = (pd > 0 ? 3 : 0) + (v <= ca ? 0 : v >= cb ? 2 : 1);
                 ++g_st.mixK[k][0]; g_st.mixK[k][1] += sn1 - sn0; g_st.mixK[k][2] += sn2 - sn1;
             }
-            else { ++g_st.cvCalls; g_st.cvProbeN += sn1 - sn0; g_st.cvDeepN += sn2 - sn1; }
         }
 #endif
         const Value r = mapped(v);
@@ -685,19 +658,8 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
         explicit LayerGuard(int& x) : c(x) { ++c; }
         ~LayerGuard() { --c; }
     };
-    // Outcomes to search: every identity (slots[i], probability cnt[i] / urnTotal) at depth oDepth[i].
-    int oDepth[NUM_SLOTS];
     const bool xDeep = P_ChanceXDepth && qply < 0 && depth >= P_ChanceXDepth;
-    if (n == 1 || chance_capped(depth, qply)) {
-        const bool cvDeep = P_ChanceCV && depth >= P_ChanceCV;
-        const bool cvLow = !cvDeep && P_ChanceCVLow && depth >= P_ChanceCVLow;
-        if ((cvDeep || cvLow) && n > 1 && qply < 0 && alpha < SAT && beta > -SAT) {
-            STAT(chance);
-            const int pd = P_ChanceCVGap ? std::max(0, depth - P_ChanceCVGap) : std::min(P_ChanceCVProbe, depth - 1);
-            return sat(cvValue(pd, false, !(cvDeep && !P_ChanceCVStatic), repI, P_RepByProbe != 0, P_ChanceCVRho, 1));
-        }
-        return sub(make_move(from, to, slot_type(slots[repI])), alpha, beta, depth);
-    }
+    if (n == 1 || chance_capped(depth, qply)) return sub(make_move(from, to, slot_type(slots[repI])), alpha, beta, depth);
     if (P_ChanceMix && qply < 0 && depth >= P_ChanceMixMin && alpha < SAT && beta > -SAT) {
         STAT(chance);
         LayerGuard guard(chanceLayers);
@@ -735,17 +697,11 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
                 return sat(std::min(alpha, r));
             }
         }
-        return sat(cvValue(std::max(0, pd), P_ChanceMixProbe != 0, false, 0, false,
-                           pd <= 0 ? P_ChanceMixRho0 : 0, P_ChanceMixTop));
+        return sat(mixValue(std::max(0, pd), P_ChanceMixProbe != 0, pd <= 0 ? P_ChanceMixRho0 : 0, P_ChanceMixTop));
     }
-    // At the outermost permitted layer, outcomes are resolved by quiescence only.
+    // Every identity (slots[i], probability cnt[i] / urnTotal) is an outcome, searched at depth d. At the outermost
+    // permitted layer, outcomes are resolved by quiescence only.
     const int d = chanceLayers < maxLayers || xDeep ? depth : P_ChanceTail == 2 ? depth / 2 : 0;
-    const int dRed = std::max(0, d - P_ChanceRed);  // non-representative outcomes
-    for (int i = 0; i < n; ++i) {
-        int di = i == repI ? d : dRed;
-        if (i != repI && P_ChanceRedLow && cnt[i] * 100 < P_ChanceRedLow * p.urnTotal[us]) di = std::max(0, di - 1);
-        oDepth[i] = di;
-    }
     STAT(chance);
     STATN(outcomes, n);
     if (alpha >= SAT) return alpha;
@@ -767,7 +723,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
             const Value ca = lo <= eMin ? -VALUE_INFINITE : std::max(Value(std::floor(e2v(lo))), -SAT);
             Value cb = hi >= eMax ? VALUE_INFINITE : std::min(Value(std::ceil(e2v(hi))), SAT);
             if (cb <= ca) cb = ca + 1;
-            const Value v = sub(make_move(from, to, slot_type(slots[i])), ca, cb, oDepth[i]);
+            const Value v = sub(make_move(from, to, slot_type(slots[i])), ca, cb, d);
             if (G.stop) return VALUE_ZERO;
             if (v <= ca) return sat(alpha);
             if (v >= cb) return sat(beta);
@@ -795,7 +751,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
     for (int i = 0; i < n; ++i) {
         const double pi = cnt[i] / total;
         R = i == n - 1 ? 0.0 : R - pi;
-        const Value v = sub(make_move(from, to, slot_type(slots[i])), wa, wb, oDepth[i]);
+        const Value v = sub(make_move(from, to, slot_type(slots[i])), wa, wb, d);
         if (G.stop) return VALUE_ZERO;
         const double e = v2e(v);
         S += pi * e;
@@ -1409,28 +1365,24 @@ std::vector<Param>& params() {
         {"HistDiv", &P_HistDiv, 1000, 32000}, {"DeltaMargin", &P_DeltaMargin, 0, 1000},
         {"BadCapMargin", &P_BadCapMargin, -200, 400}, {"ChanceMode", &P_ChanceMode, 0, 1},
         {"MaxChanceLayers", &P_MaxChanceLayers, 0, 12}, {"ContHist", &P_ContHist, 0, 1},
-        {"ChanceTail", &P_ChanceTail, 0, 2}, {"ChanceRed", &P_ChanceRed, 0, 8}, {"RepByProbe", &P_RepByProbe, 0, 1},
-        {"ChanceCV", &P_ChanceCV, 0, 30}, {"DarkLmr", &P_DarkLmr, 0, 200}, {"ChanceCVGap", &P_ChanceCVGap, 0, 30},
-        {"ChanceRedLow", &P_ChanceRedLow, 0, 100}, {"ChanceXDepth", &P_ChanceXDepth, 0, 40},
-        {"TmMtg", &P_TmMtg, 5, 80}, {"TmInc", &P_TmInc, 0, 100}, {"TmSoft", &P_TmSoft, 10, 300},
-        {"TmStab", &P_TmStab, 0, 300}, {"NodesTime", &P_NodesTime, 0, 100000}, {"ChancePvW", &P_ChancePvW, 0, 30000},
-        {"ChanceCVRho", &P_ChanceCVRho, 0, 100}, {"ChanceMix", &P_ChanceMix, 0, 30},
+        {"ChanceTail", &P_ChanceTail, 0, 2}, {"DarkLmr", &P_DarkLmr, 0, 200},
+        {"ChanceXDepth", &P_ChanceXDepth, 0, 40}, {"TmMtg", &P_TmMtg, 5, 80}, {"TmInc", &P_TmInc, 0, 100},
+        {"TmSoft", &P_TmSoft, 10, 300}, {"TmStab", &P_TmStab, 0, 300}, {"NodesTime", &P_NodesTime, 0, 100000},
+        {"ChancePvW", &P_ChancePvW, 0, 30000}, {"ChanceMix", &P_ChanceMix, 0, 30},
         {"ChanceMixMin", &P_ChanceMixMin, 1, 30}, {"ChanceMixProbe", &P_ChanceMixProbe, 0, 1},
         {"ChanceMixSkip", &P_ChanceMixSkip, 0, 1}, {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1},
         {"ChanceFutPre", &P_ChanceFutPre, -1000, 300}, {"ChanceMixRho0", &P_ChanceMixRho0, 0, 100},
         {"ChanceMixTT", &P_ChanceMixTT, 0, 1}, {"ChanceMixTop", &P_ChanceMixTop, 1, 6},
         {"ChanceMixPvR", &P_ChanceMixPvR, 0, 30}, {"ChanceLateDark", &P_ChanceLateDark, 0, 30},
-        {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"ChanceCVStatic", &P_ChanceCVStatic, 0, 1},
-        {"ChanceCVLow", &P_ChanceCVLow, 0, 30}, {"ChanceCVProbe", &P_ChanceCVProbe, 0, 10},
-        {"NullDepthDiv", &P_NullDepthDiv, 2, 8}, {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30},
-        {"SmpSkip", &P_SmpSkip, 0, 2}, {"PruneDepth", &P_PruneDepth, 0, 12}, {"CapHist", &P_CapHist, 0, 1},
-        {"Improving", &P_Improving, 0, 1}, {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2},
-        {"QsTTMove", &P_QsTTMove, 0, 1}, {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500},
-        {"SeeOrder", &P_SeeOrder, 0, 1}, {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500},
-        {"SeePruneDepth", &P_SeePruneDepth, 1, 12}, {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000},
-        {"Rule40Div", &P_Rule40Div, 0, 2000}, {"Rule40TTCut", &P_Rule40TTCut, 0, 80},
-        {"Rule40Mate", &P_Rule40Mate, 0, 1}, {"ChanceMate", &P_ChanceMate, 0, 1}, {"ChaseRule", &g_chaseRule, 0, 1},
-        {"TTWays", &g_ttWays, 1, 4},
+        {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"NullDepthDiv", &P_NullDepthDiv, 2, 8},
+        {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30}, {"SmpSkip", &P_SmpSkip, 0, 2},
+        {"PruneDepth", &P_PruneDepth, 0, 12}, {"CapHist", &P_CapHist, 0, 1}, {"Improving", &P_Improving, 0, 1},
+        {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2}, {"QsTTMove", &P_QsTTMove, 0, 1},
+        {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500}, {"SeeOrder", &P_SeeOrder, 0, 1},
+        {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500}, {"SeePruneDepth", &P_SeePruneDepth, 1, 12},
+        {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000}, {"Rule40Div", &P_Rule40Div, 0, 2000},
+        {"Rule40TTCut", &P_Rule40TTCut, 0, 80}, {"Rule40Mate", &P_Rule40Mate, 0, 1},
+        {"ChanceMate", &P_ChanceMate, 0, 1}, {"ChaseRule", &g_chaseRule, 0, 1}, {"TTWays", &g_ttWays, 1, 4},
     };
     return p;
 }
@@ -1611,8 +1563,7 @@ SearchResult Searcher::go(const Position& root, const Limits& limits, const std:
                       (unsigned long long)t.fhCat[0], (unsigned long long)t.fhCat[1], (unsigned long long)t.fhCat[2],
                       (unsigned long long)t.fhCat[3], (unsigned long long)t.fhCat[4], (unsigned long long)t.fhCat[5]);
         if (info) info(buf);
-        std::snprintf(buf, sizeof buf, "info string stats3 chance calls:probeNodes+deepNodes cv %llu:%llu+%llu mix %llu:%llu+%llu probeMode %llu:%llu",
-                      (unsigned long long)t.cvCalls, (unsigned long long)t.cvProbeN, (unsigned long long)t.cvDeepN,
+        std::snprintf(buf, sizeof buf, "info string stats3 chance calls:probeNodes+deepNodes mix %llu:%llu+%llu probeMode %llu:%llu",
                       (unsigned long long)t.mixCalls, (unsigned long long)t.mixProbeN, (unsigned long long)t.mixDeepN,
                       (unsigned long long)t.probeCalls, (unsigned long long)t.probeN);
         if (info) info(buf);
