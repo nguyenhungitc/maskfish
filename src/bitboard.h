@@ -16,16 +16,16 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// The bitboard layer (derived code, see AUTHORS), built with MASKFISH_BITBOARD. Position then keeps the sets of
-// pieces beside its board and answers move generation, legality, checks and the exchange evaluation from them;
-// the answers, and the order of the moves, are those of the board scans, so the search is the same node for node
-// (the bench signature holds).
+// The bitboard layer (derived code, see AUTHORS). Position keeps the sets of pieces beside its board and answers
+// move generation, legality, checks and the exchange evaluation from them. The order of the generated moves and of
+// equal-valued attackers in the exchange is part of the search (the move ordering breaks ties by it), so it is
+// kept as documented at gen() and least_attacker().
 
 // 128-bit bitboards for the 9x10 Jieqi board (layout: square s = rank * 9 + file is bit s,
 // rank 0 = Red's home rank, file 0 = file 'a'). Shared, engine-independent layer: geometry masks and ray /
 // leaper attack helpers only; Position keeps byColor / byRole / dark sets on top of it.
 //
-// Jieqi rules encoded here (identical to the board scans in position.cpp):
+// Jieqi rules encoded here (checked against the referee by maskfish_difftest):
 //   * a face-down (dark) piece moves by the role of the start square it stands on (T.darkRole);
 //   * a face-down advisor may only step into its own palace, a face-down elephant only within its own half;
 //   * revealed advisors / elephants roam the whole board (no palace / river limit);

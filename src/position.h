@@ -27,9 +27,7 @@
 // same reason (the urn is left unchanged), while moving one is a chance node.
 #pragma once
 #include "tables.h"
-#ifdef MASKFISH_BITBOARD
 #include "bitboard.h"
-#endif
 #include "types.h"
 
 #include <bitset>
@@ -56,7 +54,6 @@ constexpr int MAX_MOVES = 160;
 
 class Position {
 public:
-#ifdef MASKFISH_BITBOARD
     // The sets of pieces, kept beside board[] by set_fen and do / undo_move: occBB all pieces; byColorBB[c];
     // byRoleBB[t] the pieces that move as t (a face-down piece under the role of its start point, T.darkRole);
     // darkBB the face-down pieces of both colours.
@@ -64,7 +61,6 @@ public:
     Bitboard byColorBB[2] = {0, 0};
     Bitboard byRoleBB[9] = {};
     Bitboard darkBB = 0;
-#endif
     Piece board[NUM_SQ];
     Color stm = RED;
     int8_t urn[2][NUM_SLOTS];
@@ -109,7 +105,6 @@ public:
     bool is_dark_move(Move m) const { return type_of(board[from_sq(m)]) == DARK; }
     bool is_capture(Move m) const { return board[to_sq(m)] != NO_PIECE; }
 
-#ifdef MASKFISH_BITBOARD
     // Is square k attacked by colour e on a board that differs from this one: the occupancy is occ, e's pieces
     // are E (a subset of occ), and square x (if >= 0) holds a face-up piece of e of type xt? The roles and the
     // face-down set are this position's. The answer of king_attacked on that board.
@@ -117,7 +112,6 @@ public:
     bool ray_attacked_bb(Color e, int k, int d, Bitboard occ, Bitboard E, int x = -1, PieceType xt = NO_TYPE) const;
     void compute_bitboards();     // the sets from board[]
     bool bitboards_ok() const;    // the sets are those of board[] (tests)
-#endif
     bool king_attacked(Color c, int k) const;
     bool ray_attacked(Color c, int k, int d) const;  // rook / cannon / facing-king attack along one ray
     bool in_check() const { return king_attacked(stm, kingSq[stm]); }
@@ -172,7 +166,6 @@ private:
         return type_of(p) == SOLDIER || type_of(p) == DARK ? T.zPiece[p][s] : 0;
     }
     int chase_verdict(int first) const;
-#ifdef MASKFISH_BITBOARD
     void bb_put(int s, Piece p) {
         const Color c = color_of(p);
         const PieceType t = type_of(p);
@@ -206,7 +199,6 @@ private:
         if (type_of(pc) == DARK) { darkBB ^= bf; byRoleBB[T.darkRole[us][from]] ^= bf; byRoleBB[rev] ^= bt; }
         else byRoleBB[type_of(pc)] ^= bf | bt;
     }
-#endif
     void add_piece(int s, Piece p);
     void remove_piece(int s);
     void move_piece(int from, int to);

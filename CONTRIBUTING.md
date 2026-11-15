@@ -83,7 +83,7 @@ strength will come from. You can help with:
 ### I write C++
 
 - Fix bugs, improve speed, add tests.
-- Review the Jieqi-specific code (`src/position.cpp`: move generation,
+- Review the Jieqi-specific code (`src/position.cpp`, `src/bitboard.*`: move generation,
   repetition and chase rule; the chance nodes of `src/search.cpp`; the
   referee in `tools/native/`) for correctness.
 - Make the code easier to read and maintain.
@@ -253,7 +253,7 @@ Some files must stay in agreement:
 
 | What | Where | Checked by |
 |---|---|---|
-| The rules | `tools/native/` (the referee) and `src/position.cpp` | `maskfish_difftest` |
+| The rules | `tools/native/` (the referee), `src/position.cpp` and `src/bitboard.*` | `maskfish_difftest` |
 | The C interface | `tools/native/include/jieqi/c_api.h` and `tools/jieqi/native.py` | the ABI version (5), checked on load: change it with the interface |
 | The deals | `tools/jieqi/setup.py` | fixed seeds |
 | The statistics | `tools/match.py` (`summarize`) and `tools/sprt.py` | |

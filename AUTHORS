@@ -6,9 +6,9 @@
 #   derived;
 # - AB-JChess, from which the network evaluator (src/hnn/), the network packer
 #   (tools/hnn/), the trainer (train/) and the bitboard layer (src/bitboard.h,
-#   src/bitboard.cpp and the code built with MASKFISH_BITBOARD in
-#   src/position.cpp and src/search.cpp) are derived; it contains code derived
-#   from Pikafish and Stockfish;
+#   src/bitboard.cpp and the move generation, legality, check and exchange
+#   code on those bitboards in src/position.cpp and src/search.cpp) are
+#   derived; it contains code derived from Pikafish and Stockfish;
 # - Pikafish and Stockfish, through AB-JChess (among them the signed LEB128
 #   container of the network files, src/hnn/jqnz.h).
 #

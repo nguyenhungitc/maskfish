@@ -241,14 +241,12 @@ inline Stats g_st;
 #define STATN(x, n) ((void)0)
 #endif
 
-// Least valuable attacker of square s by colour c on board bd (-1 if none), its value in *val. Face-down
-// pieces attack with the role of their start square, keeping the palace / own-half limits, and are worth
-// darkVal (their side's expected identity). Pins and facing generals are ignored.
-#ifdef MASKFISH_BITBOARD
-// On the sets: the board is p's restricted to occ (in the exchange the only other change is that s holds the last
-// capturer, and s is never its own attacker). The answer of the board scan below, with its order among equal
-// values: soldiers (behind, west, east), advisors, elephants, horses (table order), king, then the rays N, S,
-// E, W (a rook's first blocker, a cannon's second).
+// Least valuable attacker of square s by colour c (-1 if none), its value in *val, on p's board restricted to
+// occ (in the exchange the only other change is that s holds the last capturer, and s is never its own
+// attacker). Face-down pieces attack with the role of their start square, keeping the palace / own-half limits,
+// and are worth darkVal (their side's expected identity). Pins and facing generals are ignored. Among equal
+// values the first in this order is taken (part of the search): soldiers (behind, west, east), advisors,
+// elephants, horses (table order), king, then the rays N, S, E, W (a rook's first blocker, a cannon's second).
 int least_attacker(const Position& p, Bitboard occ, Color c, int s, int darkVal, int* val) {
     const Piece* bd = p.board;
     const Bitboard C = p.byColorBB[c] & occ;
@@ -294,51 +292,6 @@ int least_attacker(const Position& p, Bitboard occ, Color c, int s, int darkVal,
     *val = bv;
     return best;
 }
-#else
-int least_attacker(const Piece* bd, Color c, int s, int darkVal, int* val) {
-    int best = -1, bv = 1 << 30;
-    auto mine = [&](int q) { return bd[q] != NO_PIECE && color_of(bd[q]) == c; };
-    auto role = [&](int q) { return type_of(bd[q]) == DARK ? PieceType(T.darkRole[c][q]) : type_of(bd[q]); };
-    auto consider = [&](int q) {
-        const PieceType t = type_of(bd[q]);
-        const int v = t == DARK ? darkVal : t == KING ? 1 << 20 : PieceValue[t];
-        if (v < bv) { bv = v; best = q; }
-    };
-    const int back = c == RED ? -9 : 9;  // c's soldier one step behind s attacks it
-    if (s + back >= 0 && s + back < NUM_SQ && mine(s + back) && role(s + back) == SOLDIER) consider(s + back);
-    if (file_of(s) > 0 && mine(s - 1) && role(s - 1) == SOLDIER && !own_half(c, s - 1)) consider(s - 1);
-    if (file_of(s) < 8 && mine(s + 1) && role(s + 1) == SOLDIER && !own_half(c, s + 1)) consider(s + 1);
-    for (int j = 0; j < T.advN[s]; ++j) {
-        const int q = T.advTo[s][j];
-        if (mine(q) && role(q) == ADVISOR && (type_of(bd[q]) != DARK || in_palace(c, s))) consider(q);
-    }
-    for (int j = 0; j < T.elephN[s]; ++j) {
-        const int q = T.elephTo[s][j];
-        if (mine(q) && role(q) == ELEPHANT && !bd[T.elephEye[s][j]] && (type_of(bd[q]) != DARK || own_half(c, s))) consider(q);
-    }
-    for (int j = 0; j < T.horseFromN[s]; ++j) {
-        const int q = T.horseFrom[s][j];
-        if (mine(q) && role(q) == HORSE && !bd[T.horseFromLeg[s][j]]) consider(q);
-    }
-    for (int j = 0; j < T.kingN[s]; ++j)
-        if (mine(T.kingTo[s][j]) && type_of(bd[T.kingTo[s][j]]) == KING) consider(T.kingTo[s][j]);
-    for (int d = 0; d < 4; ++d) {
-        const int n = T.rayLen[s][d];
-        const uint8_t* r = T.ray[s][d];
-        int i = 0;
-        while (i < n && !bd[r[i]]) ++i;
-        if (i == n) continue;
-        if (mine(r[i]) && role(r[i]) == ROOK) consider(r[i]);
-        for (++i; i < n; ++i) {
-            if (!bd[r[i]]) continue;
-            if (mine(r[i]) && role(r[i]) == CANNON) consider(r[i]);
-            break;
-        }
-    }
-    *val = bv;
-    return best;
-}
-#endif  // MASKFISH_BITBOARD
 
 struct Worker {
     Shared& G;
@@ -1867,9 +1820,7 @@ namespace search {
 
 void init() {
     init_tables();
-#ifdef MASKFISH_BITBOARD
     BB::init();
-#endif
     for (int d = 0; d < 64; ++d)
         for (int m = 0; m < 64; ++m)
             lmrTable[d][m] = d && m ? int(P_LmrBase / 100.0 + std::log(d) * std::log(m) / (P_LmrDiv / 100.0)) : 0;
@@ -1887,7 +1838,6 @@ bool see_ge(const Position& p, Move m, int threshold) {
     if (swap < 0) return false;
     swap = val(p.board[from]) - swap;
     if (swap <= 0) return true;
-#ifdef MASKFISH_BITBOARD
     // The occupancy after the capture: from empty, to occupied (from then on pieces only leave their squares).
     Bitboard occ = (p.occBB & ~sq_bb(from)) | sq_bb(to);
     Color side = p.stm;
@@ -1907,30 +1857,6 @@ bool see_ge(const Position& p, Move m, int threshold) {
         occ &= ~sq_bb(a);
     }
     return res;
-#else
-    Piece bd[NUM_SQ];
-    std::memcpy(bd, p.board, sizeof bd);
-    bd[to] = bd[from];
-    bd[from] = NO_PIECE;
-    Color side = p.stm;
-    bool res = true;
-    while (true) {
-        side = ~side;
-        int av;
-        const int a = least_attacker(bd, side, to, darkV[side], &av);
-        if (a < 0) break;
-        res = !res;
-        if (type_of(bd[a]) == KING) {  // the king may only take an undefended piece
-            int dv;
-            return least_attacker(bd, ~side, to, darkV[~side], &dv) >= 0 ? !res : res;
-        }
-        swap = av - swap;
-        if (swap < int(res)) break;
-        bd[to] = bd[a];
-        bd[a] = NO_PIECE;
-    }
-    return res;
-#endif
 }
 
 int threat_reveal(const Position& p, int s, int* loss, const int* dv) {
@@ -1942,7 +1868,6 @@ int threat_reveal(const Position& p, int s, int* loss, const int* dv) {
     // capturing pieces in order. The sequence does not depend on what the piece on s turns out to be. A king
     // captures only a piece that is then undefended, so it can only end the sequence. Pins are ignored, as in SEE.
     int taker[32], n = 0;
-#ifdef MASKFISH_BITBOARD
     Bitboard occ = p.occBB;
     for (Color side = ~us; n < 32; side = ~side) {
         int av;
@@ -1960,27 +1885,6 @@ int threat_reveal(const Position& p, int s, int* loss, const int* dv) {
         }
         taker[n++] = av;
     }
-#else
-    Piece bd[NUM_SQ];
-    std::memcpy(bd, p.board, sizeof bd);
-    for (Color side = ~us; n < 32; side = ~side) {
-        int av;
-        const int a = least_attacker(bd, side, s, darkV[side], &av);
-        if (a < 0) {
-            if (n == 0) return 0;  // nothing attacks s
-            break;
-        }
-        const bool king = type_of(bd[a]) == KING;
-        bd[s] = bd[a];
-        bd[a] = NO_PIECE;
-        if (king) {
-            int v;
-            if (least_attacker(bd, ~side, s, darkV[~side], &v) < 0) taker[n++] = av;
-            break;
-        }
-        taker[n++] = av;
-    }
-#endif
     if (n == 0) return 1;  // only the king attacks s, and s is defended
     // The exchange valued for each identity the piece may have: g[k] is what the side making capture k nets from
     // there on, and either side may stop. The opponent's gain is floored at 0: it need not capture at all.
