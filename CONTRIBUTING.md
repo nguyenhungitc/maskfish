@@ -96,8 +96,8 @@ one so that we don't duplicate work.
 1. **Tune the search parameters.** Every search parameter is a UCI spin option
    (the `params()` table of `src/search.cpp`), and many were set by hand. SPSA
    runs with `tools/spsa.py` or the local fishtest.
-2. **Validate the experimental options** (`SeeQuietOrder`, `ChanceMixSkip`,
-   `ChanceMixPvR`, `QsTTMove`, `ChanceLateDark`, `ChancePvW`, `ChanceMixRho0`, ...).
+2. **Validate the experimental options** (`SeeQuietOrder`, `QsTTMove`,
+   `ChanceLateDark`, `ChancePvW`, `ChanceMixRho0`, ...).
    Each one should be proven by an SPRT test or removed. Options that fail
    should be deleted, not kept as dead code.
 3. **Check `ChanceK`**, the scale at which chance outcomes are averaged,
@@ -209,7 +209,7 @@ other settings), and checks:
   referee's at every position of 1,000 seeded random games
   (`build/maskfish_difftest N SEED`);
 - perft 1 to 3 from the start position (44, 1,926 and 83,907);
-- the `bench` signature: 61,977 nodes with the test network of
+- the `bench` signature: 86,404 nodes with the test network of
   `tests/testnet.py` (a fixed seeded net, independent of the published one);
 - invalid input (`tests/invalid_input.py`): positions, moves and option values
   the engine must refuse, odd arguments, and seeded fuzzing; the engine must

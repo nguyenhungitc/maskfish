@@ -90,7 +90,9 @@ int P_ChancePvW = 0;          // probe mode, PV chance nodes: outcomes are searc
                               // average as values rather than as bounds (0 = parent's window)
 int P_ChanceMix = 6;          // expanded chance nodes: every outcome gets an open-window search at depth - ChanceMix,
                               // the most numerous identity a full-depth search, whose value takes the place of its
-                              // probe (ChanceMix 0 = probe mode)
+                              // probe (ChanceMix 0 = probe mode); at an open-window (PV) node the probes are searched
+                              // at depth - ChanceMixPvReduction instead
+constexpr int ChanceMixPvReduction = 3;
 int P_ChanceMixMin = 1;       // ChanceMix only at depth >= ChanceMixMin
 int P_ChanceMixRho0 = 0;      // ChanceMix with quiescence probes: weight rho (percent, see mixValue) instead of 0
 int P_ChanceFut = 1;          // ChanceMix with quiescence probes at a null-window node: 1 = fail low from static values when the
@@ -99,9 +101,7 @@ int P_ChanceFutPre = 20;      // ChanceFut is tried only when the node's static 
 int P_ChanceNW = 1;           // ChanceMix at a null-window node: 1 = full-depth identity searched with a null window at the decision threshold
 int P_ChanceMixTT = 1;        // ChanceMix probes: 1 = an exact TT entry of sufficient depth replaces the probe search
 int P_ChanceMixTop = 1;       // ChanceMix: number of identities (most numerous first) searched at full depth
-int P_ChanceMixSkip = 0;      // ChanceMix with rho 0: 1 = no probe for the full-depth identity (its probe value cancels)
 int P_ChanceMixProbe = 1;     // ChanceMix probes: 1 = searched as PV nodes, 0 = with the node's own PV flag
-int P_ChanceMixPvR = 0;       // open-window (PV) mix nodes: probes at depth - ChanceMixPvR instead (0 = ChanceMix)
 int P_ChanceXDepth = 1;      // chance nodes with depth >= ChanceXDepth are fully expanded at any layer (0 = off)
 int P_DarkLmr = 100;          // LMR of face-down moves in percent of the quiet reduction
 int P_SeeQuietOrder = 0;     // quiet / face-down moves with SEE < -SeeQuietOrder are ordered after all other quiets (0 = off)
@@ -578,7 +578,8 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
 #ifdef JQ_STATS
         const uint64_t sn0 = nodes.load(std::memory_order_relaxed);
 #endif
-        const bool skipRep = P_ChanceMixSkip && pvProbe && rhoPct == 0 && top <= 1;
+        // With rho 0 and one full-depth identity the probe of that identity cancels out of the value: not searched.
+        const bool skipRep = pvProbe && rhoPct == 0 && top <= 1;
         for (int i = 0; i < n; ++i) {
             if (skipRep && i == cvI) continue;  // e0[cvI] = 0 cancels below
             const Move pm = make_move(from, to, slot_type(slots[i]));
@@ -663,7 +664,7 @@ Value Worker::child_core(Move m, Value alpha, Value beta, int depth, int ply, bo
     if (P_ChanceMix && qply < 0 && depth >= P_ChanceMixMin && alpha < SAT && beta > -SAT) {
         STAT(chance);
         LayerGuard guard(chanceLayers);
-        const int pd = depth - (P_ChanceMixPvR && pvNode && beta - alpha > 1 ? P_ChanceMixPvR : P_ChanceMix);
+        const int pd = depth - (pvNode && beta - alpha > 1 ? ChanceMixPvReduction : P_ChanceMix);
         if (P_ChanceFut && !pvNode && beta - alpha == 1 && pd <= 0 && depth <= P_RfpDepth &&
             P_ChanceMixRho0 == 0 && P_ChanceMixTop == 1 &&
             std::abs(alpha) < VALUE_KNOWN_WIN &&
@@ -1370,10 +1371,10 @@ std::vector<Param>& params() {
         {"TmSoft", &P_TmSoft, 10, 300}, {"TmStab", &P_TmStab, 0, 300}, {"NodesTime", &P_NodesTime, 0, 100000},
         {"ChancePvW", &P_ChancePvW, 0, 30000}, {"ChanceMix", &P_ChanceMix, 0, 30},
         {"ChanceMixMin", &P_ChanceMixMin, 1, 30}, {"ChanceMixProbe", &P_ChanceMixProbe, 0, 1},
-        {"ChanceMixSkip", &P_ChanceMixSkip, 0, 1}, {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1},
+        {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1},
         {"ChanceFutPre", &P_ChanceFutPre, -1000, 300}, {"ChanceMixRho0", &P_ChanceMixRho0, 0, 100},
         {"ChanceMixTT", &P_ChanceMixTT, 0, 1}, {"ChanceMixTop", &P_ChanceMixTop, 1, 6},
-        {"ChanceMixPvR", &P_ChanceMixPvR, 0, 30}, {"ChanceLateDark", &P_ChanceLateDark, 0, 30},
+        {"ChanceLateDark", &P_ChanceLateDark, 0, 30},
         {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"NullDepthDiv", &P_NullDepthDiv, 2, 8},
         {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30}, {"SmpSkip", &P_SmpSkip, 0, 2},
         {"PruneDepth", &P_PruneDepth, 0, 12}, {"CapHist", &P_CapHist, 0, 1}, {"Improving", &P_Improving, 0, 1},

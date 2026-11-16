@@ -230,7 +230,7 @@ string bad value <value> for option <name>`.
   the start for N = 1 to 3); `perftc N` expands the chance outcomes and prints
   the leaves and the expected mass.
 * `bench [DEPTH]` (default 7) searches a fixed set of positions and prints the
-  node count, the signature of the build (61,977 with the test network, see
+  node count, the signature of the build (86,404 with the test network, see
   [Contributing](#contributing)); `nnbench` times the network's evaluate,
   update and refresh.
 * `compiler` prints the compiler and the instruction set of the build (see
@@ -343,8 +343,10 @@ up to six outcomes.
   * At an expanded chance node (`ChanceMix 6`, the default) every identity gets
     an open-window search at depth − 6 and the most numerous identity a
     full-depth search; the value is the probability-weighted average with the
-    full-depth value in place of that identity's shallow one. `ChanceMix 0`
-    searches every outcome at full depth with the parent's window instead.
+    full-depth value in place of that identity's shallow one (whose own
+    shallow search is therefore skipped). At an open-window (PV) node the
+    shallow searches go to depth − 3 instead. `ChanceMix 0` searches every
+    outcome at full depth with the parent's window instead.
   * `ChanceXDepth 1` (the default): every chance node of the main search with
     depth 1 or more is expanded this way, however many chance nodes lie above
     it on the line. Elsewhere (in quiescence, and at depth 0 once the line has
@@ -352,8 +354,7 @@ up to six outcomes.
     representative identity, the one whose value is closest to the urn's mean.
 * Options that are off by default and still being tested at a time control:
   `SeeQuietOrder` (quiet moves that lose material by SEE are ordered last),
-  `ChanceMixSkip`, `ChanceMixPvR` (shallower probes at open-window ChanceMix
-  nodes), `QsTTMove` and `ChanceLateDark` (one more expanded chance layer when
+  `QsTTMove` and `ChanceLateDark` (one more expanded chance layer when
   few face-down pieces are left). The options that failed their tests have
   been removed together with their code.
 * The rules in search are those of the referee: no legal move loses; at a
@@ -471,7 +472,7 @@ Maskfish, e.g. with the local [fishtest](fishtest/README.md) or
 command and its records.
 
 `bash tools/check_all.sh` checks a clean clone: the engine's rules against the
-referee (`maskfish_difftest`), perft, the `bench` signature (61,977 nodes with
+referee (`maskfish_difftest`), perft, the `bench` signature (86,404 nodes with
 the test network of `tests/testnet.py`), the network evaluator, pondering, the
 referee's library, the local board and the trainer. A change that is meant to
 keep the search as it is must keep the bench signature.
