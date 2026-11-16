@@ -96,8 +96,8 @@ one so that we don't duplicate work.
 1. **Tune the search parameters.** Every search parameter is a UCI spin option
    (the `params()` table of `src/search.cpp`), and many were set by hand. SPSA
    runs with `tools/spsa.py` or the local fishtest.
-2. **Validate the experimental options** (`SeeQuietOrder`, `QsTTMove`,
-   `ChanceLateDark`, `ChancePvW`, `ChanceMixRho0`, ...).
+2. **Validate the experimental options** (`SeeQuietOrder`, `ChancePvW`,
+   `ChanceMixRho0`, ...).
    Each one should be proven by an SPRT test or removed. Options that fail
    should be deleted, not kept as dead code.
 3. **Check `ChanceK`**, the scale at which chance outcomes are averaged,

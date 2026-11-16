@@ -66,7 +66,6 @@ int P_ContHist = 1;          // continuation history (1- and 2-ply) for quiet or
 int P_CapHist = 1;           // capture history for capture ordering
 int P_Improving = 1;         // "improving" adjustments to LMP / LMR / RFP
 int P_QsTT = 1;              // transposition table in quiescence
-int P_QsTTMove = 0;          // quiescence stores its best move and tries the TT move first
 int P_CheckExt = 1;          // check extension: 0 = off, 1 = while ply < 2*rootDepth+4, 2 = while ply < rootDepth
 int P_QsSee = 1;             // quiescence skips captures with SEE < -QsSeeMargin (0 = attacker-value test)
 int P_QsSeeMargin = 0;
@@ -83,8 +82,6 @@ int P_TmInc = 75;             // clock: percent of the increment in the per-move
 int P_TmSoft = 100;           // clock: start a new iteration only before TmSoft% of the optimum
 int P_TmStab = 100;           // clock: soft-limit scaling by decayed best-move instability (0 = off)
 int P_NodesTime = 0;          // testing: the clock runs on nodes, NodesTime nodes per millisecond (0 = wall clock)
-int P_ChanceLateDark = 0;     // root with at most this many face-down pieces (both sides): chance layer cap is
-int P_ChanceLateAdd = 1;      // MaxChanceLayers + ChanceLateAdd for that search (ChanceLateDark 0 = off)
 int P_ChancePvW = 0;          // probe mode, PV chance nodes: outcomes are searched with the window widened by this
                               // much on both sides, so that outcome values outside the parent's window enter the
                               // average as values rather than as bounds (0 = parent's window)
@@ -819,14 +816,11 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
     Move moves[MAX_MOVES];
     int scores[MAX_MOVES];
     const int n = inCheck ? p.gen_moves(moves) : p.gen_captures(moves);
-    const Move qsTT = P_QsTTMove && ttHit ? Move(ttd.move) : MOVE_NONE;
     for (int i = 0; i < n; ++i) {
         const int to = to_sq(moves[i]);
-        if (moves[i] == qsTT) scores[i] = 1 << 30;
-        else if (p.board[to]) scores[i] = (1 << 20) + piece_value(to) * 16 - piece_value(from_sq(moves[i])) / 16;
+        if (p.board[to]) scores[i] = (1 << 20) + piece_value(to) * 16 - piece_value(from_sq(moves[i])) / 16;
         else scores[i] = history[us][from_sq(moves[i])][to];
     }
-    Move bestMove = MOVE_NONE;
     int legalCount = 0;
     for (int i = 0; i < n; ++i) {
         int bi = i;
@@ -850,17 +844,14 @@ Value Worker::qsearch(Value alpha, Value beta, int ply, int qply) {
         if (G.stop) return VALUE_ZERO;
         if (v > bestValue) {
             bestValue = v;
-            if (v > alpha) {
-                bestMove = m;
-                if (v >= beta) break;
-                alpha = v;
-            }
+            if (v >= beta) break;
+            if (v > alpha) alpha = v;
         }
     }
     if (inCheck && legalCount == 0) return mated_in(ply);
     if (P_QsTT) {
         const Bound b = bestValue >= beta ? BOUND_LOWER : bestValue > oldAlpha ? BOUND_EXACT : BOUND_UPPER;
-        TT.store(tte, p.key, value_to_tt(bestValue, ply), b, 0, P_QsTTMove ? bestMove : MOVE_NONE, rawStand);
+        TT.store(tte, p.key, value_to_tt(bestValue, ply), b, 0, MOVE_NONE, rawStand);
     }
     return bestValue;
 }
@@ -1374,11 +1365,10 @@ std::vector<Param>& params() {
         {"ChanceNW", &P_ChanceNW, 0, 1}, {"ChanceFut", &P_ChanceFut, 0, 1},
         {"ChanceFutPre", &P_ChanceFutPre, -1000, 300}, {"ChanceMixRho0", &P_ChanceMixRho0, 0, 100},
         {"ChanceMixTT", &P_ChanceMixTT, 0, 1}, {"ChanceMixTop", &P_ChanceMixTop, 1, 6},
-        {"ChanceLateDark", &P_ChanceLateDark, 0, 30},
-        {"ChanceLateAdd", &P_ChanceLateAdd, 0, 12}, {"NullDepthDiv", &P_NullDepthDiv, 2, 8},
+        {"NullDepthDiv", &P_NullDepthDiv, 2, 8},
         {"SmpVote", &P_SmpVote, 0, 1}, {"SmpDefer", &P_SmpDefer, 0, 30}, {"SmpSkip", &P_SmpSkip, 0, 2},
         {"PruneDepth", &P_PruneDepth, 0, 12}, {"CapHist", &P_CapHist, 0, 1}, {"Improving", &P_Improving, 0, 1},
-        {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2}, {"QsTTMove", &P_QsTTMove, 0, 1},
+        {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2},
         {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500}, {"SeeOrder", &P_SeeOrder, 0, 1},
         {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500}, {"SeePruneDepth", &P_SeePruneDepth, 1, 12},
         {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000}, {"Rule40Div", &P_Rule40Div, 0, 2000},
@@ -1482,8 +1472,7 @@ SearchResult Searcher::go(const Position& root, const Limits& limits, const std:
         w->pos = root;
         w->nodes = 0;
         w->chanceLayers = 0;
-        w->maxLayers = P_MaxChanceLayers +
-                       (P_ChanceLateDark && root.darkCount[RED] + root.darkCount[BLACK] <= P_ChanceLateDark ? P_ChanceLateAdd : 0);
+        w->maxLayers = P_MaxChanceLayers;
         w->info = nullptr;
         const double k = P_ChanceK;
         w->set_eK(k);
