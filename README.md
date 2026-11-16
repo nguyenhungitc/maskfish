@@ -352,10 +352,8 @@ up to six outcomes.
     it on the line. Elsewhere (in quiescence, and at depth 0 once the line has
     used its expanded chance layers, `MaxChanceLayers`) the move plays one
     representative identity, the one whose value is closest to the urn's mean.
-* An option that is off by default and still being tested at a time
-  control: `SeeQuietOrder` (quiet moves that lose material by SEE are
-  ordered last). The options that failed their tests have been removed
-  together with their code.
+* The options that failed their tests have been removed together with
+  their code.
 * The rules in search are those of the referee: no legal move loses; at a
   repetition the side responsible for a perpetual check or, with
   `ChaseRule 1` (the default), a perpetual chase loses (a port of the

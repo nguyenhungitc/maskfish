@@ -101,7 +101,6 @@ int P_ChanceMixTop = 1;       // ChanceMix: number of identities (most numerous 
 int P_ChanceMixProbe = 1;     // ChanceMix probes: 1 = searched as PV nodes, 0 = with the node's own PV flag
 int P_ChanceXDepth = 1;      // chance nodes with depth >= ChanceXDepth are fully expanded at any layer (0 = off)
 int P_DarkLmr = 100;          // LMR of face-down moves in percent of the quiet reduction
-int P_SeeQuietOrder = 0;     // quiet / face-down moves with SEE < -SeeQuietOrder are ordered after all other quiets (0 = off)
 
 constexpr Value SAT = 10000;  // chance aggregation saturates here (mates collapse to +/-SAT)
 
@@ -142,7 +141,6 @@ int lmrTable[64][64];
 constexpr int BUSY_BITS = 16;
 std::atomic<uint64_t> g_busy[1 << BUSY_BITS];
 constexpr int DEFER_SCORE = -(1 << 30);
-enum : int8_t { SEE_NONE, SEE_TODO, SEE_PASS, SEE_FAIL };
 inline uint64_t busy_key(uint64_t key, Move m) { return (key ^ (uint64_t(m) * 0x9E3779B97F4A7C15ULL)) | 1; }
 inline std::atomic<uint64_t>& busy_slot(uint64_t bk) { return g_busy[bk >> (64 - BUSY_BITS)]; }
 
@@ -950,14 +948,12 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
 
     Move moves[MAX_MOVES];
     int scores[MAX_MOVES];
-    int8_t seeQ[MAX_MOVES];  // SeeQuietOrder test of a quiet: SEE_TODO, SEE_PASS, SEE_FAIL, or SEE_NONE (not made)
     const int n = p.gen_moves(moves);
     const Move prev = ply > 0 ? curMove[ply - 1] : MOVE_NONE;
     const Move counter = prev && prev != MOVE_NULL ? counters[p.board[to_sq(prev)]][to_sq(prev)] : MOVE_NONE;
     for (int i = 0; i < n; ++i) {
         const Move m = moves[i];
         const int to = to_sq(m);
-        seeQ[i] = SEE_NONE;
         if (m == ttMove) scores[i] = 1 << 30;
         else if (p.board[to]) {
             const int vv = piece_value(to), av = piece_value(from_sq(m));
@@ -967,10 +963,7 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
         } else if (m == killers[ply][0]) scores[i] = 1 << 27;
         else if (m == killers[ply][1]) scores[i] = (1 << 27) - 1;
         else if (m == counter) scores[i] = 1 << 26;
-        else {
-            scores[i] = quiet_stat(us, m, pidx16(p.board[from_sq(m)]), ply);
-            if (P_SeeQuietOrder) seeQ[i] = SEE_TODO;
-        }
+        else scores[i] = quiet_stat(us, m, pidx16(p.board[from_sq(m)]), ply);
     }
 
     Value bestValue = -VALUE_INFINITE;
@@ -979,36 +972,12 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
     STAT(loopNodes);
     if (ttMove != MOVE_NONE) STAT(loopTT);
     Move quiets[64], caps[32];
-    // Move-count / futility pruning of quiets (below): once it holds for one quiet that gives no check, it
-    // holds for every later one with no greater history (nq, alpha and bestValue only grow).
-    const bool quietPrune = !root && !inCheck && depth <= P_PruneDepth;
-    const int lmpCount = P_LmpBase + depth * depth;
-    const int lmpLimit = P_Improving && !improving ? lmpCount / 2 + 1 : lmpCount;
-    auto quiet_pruned = [&](Move m, int hist) {
-        return quietPrune && bestValue > VALUE_MATED_IN_MAX_PLY &&
-               (nq >= lmpLimit || (eval + P_FutBase + P_FutMul * depth <= alpha && hist < 4000)) &&
-               (p.is_dark_move(m) || !p.gives_check(m));
-    };
     for (int i = 0; i < n; ++i) {
-        // SeeQuietOrder orders a quiet that loses more than SeeQuietOrder by SEE after the other quiets (its
-        // score drops by 2^18). The test is made only when the quiet is about to be picked: if it fails, the
-        // score drops and the pick is made again (a score not yet tested is never below the tested one, so the
-        // order stays that of testing every quiet up front), and it is not made for a quiet that the pruning
-        // below skips anyway. A node that cuts off before its quiets tests none of them.
-        int bi;
-        while (true) {
-            bi = i;
-            for (int j = i + 1; j < n; ++j)
-                if (scores[j] > scores[bi]) bi = j;
-            if (seeQ[bi] != SEE_TODO) break;
-            if (quiet_pruned(moves[bi], scores[bi])) { seeQ[bi] = SEE_NONE; break; }
-            if (see_ge(moves[bi], -P_SeeQuietOrder)) { seeQ[bi] = SEE_PASS; break; }
-            seeQ[bi] = SEE_FAIL;
-            scores[bi] -= 1 << 18;
-        }
+        int bi = i;
+        for (int j = i + 1; j < n; ++j)
+            if (scores[j] > scores[bi]) bi = j;
         std::swap(moves[i], moves[bi]);
         std::swap(scores[i], scores[bi]);
-        std::swap(seeQ[i], seeQ[bi]);
         const Move m = moves[i];
         if (!p.legal(m)) continue;
         if (root && !G.rootMoves.empty() && std::find(G.rootMoves.begin(), G.rootMoves.end(), m) == G.rootMoves.end())
@@ -1031,23 +1000,14 @@ Value Worker::search(Value alpha, Value beta, int depth, int ply, bool pvNode, b
         const bool quiet = !capture;
         const int hist = quiet ? quiet_stat(us, m, pidx16(p.board[from_sq(m)]), ply) : 0;
 
-        if (quietPrune && bestValue > VALUE_MATED_IN_MAX_PLY && quiet && !givesCheck) {
-            if (nq >= lmpLimit) { STAT(lmp); continue; }
+        if (!root && bestValue > VALUE_MATED_IN_MAX_PLY && !inCheck && quiet && !givesCheck && depth <= P_PruneDepth) {
+            const int lmp = P_LmpBase + depth * depth;
+            if (nq >= (P_Improving && !improving ? lmp / 2 + 1 : lmp)) { STAT(lmp); continue; }
             if (eval + P_FutBase + P_FutMul * depth <= alpha && hist < 4000) { STAT(fut); continue; }
         }
-        if (!root && bestValue > VALUE_MATED_IN_MAX_PLY && !inCheck && !givesCheck && depth <= P_SeePruneDepth) {
-            bool prune;
-            if (capture) prune = P_SeeCap && !see_ge(m, -P_SeeCap * depth);
-            else if (!P_SeeQuiet) prune = false;
-            else {
-                // SEE >= t holds for every t below one where it holds: the SeeQuietOrder test may decide this one.
-                const int t = -P_SeeQuiet * depth * depth;
-                prune = seeQ[i] == SEE_PASS && t <= -P_SeeQuietOrder   ? false
-                        : seeQ[i] == SEE_FAIL && t >= -P_SeeQuietOrder ? true
-                                                                       : !see_ge(m, t);
-            }
-            if (prune) continue;
-        }
+        if (!root && bestValue > VALUE_MATED_IN_MAX_PLY && !inCheck && !givesCheck && depth <= P_SeePruneDepth &&
+            (capture ? P_SeeCap && !see_ge(m, -P_SeeCap * depth) : P_SeeQuiet && !see_ge(m, -P_SeeQuiet * depth * depth)))
+            continue;
         const int newDepth = depth - 1;
         Value v;
         if (legalCount == 1) {
@@ -1407,7 +1367,7 @@ std::vector<Param>& params() {
         {"QsTT", &P_QsTT, 0, 1}, {"CheckExt", &P_CheckExt, 0, 2},
         {"QsSee", &P_QsSee, 0, 1}, {"QsSeeMargin", &P_QsSeeMargin, -500, 500}, {"SeeOrder", &P_SeeOrder, 0, 1},
         {"SeeCap", &P_SeeCap, 0, 1000}, {"SeeQuiet", &P_SeeQuiet, 0, 500}, {"SeePruneDepth", &P_SeePruneDepth, 1, 12},
-        {"SeeQuietOrder", &P_SeeQuietOrder, 0, 1000}, {"Rule40Div", &P_Rule40Div, 0, 2000},
+        {"Rule40Div", &P_Rule40Div, 0, 2000},
         {"Rule40TTCut", &P_Rule40TTCut, 0, 80}, {"Rule40Mate", &P_Rule40Mate, 0, 1},
         {"ChanceMate", &P_ChanceMate, 0, 1}, {"ChaseRule", &g_chaseRule, 0, 1}, {"TTWays", &g_ttWays, 1, 4},
     };
