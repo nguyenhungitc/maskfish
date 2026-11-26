@@ -38,18 +38,18 @@ namespace {
 
 // ---- tunables ----------------------------------------------------------------------------
 int P_ChanceK = 430;     // logistic scale used to average chance outcomes in expected-score space
-int P_RfpMargin = 90;
-int P_RfpDepth = 7;
+int P_RfpMargin = 94;
+int P_RfpDepth = 5;
 int P_NullBase = 3;
-int P_NullDiv = 200;
-int P_FutBase = 100;
-int P_FutMul = 120;
-int P_LmpBase = 3;
+int P_NullDiv = 179;
+int P_FutBase = 99;
+int P_FutMul = 116;
+int P_LmpBase = 2;
 int P_LmrBase = 50;      // /100
-int P_LmrDiv = 220;      // /100
-int P_AspDelta = 30;
+int P_LmrDiv = 241;      // /100
+int P_AspDelta = 31;
 int P_QsDarkPly = 4;     // deepest quiescence ply at which face-down movers may capture
-int P_HistDiv = 8192;
+int P_HistDiv = 7292;
 int P_DeltaMargin = 200;
 int P_BadCapMargin = 50;
 int P_ChanceMode = 1;        // 0 = exact Star1 windows, 1 = parent-window probes averaged
@@ -57,7 +57,7 @@ int P_MaxChanceLayers = 1;   // full chance expansions allowed along one line (t
 int P_ChanceTail = 1;         // beyond the cap: 0 = cap layer resolved by qsearch (lines end),
                              // 1 = representative reveal at full depth from the cap layer on,
                              // 2 = cap layer expanded at half depth, then representative at full depth
-int P_NullDepthDiv = 4;       // null-move reduction grows by depth / NullDepthDiv
+int P_NullDepthDiv = 3;       // null-move reduction grows by depth / NullDepthDiv
 int P_PruneDepth = 6;         // move-count / futility pruning of quiets up to this depth
 int P_SmpSkip = 1;            // helper depth skipping: 0 = none, 1 = skip (d + id) % 3 == 0, 2 = skip blocks by thread
 int P_SmpDefer = 0;           // ABDADA-style deferral of moves other threads are searching, at depth >= SmpDefer (0 = off)

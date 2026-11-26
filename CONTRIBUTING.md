@@ -208,7 +208,7 @@ other settings), and checks:
   referee's at every position of 1,000 seeded random games
   (`build/maskfish_difftest N SEED`);
 - perft 1 to 3 from the start position (44, 1,926 and 83,907);
-- the `bench` signature: 86,404 nodes with the test network of
+- the `bench` signature: 89,504 nodes with the test network of
   `tests/testnet.py` (a fixed seeded net, independent of the published one);
 - invalid input (`tests/invalid_input.py`): positions, moves and option values
   the engine must refuse, odd arguments, and seeded fuzzing; the engine must
