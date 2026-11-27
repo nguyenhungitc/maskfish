@@ -26,14 +26,18 @@
 
 namespace jq::nnue {
 
+// A failed load leaves no net loaded, whatever the failure: the net loaded before is dropped too, so that the
+// evaluation is the one the caller reports (load_net in uci.cpp: the embedded net, else the hand-written one).
 bool load(const std::string& path, std::string* error) {
     if (FILE* f = std::fopen(path.c_str(), "rb")) std::fclose(f);
     else {
         if (error) *error = "cannot open the file";
+        hnn::unload();
         return false;
     }
     if (!hnn::is_hnn_file(path)) {
         if (error) *error = "not a network this engine reads (JQHNNUE1, JQHNNL01 or JQHNNZ01)";
+        hnn::unload();
         return false;
     }
     if (hnn::load(path, error)) return true;
