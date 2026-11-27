@@ -42,13 +42,19 @@
 #
 #  Every generation is two calls of scripts/pipeline.sh (--gen-only, then
 #  --train-only). Every step is saved in autotune/state.sh: running the same
-#  command again resumes where it stopped. Telegram reports after every step
-#  (TG_BOT_TOKEN / TG_CHAT_ID in pipeline.env).
+#  command again resumes where it stopped (self-play data at its last chunk of
+#  GEN_CHUNK games). Telegram reports after every step (TG_BOT_TOKEN /
+#  TG_CHAT_ID in pipeline.env); after every SPRT the
+#  result of the generation (data, SPRT of every candidate against the current
+#  net) is sent with the new net file (TG_SEND_NET).
 #
 #  Usage (any directory):
 #     scripts/autotune.sh --reset         # archive ALL old results (autotune, nets, data,
 #                                         # runs, logs) to archive-DATE/, start from zero
 #     scripts/autotune.sh                 # run / resume
+#     scripts/autotune.sh --self --games 30000 --depth 8
+#                                         # only self-play data → train → SPRT against the current
+#                                         # net → Telegram report with the net, generation after generation
 #     nohup scripts/autotune.sh --supervise >> autotune/supervise.log 2>&1 &
 #     scripts/autotune.sh --status        # stage, nets, Elo, option decisions
 #     scripts/autotune.sh --stop          # stop safely (resume later)
@@ -58,6 +64,18 @@
 #     scripts/autotune.sh --install-cron  # restart after a reboot
 #     scripts/autotune.sh --init-config   # write scripts/pipeline.env, autotune.env, option-plan.env from the examples
 #     scripts/autotune.sh --dry-run       # print what the next round would run
+#
+#  Settings of a run (kept in autotune/state.sh: they hold for every later
+#  generation and after a restart until given again; 0 = back to automatic):
+#     --games N        games of every data generation (the level no longer scales it)
+#     --depth D        search depth per move of the data generation, instead of nodes
+#     --nodes N        nodes per move of the data generation (with --depth: a node limit as well)
+#     --sprt-depth D   depth per move of the SPRT against the current net …
+#     --sprt-nodes N   … or nodes per move
+#     --sprt-pairs N   most game pairs of that SPRT
+#     --self           no reference engine (REF_MODE=off) and no option cycles; --full undoes it
+#  A changed setting applies from the next data generation (or SPRT) on; data
+#  being made when it changes is made again with it.
 #
 #  Configuration: scripts/pipeline.env (Telegram, hardware, data, training, the
 #  reference engine), scripts/autotune.env (stages, measuring, option tests; see
@@ -77,8 +95,21 @@ PIPELINE="$SCRIPT_DIR/pipeline.sh"
 
 # ----------------------------------------------------------------------------- CLI
 ACTION="run"; DRY_RUN=0; CONFIG_AT=""; RESET_YES=0
+SET=(); FWD=()   # the settings given (name=value), and their arguments (passed on by --supervise)
+set_arg() {      # set_arg NAME VALUE FLAG
+  [[ "$2" =~ ^[0-9]+$ ]] || { echo "$3 needs a whole number ≥ 0 (0 = automatic), not '$2'" >&2; exit 2; }
+  SET+=("$1=$(( 10#$2 ))"); FWD+=("$3" "$2")
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --games)         set_arg games "${2:-}" "$1"; shift 2 ;;
+    --depth)         set_arg depth "${2:-}" "$1"; shift 2 ;;
+    --nodes)         set_arg nodes "${2:-}" "$1"; shift 2 ;;
+    --sprt-depth)    set_arg sprt_depth "${2:-}" "$1"; shift 2 ;;
+    --sprt-nodes)    set_arg sprt_nodes "${2:-}" "$1"; shift 2 ;;
+    --sprt-pairs)    set_arg sprt_pairs "${2:-}" "$1"; shift 2 ;;
+    --self)          SET+=("self=1"); FWD+=("$1"); shift ;;
+    --full)          SET+=("self=0"); FWD+=("$1"); shift ;;
     --supervise)     ACTION="supervise"; shift ;;
     --status)        ACTION="status"; shift ;;
     --stop)          ACTION="stop"; shift ;;
@@ -91,7 +122,7 @@ while [[ $# -gt 0 ]]; do
     --init-config)   ACTION="initcfg"; shift ;;
     --config)        CONFIG_AT="${2:-}"; shift 2 ;;
     --dry-run)       DRY_RUN=1; shift ;;
-    -h|--help)       sed -n '2,66p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,/^# ====/p' "$SELF" | sed '$d;s/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (--help)" >&2; exit 2 ;;
   esac
 done
@@ -105,6 +136,7 @@ if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "$ROOT/.venv/bin/python" ]]; then PYTHON="$ROOT/.venv/bin/python"; else PYTHON=python3; fi
 fi
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
+: "${TG_SEND_NET:=win}"           # net sent with a generation's result: win (the promoted one) | all (a losing candidate too) | off
 # reference engine (same defaults as pipeline.sh)
 : "${JIEQI_DIR:=$ROOT/jieqi}"
 : "${REF_ENGINE:=$JIEQI_DIR/ref-engine}"
@@ -136,6 +168,7 @@ export JIEQI_NATIVE_LIBRARY="$ROOT/build/pipeline/lib/libjieqi_rules.so"
 NCPU=$(nproc 2>/dev/null || echo 2)
 : "${MATCH_WORKERS:=$(( NCPU > 1 ? NCPU - 1 : 1 ))}"
 
+NO_OPTS=0   # --self: no option cycles
 OPT_TESTS=(); OPT_TC_TESTS=(); OPT_PLAN_OK=0
 if [[ -f "$OPT_PLAN" ]]; then source "$OPT_PLAN"; (( ${#OPT_TESTS[@]} + ${#OPT_TC_TESTS[@]} )) && OPT_PLAN_OK=1; fi
 
@@ -148,10 +181,15 @@ tg_send() {
   curl -fsS -m 30 -o /dev/null "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
     --data-urlencode "chat_id=$TG_CHAT_ID" --data-urlencode "text=[$TG_NAME] ${1:0:4000}" || log "(Telegram failed)"
 }
-tg_doc() {   # tg_doc FILE CAPTION
-  (( DRY_RUN )) || [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]] && return 0
-  curl -fsS -m 60 -o /dev/null "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
-    -F "chat_id=$TG_CHAT_ID" -F "caption=[$TG_NAME] $2" -F "document=@$1" || log "(Telegram failed)"
+tg_doc() {   # tg_doc FILE CAPTION [NAME]: the file as a document (NAME: its file name there)
+  (( DRY_RUN )) && { echo "TG file: $1 (${3:-$(basename "$1")}): $2"; return 0; }
+  [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]] && return 0
+  [[ -s "$1" ]] || { log "(Telegram: no file $1)"; return 0; }
+  if (( $(stat -c %s "$1") > 50 * 1024 * 1024 )); then tg_send "$2 — $1 is over 50 MB, too large to send"; return 0; fi
+  local name="${3:-$(basename "$1")}"
+  curl -fsS -m 600 -o /dev/null "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
+    --form-string "chat_id=$TG_CHAT_ID" --form-string "caption=[$TG_NAME] ${2:0:1000}" \
+    -F "document=@$1;filename=${name//[\";]/_}" || log "(Telegram failed: $1)"
 }
 say() { log "$*"; tg_send "$*"; }
 kill_children() { local p; for p in $(pgrep -P $$ 2>/dev/null); do pkill -TERM -P "$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; done; }
@@ -170,6 +208,23 @@ state_save() {
 }
 st() { printf '%s' "${ST[$1]:-${2:-}}"; }
 st_set() { ST[$1]="$2"; state_save; }
+apply_settings() {   # the settings of the command line into the state (0: back to automatic), then in effect
+  local kv k v changed=""
+  for kv in "${SET[@]}"; do
+    k=${kv%%=*}; v=${kv#*=}
+    if [[ "$v" == 0 ]]; then [[ -n "$(st "set_$k")" ]] && { unset "ST[set_$k]"; changed+=" $k=auto"; }
+    elif [[ "$(st "set_$k")" != "$v" ]]; then ST[set_$k]=$v; changed+=" $k=$v"; fi
+  done
+  [[ -n "$changed" ]] && { state_save; log "settings changed:$changed"; }
+  if [[ "$(st set_self)" == 1 ]]; then REF_MODE=off; NO_OPTS=1; fi
+  return 0
+}
+settings_text() {   # the settings in use, for the messages
+  local t="" k
+  for k in games depth nodes sprt_depth sprt_nodes sprt_pairs; do [[ -n "$(st "set_$k")" ]] && t+=" ${k/_/-} $(st "set_$k"),"; done
+  [[ "$(st set_self)" == 1 ]] && t+=" self (no reference engine, no option cycles),"
+  t=${t%,}; printf '%s' "${t:- automatic}"
+}
 decision() {   # cycle gen option tested result elo action
   [[ -f "$DEC_FILE" ]] || printf 'time\tcycle\tgen\toption\ttested\tresult\telo\taction\n' > "$DEC_FILE"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$@" >> "$DEC_FILE"
@@ -277,6 +332,11 @@ write_run_env() {   # write_run_env SOURCE → autotune/run.env for this call, o
     3) lr=$(awk -v l="$lr" 'BEGIN{printf "%g", l/2}')           # lower LR, more weight on the game results
        lambda=$(awk -v l="$lambda" 'BEGIN{printf "%g", (l > 0.6 ? 0.6 : l)}') ;;
   esac
+  [[ -n "$(st set_games)" ]] && games=$(st set_games)
+  [[ -n "$(st set_nodes)" ]] && nodes=$(st set_nodes)
+  local depth=${DEPTH:-0} depth_nodes=${DEPTH_NODES:-0}
+  if [[ -n "$(st set_depth)" ]]; then depth=$(st set_depth); depth_nodes=$(st set_nodes 0); fi
+  local play="$nodes nodes"; (( depth > 0 )) && play="depth $depth$( (( depth_nodes > 0 )) && echo " (at most $depth_nodes nodes)")"
   local from=0
   (( TRAIN_WINDOW > 0 && g - TRAIN_WINDOW + 1 > 0 )) && from=$(( g - TRAIN_WINDOW + 1 ))
   (( from < TRAIN_MIN_GEN && TRAIN_MIN_GEN <= g )) && from=$TRAIN_MIN_GEN
@@ -286,14 +346,24 @@ write_run_env() {   # write_run_env SOURCE → autotune/run.env for this call, o
     [[ -f "$AT_ENV" ]] && echo "source $(printf '%q' "$AT_ENV")"   # its pipeline.sh values (SPRT, MATCH_NODES, ...) too
     printf 'GAMES=%q\nNODES=%q\nEPOCHS=%q\nLR=%q\nLAMBDA=%q\nINIT_FROM_CURRENT=%q\nTRAIN_FROM=%q\nTRAIN_WINDOW=0\n' \
       "$games" "$nodes" "$epochs" "$lr" "$lambda" "$init" "$from"
+    [[ -n "$(st set_depth)" ]] && printf 'DEPTH=%q\nDEPTH_NODES=%q\n' "$depth" "$depth_nodes"
+    if [[ -n "$(st set_sprt_depth)" ]]; then printf 'MATCH_DEPTH=%q\nMATCH_TC=\nMATCH_MOVETIME=0\n' "$(st set_sprt_depth)"
+    elif [[ -n "$(st set_sprt_nodes)" ]]; then printf 'MATCH_NODES=%q\nMATCH_DEPTH=0\nMATCH_TC=\nMATCH_MOVETIME=0\n' "$(st set_sprt_nodes)"; fi
+    [[ -n "$(st set_sprt_pairs)" ]] && printf 'MATCH_MAX_PAIRS=%q\n' "$(st set_sprt_pairs)"
     printf 'GEN_OPTS=%q\nMATCH_OPTS=%q\nMATCH_EPOCHS=%q\nAUTO_PROMOTE=1\nSOURCE=%q\n' \
       "$(commas "$(opts_merge "$(echo "${USER_GEN_OPTS//,/ }")" "$(best_opts)")")" "$(commas "$(match_opts)")" "$epochs_try" "$source"
     local v; for v in REF_ENGINE REF_NET REF_OPTS REF_NAME REF_HASH; do printf '%s=%q\n' "$v" "${!v}"; done
   } > "$f"
   RUN_INFO="$games games, $(case $source in
       ref) echo "the reference engine plays and scores";;
-      distill) echo "Maskfish plays $nodes nodes, the reference engine scores";;
-      self) echo "Maskfish plays and scores, $nodes nodes";; esac) · train $epochs epochs on gen$from..$g, lr $lr, λ $lambda, $( ((init)) && echo 'from the current net' || echo 'from scratch')"
+      distill) echo "Maskfish plays $play, the reference engine scores";;
+      self) echo "Maskfish plays and scores, $play";; esac) · train $epochs epochs on gen$from..$g, lr $lr, λ $lambda, $( ((init)) && echo 'from the current net' || echo 'from scratch')"
+  SPRT_INFO=$(  # the SPRT pipeline.sh runs with these values
+    # shellcheck disable=SC1090
+    source "$f" > /dev/null 2>&1
+    if [[ -n "${MATCH_TC:-}" ]]; then lim="tc $MATCH_TC"; elif (( ${MATCH_MOVETIME:-0} > 0 )); then lim="movetime $MATCH_MOVETIME ms"
+    elif (( ${MATCH_DEPTH:-0} > 0 )); then lim="depth $MATCH_DEPTH"; else lim="${MATCH_NODES:-20000} nodes"; fi
+    echo "$lim, SPRT [${SPRT-0 5}] ${SPRT_MODEL:-logistic}, at most ${MATCH_MAX_PAIRS:-4000} pairs")
 }
 
 pipeline() {   # pipeline ARGS... → 0 done / promoted, 3 not promoted (retries on errors)
@@ -310,6 +380,49 @@ pipeline() {   # pipeline ARGS... → 0 done / promoted, 3 not promoted (retries
     log "pipeline.sh exit $rc → retrying in $(( 60 * try ))s ($try/$RETRY_MAX)"
     sleep $(( 60 * try ))
   done
+}
+
+# ----------------------------------------------------------------------------- result of a generation
+# ST[rep_todo]="G ATT" is set before the training of genG's attempt ATT: its result (promoted or not, the data,
+# every candidate's SPRT against genG) goes to Telegram with the net once the SPRT is over, after a restart too.
+sprt_lines() {   # sprt_lines NEXT: one line per candidate (runs/sprt-genNEXT-*)
+  "$PYTHON" - runs/sprt-gen"$1"-*/summary.json <<'EOF'
+import json, os, sys
+for f in sys.argv[1:]:
+    if not os.path.isfile(f):
+        continue
+    d = json.load(open(f))
+    p = d["pent"]
+    name = os.path.basename(os.path.dirname(f)).split("-", 2)[-1]
+    res = (d.get("sprt") or {}).get("result") or "no SPRT"
+    print(f"• {name}: {res} · Elo {p['elo']:+.1f} [{p['elo_lo']:+.1f}, {p['elo_hi']:+.1f}] · "
+          f"{p['pairs']} pairs, W {d['w']} D {d['d']} L {d['l']}")
+EOF
+}
+gen_report() {
+  local todo; todo=$(st rep_todo)
+  [[ -n "$todo" ]] || return 0
+  local g=${todo%% *} att=${todo#* }; local next=$(( g + 1 )) sfx=""; (( att > 1 )) && sfx="_a$att"
+  local data="data/gen$g$sfx.bin" stats="" lines net="" name="" head caption
+  [[ -f "$data" ]] && stats=$("$PYTHON" scripts/datatool.py stats "$data" 2> /dev/null | tail -n 1)
+  lines=$(sprt_lines "$next" 2> /dev/null)
+  if [[ -f "$(net_of "$next")" ]]; then
+    head="🏆 gen$next PROMOTED: it beat gen$g"; net=$(net_of "$next"); name="gen$next.nnue"
+    caption="gen$next (promoted; SPRT against gen$g: $(st rep_sprt '?'))"
+  else
+    head="❎ gen$next not promoted: no candidate beat gen$g"
+    if [[ "$TG_SEND_NET" == all && -f "runs/gen$next/best.hnn" ]]; then
+      net="runs/gen$next/best.hnn"; name="gen$next-candidate-a$att.nnue"; caption="gen$next candidate of attempt $att (not promoted)"
+    fi
+  fi
+  local msg="$head (stage $(st stage), attempt $att)
+Run: $(st rep_info '?')
+Data $data: ${stats:-?}
+SPRT against gen$g ($(st rep_sprt '?')):
+${lines:-(no SPRT result)}"
+  log "$msg"; tg_send "$msg"
+  [[ -n "$net" && "$TG_SEND_NET" != off ]] && tg_doc "$net" "$caption" "$name"
+  unset "ST[rep_todo]" "ST[rep_info]" "ST[rep_sprt]"; state_save
 }
 
 # ----------------------------------------------------------------------------- engine options (stage 4)
@@ -396,7 +509,7 @@ option_cycle() {
   say "🔬 Option cycle $cyc done ($( [[ "$(st "opt_gain_c$cyc")" == 1 ]] && echo 'with gains' || echo 'no gain')). Options in use: $(best_opts)"
 }
 option_cycle_due() {
-  (( OPT_PLAN_OK )) || return 1
+  (( OPT_PLAN_OK && ! NO_OPTS )) || return 1
   [[ "$(st opt_running)" == 1 ]] && return 0
   local g; g=$(cur_gen); (( g >= 1 && g >= OPT_START_GEN )) || return 1
   local strong=0
@@ -409,6 +522,11 @@ option_cycle_due() {
 }
 
 # ----------------------------------------------------------------------------- one round
+pending_report() {   # a result not sent yet: its generation was promoted just before a stop
+  local todo; todo=$(st rep_todo)
+  [[ -n "$todo" ]] && (( ${todo%% *} + 1 == $(cur_gen) )) && gen_report
+  return 0
+}
 round() {
   local g; g=$(cur_gen); (( g < 0 )) && g=0
   local stage; stage=$(st stage ref)
@@ -441,14 +559,14 @@ round() {
     local d; for d in runs/sprt-gen$next-*; do [[ -d "$d" ]] && mv "$d" "$arch/$(basename "$d")"; done
     log "previous training run archived: $arch"
   fi
-  st_set "train_dir_owner_g$g" "$att"
-  say "▶ gen$g · attempt $att: train → verify → SPRT against gen$g"
+  ST[train_dir_owner_g$g]=$att; ST[rep_todo]="$g $att"; ST[rep_info]=$RUN_INFO; ST[rep_sprt]=$SPRT_INFO; state_save
+  say "▶ gen$g · attempt $att: train → verify → SPRT against gen$g ($SPRT_INFO)"
   local rc; pipeline -g "$g" --source "$stage" --train-only; rc=$?
   (( rc == 0 || rc == 3 )) || return 1
   (( DRY_RUN )) && return 0
+  gen_report
   if [[ -f "$(net_of "$next")" ]]; then
     ST[promos]=$(( $(st promos 0) + 1 )); state_save
-    say "🏆 gen$next won against gen$g (stage $stage)"
     evaluate_net "$next" || return 1
     if check_new_net "$next" "$stage" && [[ "$(st stage)" == distill && -n "$(st "ext_g$next")" ]] && ge "$(st "ext_g$next")" "$NEAR_REF_ELO"; then
       ST[stage]=self; ST[level]=0; state_save
@@ -504,7 +622,7 @@ check_new_net() {   # check_new_net GEN STAGE
 
 check_stop() {   # 0 if finished
   if [[ "$(st stage)" == self ]] && (( $(st level 0) >= LEVEL_CAP && $(st fails 0) >= PATIENCE )); then
-    if (( OPT_PLAN_OK )) && [[ "$(st opt_last_gen)" != "$(cur_gen)" || "$(st opt_running)" == 1 ]]; then
+    if (( OPT_PLAN_OK && ! NO_OPTS )) && [[ "$(st opt_last_gen)" != "$(cur_gen)" || "$(st opt_running)" == 1 ]]; then
       say "⛰ Level $LEVEL_CAP and $PATIENCE failures in a row → one more option cycle before stopping"
       option_cycle || { say "❌ Option cycle failed — see $LOGF"; exit 1; }
       if [[ "$(st "opt_gain_c$(st opt_cycles)")" == 1 ]]; then st_set fails 0; return 1; fi
@@ -605,9 +723,10 @@ esac
 mkdir -p "$AT_DIR" "$RES_DIR" "$AT_DIR/logs" nets data runs
 case "$ACTION" in
   status)
-    state_load
+    state_load; SET=(); apply_settings   # (the settings kept: they change only with a run)
     echo "REF_MODE: $REF_MODE · stage: $(st stage ref) · level $(st level 0)/$LEVEL_CAP · failures in a row: $(st fails 0) · new nets: $(st promos 0)"
     echo "Current net: gen$(cur_gen) · vs the reference engine: $(st "ext_g$(cur_gen)" '?') Elo · best: gen$(st best_ext_gen '?') ($(st best_ext '?'))"
+    echo "Settings:$(settings_text)"
     echo "Option cycles: $(st opt_cycles 0)$( [[ "$(st opt_running)" == 1 ]] && echo ' (one running)') · options in use: $(best_opts)"
     if (( OPT_PLAN_OK )); then echo "Option plan: $OPT_PLAN (${#OPT_TESTS[@]} tests, ${#OPT_TC_TESTS[@]} on the clock)"
     else echo "Option plan: none ($OPT_PLAN): no option cycle"; fi
@@ -630,7 +749,7 @@ case "$ACTION" in
     rm -f "$AT_DIR/.stop"
     n=0
     while :; do
-      "$SELF" ${CONFIG_AT:+--config "$CONFIG_AT"}; rc=$?
+      "$SELF" ${CONFIG_AT:+--config "$CONFIG_AT"} "${FWD[@]}"; rc=$?
       [[ -f "$AT_DIR/.stop" ]] && { echo "stopped on request"; exit 0; }
       case $rc in 0|3|4|5) exit $rc ;; esac
       n=$(( n + 1 )); d=$(( n < 6 ? 60 * n : 600 ))
@@ -657,6 +776,7 @@ if [[ "$ACTION" == options ]]; then   # only one option cycle with the current n
   rep=$(write_report); tg_doc "$rep" "Option report"
   exit 0
 fi
+apply_settings
 [[ "$REF_MODE" == off ]] || ref_switch
 [[ "$(st finished)" == 1 ]] && { echo "Already finished (remove ST[finished] from $STATE_FILE to continue)."; write_report; exit 0; }
 [[ -n "$(st start_ts)" ]] || st_set start_ts "$(date +%s)"
@@ -684,10 +804,12 @@ case "$REF_MODE" in
   measure) PLAN="self-play from the start (the reference engine only measures every new net) → engine options from gen$OPT_START_GEN" ;;
   off)     PLAN="self-play only, no reference engine → engine options from gen$OPT_START_GEN" ;;
 esac
-say "🚀 Started$RESUMED (REF_MODE=$REF_MODE): stage $(st stage), current net $( (( $(cur_gen) >= 0 )) && echo "gen$(cur_gen)" || echo none). Plan: $PLAN → loop until no gain at level $LEVEL_CAP."
-(( OPT_PLAN_OK )) || say "⚠ No option plan ($OPT_PLAN): no option cycle will run (see scripts/option-plan.env.example)"
+(( NO_OPTS )) && PLAN="self-play data → train → SPRT against the current net → Telegram report with the net, generation after generation (no option cycles)"
+say "🚀 Started$RESUMED (REF_MODE=$REF_MODE): stage $(st stage), current net $( (( $(cur_gen) >= 0 )) && echo "gen$(cur_gen)" || echo none). Settings:$(settings_text). Plan: $PLAN → loop until no gain at level $LEVEL_CAP."
+(( OPT_PLAN_OK || NO_OPTS )) || say "⚠ No option plan ($OPT_PLAN): no option cycle will run (see scripts/option-plan.env.example)"
 
 while :; do
+  pending_report
   check_stop && exit 0
   round || { say "❌ Loop failed — see $LOGF. Run again (or --supervise) to resume."; exit 1; }
   (( DRY_RUN )) && { echo "(dry-run: stopping after 1 round)"; exit 0; }

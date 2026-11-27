@@ -25,7 +25,9 @@
 #
 #  Sends a Telegram ✅ after every step; on error sends ❌ at once with the tail
 #  of the log, then stops. Every step that is done is not done again when the
-#  script is run again with the same -g (the files of the step are its record).
+#  script is run again with the same -g (the files of the step are its record);
+#  a data file appears only once it is complete, and self-play data is made in
+#  chunks of GEN_CHUNK games, so a stopped generation resumes at its last chunk.
 #
 #  Generation numbering:
 #     -g N : nets/genN.nnue is the CURRENT net
@@ -128,7 +130,10 @@ fi
 : "${MASKFISH_K:=}"               # Maskfish's score → win probability scale; empty: fitted once (data/maskfish.scale)
 : "${SOURCE:=}"
 # data generation
-: "${GAMES:=20000}"; : "${VAL_GAMES:=500}"; : "${NODES:=5000}"; : "${DEPTH:=0}"
+: "${GAMES:=20000}"; : "${VAL_GAMES:=500}"; : "${NODES:=5000}"
+: "${DEPTH:=0}"                   # >0: a depth per move instead of NODES …
+: "${DEPTH_NODES:=0}"             # … and with it, >0: a node limit as well
+: "${GEN_CHUNK:=2000}"            # self-play games per chunk (a stopped run resumes at its last chunk); 0 = one piece
 : "${RANDOM_PLIES:=8}"            # random opening plies of every game (0..N)
 : "${GEN_HASH:=16}"
 : "${GEN_OPTS:=}"                 # UCI options of the generating engine, as Name=Value,Name=Value
@@ -147,7 +152,7 @@ fi
 : "${TRAIN_ARGS:=}"               # more trainer options, e.g. "--qat-from 0.5" (a new net from scratch: "--width 512")
 : "${TRAINER:=}"                  # another trainer script (same options as the default one)
 # SPRT
-: "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_TC:=}"
+: "${MATCH_NODES:=20000}"; : "${MATCH_MOVETIME:=0}"; : "${MATCH_TC:=}"; : "${MATCH_DEPTH:=0}"
 : "${MATCH_WORKERS:=}"            # empty = auto: cores - 1, limited by RAM
 : "${MATCH_HASH:=16}"
 : "${SPRT=0 5}"                   # empty = no SPRT: MATCH_MAX_PAIRS pairs, promoted if Elo - 95% error > 0
@@ -283,12 +288,42 @@ ref_scale() {  # ref_scale FILE...: K of the reference engine (fitted on these f
   if [[ ! -s "$f" ]]; then "$PYTHON" scripts/datatool.py fit-k "$@" > "$f" || { rm -f "$f"; return 1; }; fi
   cat "$f"
 }
-selfplay() {  # selfplay OUT GAMES SEED
-  local limit="nodes $NODES"; (( DEPTH > 0 )) && limit="depth $DEPTH"
-  { uci_opts "$GEN_OPTS"
-    echo "selfplay evalfile $ROOT/$CUR games $2 $limit threads $GEN_THREADS random $RANDOM_PLIES hash $GEN_HASH seed $3 out $1"
-    echo quit; } | run "$ENGINE"
-  [[ $DRY_RUN == 1 || -s "$1" ]] || return 1
+gen_limit() { if (( DEPTH > 0 )); then echo "depth $DEPTH nodes $DEPTH_NODES"; else echo "nodes $NODES"; fi; }   # nodes 0: none
+selfplay() {  # selfplay OUT GAMES SEED: OUT appears only when complete, made in chunks of GEN_CHUNK games
+  local out=$1 n=$2 seed=$3 limit; limit=$(gen_limit)
+  local chunk=$GEN_CHUNK; (( chunk > 0 && chunk < n )) || chunk=$n
+  # the chunks already made are kept only if they were made with the same settings
+  local plan="games $n chunk $chunk seed $seed $limit net $CUR opts $GEN_OPTS random $RANDOM_PLIES"
+  if [[ $DRY_RUN == 0 ]]; then
+    if [[ -f "$out.plan" && "$(cat "$out.plan")" != "$plan" ]]; then
+      echo "$out: the settings changed since its chunks were made → made again"
+      rm -f "$out".c[0-9]* "$out.plan"
+    fi
+    echo "$plan" > "$out.plan"
+  fi
+  local k=0 made=0 m p parts=()
+  while (( made < n )); do
+    m=$(( n - made < chunk ? n - made : chunk ))
+    p="$out.c$k"; parts+=("$p")
+    if [[ -s "$p" ]]; then
+      echo "chunk $(( k + 1 )) ($m games): $p is there"
+    else
+      rm -f "$p.tmp"
+      # chunk 0 keeps the seed (a file made in one piece is the same as before); the next ones get their own
+      { uci_opts "$GEN_OPTS"
+        echo "selfplay evalfile $ROOT/$CUR games $m $limit threads $GEN_THREADS random $RANDOM_PLIES hash $GEN_HASH seed $(( k == 0 ? seed : seed * 1000 + k )) out $p.tmp"
+        echo quit; } | run "$ENGINE" || return 1
+      if [[ $DRY_RUN == 0 ]]; then
+        [[ -s "$p.tmp" ]] || return 1
+        mv -f "$p.tmp" "$p"
+        echo "chunk $(( k + 1 )): $(( made + m ))/$n games"
+      fi
+    fi
+    made=$(( made + m )); k=$(( k + 1 ))
+  done
+  [[ $DRY_RUN == 1 ]] && return 0
+  cat "${parts[@]}" > "$out.tmp" && mv -f "$out.tmp" "$out" || return 1
+  rm -f "${parts[@]}" "$out.plan"
 }
 maskfish_scale() {  # maskfish_scale [FILE]: Maskfish's K (MASKFISH_K, else fitted once on FILE, Maskfish's own scores)
   local f=data/maskfish.scale
@@ -296,27 +331,29 @@ maskfish_scale() {  # maskfish_scale [FILE]: Maskfish's K (MASKFISH_K, else fitt
   if [[ ! -s "$f" && -n "${1:-}" && -s "${1:-}" ]]; then "$PYTHON" scripts/datatool.py fit-k "$1" > "$f" || rm -f "$f"; fi
   if [[ -s "$f" ]]; then cat "$f"; else echo 430; fi   # no data of Maskfish's yet: the scale of the search (ChanceK)
 }
-rescale_ref() {  # rescale_ref RAW OUT: OUT = RAW in Maskfish units
+rescale_ref() {  # rescale_ref RAW OUT SRC: OUT = RAW in Maskfish units; SRC names the scorer
   local k mk
   k=$(ref_scale "$1") || return 1
   mk=$(maskfish_scale)
-  run "$PYTHON" scripts/datatool.py rescale "$1" "$2" "$("$PYTHON" -c "print($mk / $k)")" || return 1
-  echo "scorer=$REF_NAME k=$k" > "$2.src"
+  echo "scorer=$REF_NAME k=$k" > "$3"
+  rm -f "$2.tmp"
+  run "$PYTHON" scripts/datatool.py rescale "$1" "$2.tmp" "$("$PYTHON" -c "print($mk / $k)")" || return 1
+  [[ $DRY_RUN == 1 ]] || mv -f "$2.tmp" "$2"
 }
-gen_file() {  # gen_file OUT GAMES SEED: one data file of the source
+gen_file() {  # gen_file OUT GAMES SEED: one data file of the source (OUT appears only when complete)
   local out=$1 n=$2 seed=$3
   case "$SRC" in
     self)
+      echo "scorer=maskfish net=$CUR" > "$out.src"
       selfplay "$out" "$n" "$seed" || return 1
-      [[ $DRY_RUN == 1 ]] || maskfish_scale "$out" > /dev/null
-      echo "scorer=maskfish net=$CUR" > "$out.src" ;;
+      [[ $DRY_RUN == 1 ]] || maskfish_scale "$out" > /dev/null ;;
     distill)
       need_ref
       [[ -s "$out.raw" ]] || selfplay "$out.raw" "$n" "$seed" || return 1
       [[ $DRY_RUN == 1 ]] || maskfish_scale "$out.raw" > /dev/null   # Maskfish's scale, from its own scores
       run "$PYTHON" tools/label.py --in "$out.raw" --out "$out.ref" --go "$REF_LABEL_GO" --workers "$LABEL_WORKERS" \
         --timeout "$ENGINE_TIMEOUT" --engine "$REF_ENGINE:$(spec_opts "${REF_NET:+EvalFile=$REF_NET}" "$REF_OPTS" "Hash=$REF_HASH")" || return 1
-      rescale_ref "$out.ref" "$out" || return 1
+      rescale_ref "$out.ref" "$out" "$out.src" || return 1
       rm -f "$out.raw" "$out.ref" ;;
     ref)
       need_ref
@@ -328,7 +365,7 @@ gen_file() {  # gen_file OUT GAMES SEED: one data file of the source
         --out "runs/$name" > "logs/$name.log" 2>&1 || { tail -n 5 "logs/$name.log"; return 1; }
       rm -f "$out.ref"
       run "$PYTHON" tools/games2rec.py "$name" --out "$out.ref" --engine "$ENGINE" || return 1
-      rescale_ref "$out.ref" "$out" || return 1
+      rescale_ref "$out.ref" "$out" "$out.src" || return 1
       rm -f "$out.ref" ;;
   esac
 }
@@ -336,7 +373,8 @@ if [[ $MODE != train ]]; then
   TRAIN_FILE="data/gen$GEN$SFX.bin"; VAL_FILE="data/val$GEN$SFX.bin"
   if [[ $FORCE == 1 ]]; then rm -f "$TRAIN_FILE" "$TRAIN_FILE".* "$VAL_FILE" "$VAL_FILE".*; fi
   if [[ ! -s "$TRAIN_FILE" || ! -s "$VAL_FILE" ]]; then
-    step "data ($SRC)"
+    lim_txt=$(gen_limit); lim_txt=${lim_txt% nodes 0}
+    step "data ($SRC, $GAMES games$([[ $SRC != ref ]] && echo ", $lim_txt"))"
     # the training data first: the scale of a new reference engine is fitted on the first (largest) file
     [[ -s "$TRAIN_FILE" ]] || gen_file "$TRAIN_FILE" "$GAMES" "$SEED" || fail "training data ($SRC)"
     [[ -s "$VAL_FILE" ]] || gen_file "$VAL_FILE" "$VAL_GAMES" $(( SEED + 7 )) || fail "validation data ($SRC)"
@@ -435,7 +473,8 @@ if [[ $SKIP_MATCH == 1 || -z "$CUR" ]]; then
   echo "no SPRT ($([[ -z "$CUR" ]] && echo 'no current net' || echo '--skip-match')): $WIN"
 else
   step sprt
-  if [[ -n "$MATCH_TC" ]]; then LIM=(--tc "$MATCH_TC"); elif (( MATCH_MOVETIME > 0 )); then LIM=(--movetime "$MATCH_MOVETIME"); else LIM=(--nodes "$MATCH_NODES"); fi
+  if [[ -n "$MATCH_TC" ]]; then LIM=(--tc "$MATCH_TC"); elif (( MATCH_MOVETIME > 0 )); then LIM=(--movetime "$MATCH_MOVETIME")
+  elif (( MATCH_DEPTH > 0 )); then LIM=(--depth "$MATCH_DEPTH"); else LIM=(--nodes "$MATCH_NODES"); fi
   for c in "${CANDS[@]}"; do
     name="sprt-gen$NEXT-$(basename "$c" ".$EXT")"
     if [[ ! -f "runs/$name/summary.json" || $FORCE == 1 ]]; then

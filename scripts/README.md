@@ -62,7 +62,7 @@ scripts/autotune.sh --init-config   # scripts/pipeline.env, autotune.env, option
 - `scripts/option-plan.env` — which engine options are tested
   ([example](option-plan.env.example)).
 
-The three files are local (in `.gitignore`). Every value has a default; empty
+These files are local (in `.gitignore`). Every value has a default; empty
 means automatic (hardware values are chosen by `hw_probe.py`).
 
 ## 3. pipeline.sh — one generation
@@ -89,12 +89,18 @@ run that stopped resumes where it stopped; `--force` redoes them):
    referee.
 4. **data** `data/genN.bin` (`GAMES`) then `data/valN.bin` (`VAL_GAMES`), by
    `--source`:
-   - `self` — `nets/genN.nnue` plays (`NODES` per move, `selfplay`) and its
-     scores are the labels;
+   - `self` — `nets/genN.nnue` plays (`NODES` per move, or `DEPTH` with
+     `DEPTH_NODES` as an optional node limit; `selfplay`) and its scores are
+     the labels. The games are played in chunks of `GEN_CHUNK`
+     (`data/genN.bin.c0`, `.c1`, …): a stopped run resumes at the first chunk
+     not made yet, and the chunks are made again if the settings changed
+     (`data/genN.bin.plan`);
    - `distill` — it plays, the reference engine scores every position
      (`tools/label.py`, `REF_LABEL_GO`);
    - `ref` — the reference engine plays both sides (`REF_GEN_NODES`) and
      scores (`tools/match.py --scores`, then `tools/games2rec.py`).
+
+   A data file appears only once it is complete.
 
    Scores of the reference engine are in its own units: their scale K is
    fitted once (`data/REF_NAME.scale`, `datatool.py fit-k`) and they are
@@ -111,7 +117,7 @@ run that stopped resumes where it stopped; `--force` redoes them):
 6. **verify**: the engine loads every candidate (`MATCH_EPOCHS`) and runs
    bench; identical candidates are tested once.
 7. **SPRT** of every candidate against `nets/genN.nnue` with `tools/match.py`
-   (`MATCH_NODES`, `MATCH_MOVETIME` or `MATCH_TC`; `SPRT`, `SPRT_MODEL`,
+   (`MATCH_NODES`, `MATCH_DEPTH`, `MATCH_MOVETIME` or `MATCH_TC`; `SPRT`, `SPRT_MODEL`,
    `MATCH_MAX_PAIRS`). A candidate wins with H1, or without a decision when
    the lower bound of its Elo is above 0.
 8. **promote** the winner to `nets/gen(N+1).nnue` (`AUTO_PROMOTE`).
@@ -125,6 +131,7 @@ Exit codes: 0 promoted (or the requested part is done), 3 no candidate won,
 
 ```sh
 scripts/autotune.sh                 # run / resume
+scripts/autotune.sh --self --games 30000 --depth 8   # self-play only, with these settings (4.2)
 nohup scripts/autotune.sh --supervise >> autotune/supervise.log 2>&1 &   # restarts after errors
 scripts/autotune.sh --status        # stage, nets, Elo, option decisions
 scripts/autotune.sh --stop          # stop safely (run again to resume)
@@ -135,6 +142,28 @@ scripts/autotune.sh --dry-run       # what the next round would run
 scripts/autotune.sh --reset         # archive autotune/ data/ runs/ logs/ nets/gen* to archive-DATE/
 scripts/autotune.sh --test-telegram
 ```
+
+Settings of a run, kept in `autotune/state.sh`: they hold for every later
+generation and after a restart (plain `scripts/autotune.sh`, `--supervise`)
+until they are given again, and `0` puts one back to automatic.
+
+| Option | Sets |
+| --- | --- |
+| `--games N` | games of every data generation (fixed: the level no longer scales it) |
+| `--depth D` | search depth per move of the data generation instead of nodes (with `--nodes N`: a node limit as well) |
+| `--nodes N` | nodes per move of the data generation |
+| `--sprt-depth D` / `--sprt-nodes N` | depth or nodes per move of the SPRT against the current net |
+| `--sprt-pairs N` | most game pairs of that SPRT |
+| `--self` / `--full` | self-play only: `REF_MODE=off` and no option cycles / back to the configuration |
+
+A setting changed while the data of a generation is being made makes that data
+again with it; otherwise it applies from the next generation. `--status` shows
+the settings in use.
+
+`--self` is the plain loop: the current net plays its own games → train →
+SPRT of the new net against the current net → Telegram report (the data, the
+SPRT of every candidate, promoted or not) with the new net file → the next
+generation, until the stop rule of 4.5.
 
 ### 4.2. Stages
 
@@ -226,11 +255,14 @@ output is in `autotune/logs/pipeline.log` and `logs/pipeline-genN*.log`.
 
 ### 4.7. Telegram messages
 
-With `TG_BOT_TOKEN` and `TG_CHAT_ID` in pipeline.env, every message starts
-with the machine name (`TG_NAME`). `pipeline.sh` sends ✅ after every step,
+With `TG_BOT_TOKEN` and `TG_CHAT_ID` in pipeline.env, every message starts with the machine name (`TG_NAME`). `pipeline.sh` sends ✅ after every step,
 ❌ with the tail of the log on an error (then stops), and ❎ when no candidate
 beat the current net; `autotune.sh` reports the rounds, measurements, option
-decisions and the final report. `--test-telegram` sends a test message.
+decisions and the final report. After every SPRT it sends the result of the
+generation (settings, data, the SPRT of every candidate against the current
+net) and the net file: the promoted `nets/genN.nnue` (`TG_SEND_NET=win`, the
+default), also a losing candidate (`all`), or none (`off`). A result not sent
+because of a stop is sent at the next start. `--test-telegram` sends a test message.
 
 ### 4.8. Another reference engine, or none
 
