@@ -335,7 +335,7 @@ rescale_ref() {  # rescale_ref RAW OUT SRC: OUT = RAW in Maskfish units; SRC nam
   local k mk
   k=$(ref_scale "$1") || return 1
   mk=$(maskfish_scale)
-  echo "scorer=$REF_NAME k=$k" > "$3"
+  [[ $DRY_RUN == 1 ]] || echo "scorer=$REF_NAME k=$k" > "$3"
   rm -f "$2.tmp"
   run "$PYTHON" scripts/datatool.py rescale "$1" "$2.tmp" "$("$PYTHON" -c "print($mk / $k)")" || return 1
   [[ $DRY_RUN == 1 ]] || mv -f "$2.tmp" "$2"
@@ -344,7 +344,7 @@ gen_file() {  # gen_file OUT GAMES SEED: one data file of the source (OUT appear
   local out=$1 n=$2 seed=$3
   case "$SRC" in
     self)
-      echo "scorer=maskfish net=$CUR" > "$out.src"
+      [[ $DRY_RUN == 1 ]] || echo "scorer=maskfish net=$CUR" > "$out.src"
       selfplay "$out" "$n" "$seed" || return 1
       [[ $DRY_RUN == 1 ]] || maskfish_scale "$out" > /dev/null ;;
     distill)

@@ -20,6 +20,4 @@ __pycache__/
 /autotune/
 /archive-*/
 /jieqi/
-scripts/pipeline.env
-scripts/autotune.env
-scripts/option-plan.env
+scripts/*.env

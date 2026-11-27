@@ -143,6 +143,8 @@ scripts/autotune.sh --reset         # archive autotune/ data/ runs/ logs/ nets/g
 scripts/autotune.sh --test-telegram
 ```
 
+Ready-made commands for the usual cases are in [4.9](#49-examples).
+
 Settings of a run, kept in `autotune/state.sh`: they hold for every later
 generation and after a restart (plain `scripts/autotune.sh`, `--supervise`)
 until they are given again, and `0` puts one back to automatic.
@@ -271,6 +273,107 @@ Elo values are per reference engine: with another `REF_NAME` every net is
 measured again, and its score scale is fitted again (`data/REF_NAME.scale`).
 Use `TRAIN_MIN_GEN` to leave out data scored by the old one. Without a
 reference engine, set `REF_MODE=off` in autotune.env.
+
+### 4.9. Examples
+
+All of them run from any directory and can be stopped (`--stop`) and resumed
+(the same command again) at any time. Check what a command would do first
+with `--dry-run`, and the settings in use with `--status`.
+
+**Self-play from the current net, generation after generation.** The current
+net plays, a new net is trained on its games, an SPRT against the current net
+decides, Telegram gets the result and the new net file:
+
+```sh
+nohup scripts/autotune.sh --supervise --self --games 1300000 --nodes 20000 \
+  >> autotune/supervise.log 2>&1 &
+```
+
+A game gives about 77 records (8.6 KB of data), so 1 300 000 games are about
+100 million records and 11 GB in `data/`. Count the disk for `TRAIN_WINDOW`
+generations of data (autotune.env, 4 by default). The more nodes per move,
+the slower the self-play: measure it with a small `--games` first.
+
+**Data by depth instead of nodes:**
+
+```sh
+scripts/autotune.sh --self --games 200000 --depth 10                # depth 10 per move
+scripts/autotune.sh --self --games 200000 --depth 10 --nodes 50000  # … and at most 50000 nodes
+```
+
+**The SPRT against the current net:**
+
+```sh
+scripts/autotune.sh --self --sprt-nodes 40000 --sprt-pairs 2000   # 40000 nodes per move, at most 2000 pairs
+scripts/autotune.sh --self --sprt-depth 10                         # depth 10 per move
+```
+
+Without these the SPRT uses `MATCH_NODES`, `SPRT` and `MATCH_MAX_PAIRS` of
+pipeline.env (20000 nodes, `0 5`, 4000 pairs by default).
+
+**Changing a setting of a running loop.** The settings are kept and change
+only with a run, so stop it and start it again with just what changes; `0`
+puts a setting back to automatic:
+
+```sh
+scripts/autotune.sh --stop
+nohup scripts/autotune.sh --supervise --nodes 10000 >> autotune/supervise.log 2>&1 &   # --games, --self … stay
+nohup scripts/autotune.sh --supervise --depth 0 --sprt-pairs 0 \
+  >> autotune/supervise.log 2>&1 &     # back to the nodes of the config, and MATCH_MAX_PAIRS
+scripts/autotune.sh --status
+```
+
+**Only one new net.** Start the loop as above and stop it after the first
+Telegram result (`scripts/autotune.sh --stop`). Or run one generation with
+`pipeline.sh` and a config of its own on top of pipeline.env (relative paths
+are from the repository root):
+
+```sh
+cat > scripts/big.env << 'EOF'
+source scripts/pipeline.env
+GAMES=1300000
+NODES=20000
+EOF
+scripts/pipeline.sh -g 1 --source self --config scripts/big.env   # nets/gen1.nnue plays → nets/gen2.nnue if it wins
+```
+
+**Starting from another net.** The first net of a run (gen0) is `INIT_NET`,
+else `nets/maskfish.nnue`; every later generation trains from the current
+net, with its width, king buckets and head. To start over from another net,
+archive the current run, then set `INIT_NET`:
+
+```sh
+scripts/autotune.sh --stop
+scripts/autotune.sh --reset --yes      # autotune/ data/ runs/ logs/ nets/gen* → archive-DATE/
+                                       # (nets/maskfish.nnue stays; delete the archive when not needed)
+echo 'INIT_NET=/path/to/other.nnue' >> scripts/pipeline.env
+nohup scripts/autotune.sh --supervise --self --games 1300000 --nodes 20000 \
+  >> autotune/supervise.log 2>&1 &
+```
+
+gen0 is a copy of that net, gen1 is trained from it and must beat it by SPRT.
+`INIT_NET` is read only while `nets/gen0.nnue` does not exist, so it can stay
+in pipeline.env. To start from the published net again, remove the line and
+run `scripts/net.sh`.
+
+**With the reference engine** (in `jieqi/`, or `REF_ENGINE` in pipeline.env):
+
+```sh
+scripts/autotune.sh --full     # back from --self: REF_MODE of autotune.env (teach: stages ref → distill → self)
+```
+
+`REF_MODE=measure` in autotune.env keeps self-play data and only measures
+every new net against the reference engine.
+
+**Engine options only** (no training; the plan is scripts/option-plan.env):
+
+```sh
+scripts/autotune.sh --options
+```
+
+**Telegram:** `scripts/autotune.sh --test-telegram` sends a test message;
+`TG_SEND_NET=all` in autotune.env also sends a losing candidate, `off` no net
+file.
 
 ## 5. Files and directories
 
