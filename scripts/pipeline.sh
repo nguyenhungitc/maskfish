@@ -112,6 +112,7 @@ fi
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "$ROOT/.venv/bin/python" ]]; then PYTHON="$ROOT/.venv/bin/python"; else PYTHON=python3; fi
 fi
+[[ -x "$ROOT/.venv/bin/cmake" ]] && PATH="$ROOT/.venv/bin:$PATH"   # the pip CMake of scripts/setup_env.sh (system one too old)
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_EPOCH_EVERY:=5}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
 : "${BUILD_ARCH:=native}"         # native | portable | a -march value (x86-64-v3, ...)
 : "${BUILD_OPTS:=}"               # more CMake options, e.g. "-DMASKFISH_LTO=ON"

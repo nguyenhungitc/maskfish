@@ -7,6 +7,7 @@
 | `package_binary.sh` | Packs a release archive: binary, network, README, AUTHORS, licence |
 | `pipeline.sh` | Runs **one training generation**: build → check → generate data → train → verify → SPRT → promote |
 | `autotune.sh` | Runs **generation after generation** with `pipeline.sh` in stages (reference engine games → reference engine scores → self-play), measures each new network against the reference engine, tests the engine options once the net is strong, and stops when the Elo stops rising |
+| `setup_env.sh` | Checks the build and test environment of the training scripts and installs what is missing (compiler, CMake, git, curl, Python, `.venv` with numpy and PyTorch); `autotune.sh` runs it before every start |
 | `datatool.py` | Record files: count, score scale (`fit-k`), rescale, cat, stats |
 | `hw_probe.py` | Hardware probe used by `pipeline.sh` (CPUs, RAM, disk, GPU, a training batch size) |
 | `pipeline.env.example` | Configuration template shared by both training scripts |
@@ -37,13 +38,27 @@ stopped and restarted at any time. They run from the repository root (they
 
 ## 1. Requirements
 
-- Linux, bash ≥ 4.4, CMake 3.20+, a C++20 compiler, Python 3 with numpy.
+- Linux, bash ≥ 4.4, CMake 3.20+, a C++20 compiler, make, git, curl,
+  Python 3.11+ with numpy.
 - For training: PyTorch with CUDA. With `REQUIRE_GPU=0`, a machine without
   CUDA trains on the CPU (`train.py --device cpu` on the physical cores),
-  slowly. A virtual environment in `.venv/` is used when it exists:
-  ```sh
-  python3 -m venv .venv && .venv/bin/pip install -r train/requirements.txt
-  ```
+  slowly. A virtual environment in `.venv/` is used when it exists.
+
+`scripts/setup_env.sh` checks all of this and installs what is missing: the
+system packages with apt-get, dnf, yum, zypper, pacman or apk (as root, or
+with a password-less sudo), then `.venv/` with `train/requirements.txt` —
+PyTorch with CUDA when an NVIDIA GPU is visible, else its CPU build (a CPU
+build already in `.venv` is replaced once a GPU is visible; `TORCH_INDEX_URL`
+chooses the pip index). A CMake older than 3.20 that the package manager
+cannot update is replaced by the pip one in `.venv/bin`. `autotune.sh` runs it
+before every start (`AUTO_SETUP=0` in autotune.env: only check, install
+nothing); its output is in `autotune/logs/setup.log`.
+
+```sh
+scripts/setup_env.sh               # check, install what is missing
+scripts/setup_env.sh --check       # only check (exit 1 if something is missing)
+scripts/setup_env.sh --no-torch    # without PyTorch
+```
 - Optional: a reference engine (with its network) in `jieqi/`
   (`jieqi/ref-engine`, `jieqi/ref-engine*.nnue`), or anywhere with
   `REF_ENGINE` / `REF_NET`.
@@ -137,6 +152,7 @@ scripts/autotune.sh --status        # stage, nets, Elo, option decisions
 scripts/autotune.sh --stop          # stop safely (run again to resume)
 scripts/autotune.sh --report        # autotune/REPORT.md (and to Telegram)
 scripts/autotune.sh --options       # one option cycle now, with the current net, no training
+scripts/autotune.sh --setup         # only check / install the build and test environment (1)
 scripts/autotune.sh --install-cron  # start --supervise after a reboot
 scripts/autotune.sh --dry-run       # what the next round would run
 scripts/autotune.sh --reset         # archive autotune/ data/ runs/ logs/ nets/gen* to archive-DATE/
@@ -392,8 +408,12 @@ tracked by git):
 
 ## 6. Troubleshooting
 
-- `CUDA is not available`: install PyTorch with CUDA (`train/requirements.txt`),
-  or set `REQUIRE_GPU=0` to train on the CPU.
+- `CUDA is not available`: install PyTorch with CUDA (`scripts/setup_env.sh`
+  when the GPU is visible, or `train/requirements.txt`), or set
+  `REQUIRE_GPU=0` to train on the CPU.
+- `Build/test environment incomplete`: `autotune/logs/setup.log` names what is
+  missing; without root (or a password-less sudo) install the packages it
+  lists as root, then run again.
 - `no current net nets/genN.nnue`: run `scripts/net.sh` (or set `INIT_NET`),
   or start with `--source ref`.
 - `reference engine … not found`: put it in `jieqi/`, set `REF_ENGINE`, or

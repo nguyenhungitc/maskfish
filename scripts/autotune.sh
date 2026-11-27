@@ -31,6 +31,10 @@
 #                     At LEVEL_CAP, PATIENCE more failures and an option cycle without
 #                     any gain → finished: the Elo is at its maximum for this setup.
 #
+#  Before every run the build and test environment is checked and what is missing
+#  is installed (scripts/setup_env.sh: compiler, CMake, git, curl, Python, .venv
+#  with numpy and PyTorch; AUTO_SETUP=0 only checks). Log: autotune/logs/setup.log.
+#
 #  Every generation trains from the current net (train/train.py --init: the
 #  published net for gen0). A failed attempt is tried again differently: more
 #  data (a new batch, --tag aK), then 1.5x the epochs, then a lower learning rate
@@ -61,6 +65,7 @@
 #     scripts/autotune.sh --report        # write autotune/REPORT.md and send it to Telegram
 #     scripts/autotune.sh --options       # only one option cycle with the current net (no training;
 #                                         # nets/maskfish.nnue before gen1), then the report to Telegram
+#     scripts/autotune.sh --setup         # only check / install the build and test environment
 #     scripts/autotune.sh --install-cron  # restart after a reboot
 #     scripts/autotune.sh --init-config   # write scripts/pipeline.env, autotune.env, option-plan.env from the examples
 #     scripts/autotune.sh --dry-run       # print what the next round would run
@@ -118,6 +123,7 @@ while [[ $# -gt 0 ]]; do
     --reset)         ACTION="reset"; shift ;;
     --yes)           RESET_YES=1; shift ;;
     --install-cron)  ACTION="cron"; shift ;;
+    --setup)         ACTION="setup"; shift ;;
     --test-telegram) ACTION="tgtest"; shift ;;
     --init-config)   ACTION="initcfg"; shift ;;
     --config)        CONFIG_AT="${2:-}"; shift 2 ;;
@@ -132,9 +138,11 @@ PIPE_ENV="$SCRIPT_DIR/pipeline.env"
 [[ -f "$PIPE_ENV" ]] && source "$PIPE_ENV"
 AT_ENV="${CONFIG_AT:-$SCRIPT_DIR/autotune.env}"
 [[ -f "$AT_ENV" ]] && source "$AT_ENV"
+PYTHON_USER=${PYTHON:-}   # set in the config: setup_env.sh checks it instead of .venv
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "$ROOT/.venv/bin/python" ]]; then PYTHON="$ROOT/.venv/bin/python"; else PYTHON=python3; fi
 fi
+: "${AUTO_SETUP:=1}"              # 1 = install what the build and the tests miss (setup_env.sh), 0 = only check
 : "${TG_BOT_TOKEN:=}"; : "${TG_CHAT_ID:=}"; : "${TG_NAME:=$(hostname -s 2>/dev/null || hostname)}"
 : "${TG_SEND_NET:=win}"           # net sent with a generation's result: win (the promoted one) | all (a losing candidate too) | off
 # reference engine (same defaults as pipeline.sh)
@@ -669,6 +677,7 @@ write_report() {
 }
 
 preflight() {
+  setup_env || return 1
   local err=()
   [[ -x "$PIPELINE" ]] || err+=("$PIPELINE not found or not executable")
   command -v "$PYTHON" > /dev/null || err+=("python not found: $PYTHON")
@@ -689,6 +698,24 @@ preflight() {
   [[ "$REF_MODE" == off ]] && return 0
   printf 'uci\nisready\nquit\n' | timeout 60 "$REF_ENGINE" 2> /dev/null | grep -q readyok \
     || { say "❌ The reference engine ($REF_ENGINE) does not answer uci/isready"; return 1; }
+}
+
+# ----------------------------------------------------------------------------- build and test environment
+setup_env() {   # setup_env [--no-torch]: check, install what is missing (AUTO_SETUP); 1 if something is still missing
+  local args=("$@") env=(env -u PYTHON) rc last="$AT_DIR/logs/setup.last"
+  (( AUTO_SETUP && ! DRY_RUN )) || args+=(--check)
+  [[ -n "$PYTHON_USER" ]] && env+=("PYTHON=$PYTHON_USER")
+  mkdir -p "$AT_DIR/logs"
+  log "\$ setup_env.sh ${args[*]}"
+  "${env[@]}" bash "$SCRIPT_DIR/setup_env.sh" "${args[@]}" 2>&1 | tee "$last"
+  rc=${PIPESTATUS[0]}
+  { echo "=== $(date '+%F %T') setup_env.sh ${args[*]} → exit $rc"; cat "$last"; } >> "$AT_DIR/logs/setup.log"
+  # a .venv made just now: its Python from here on (pipeline.sh finds it itself)
+  [[ -z "$PYTHON_USER" && -x "$ROOT/.venv/bin/python" ]] && PYTHON="$ROOT/.venv/bin/python"
+  (( rc == 0 )) && return 0
+  (( DRY_RUN )) && { log "(dry-run: the environment is incomplete, see above)"; return 0; }
+  say "❌ Build/test environment incomplete$( (( AUTO_SETUP )) || echo ' (AUTO_SETUP=0: nothing installed)'): $(sed -n 's/^setup: MISSING: //p' "$last" | paste -sd ';' -). See autotune/logs/setup.log"
+  return 1
 }
 
 # ----------------------------------------------------------------------------- actions
@@ -739,6 +766,8 @@ case "$ACTION" in
       kill -TERM "$(cat "$AT_DIR/.pid")"; echo "Stop signal sent."
     else echo "No process is running."; fi
     exit 0 ;;
+  setup)
+    setup_env; exit $? ;;
   report)
     state_load; r=$(write_report); echo "$r"; tg_doc "$r" "Autotune report"; exit 0 ;;
   cron)
@@ -768,6 +797,7 @@ if [[ "$ACTION" == options ]]; then   # only one option cycle with the current n
   trap 'kill_children 2> /dev/null; say "⏸ Option tests stopped. Run --options again to resume."; exit 130' INT TERM
   (( OPT_PLAN_OK )) || { echo "No option plan ($OPT_PLAN): see scripts/option-plan.env.example" >&2; exit 5; }
   g=$(cur_gen)
+  setup_env --no-torch || exit 5
   (( g < 0 )) && [[ ! -f nets/maskfish.nnue ]] && sh scripts/net.sh > /dev/null 2>&1
   [[ -f "$(opt_net "$g")" ]] || { say "❌ Option tests: no net ($(opt_net "$g"); scripts/net.sh)"; exit 5; }
   log "\$ pipeline.sh --build-only"
